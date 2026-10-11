@@ -17,7 +17,11 @@ class HostedClient:
     def __init__(self, profile_path: str | Path, *, ledger_path: str | Path) -> None:
         self.profile = load_profile(profile_path)
         self.ledger_path = Path(ledger_path)
-        self.transport = SubprocessJsonTransport(self.profile)
+        if self.profile["transport"]["kind"] == "https_json_v1":
+            from .https_transport import HttpsJsonTransport
+            self.transport = HttpsJsonTransport(self.profile)
+        else:
+            self.transport = SubprocessJsonTransport(self.profile)
         self.token = dict(self.profile["session_token"])
 
     def capabilities(self) -> dict[str, Any]:
@@ -44,7 +48,7 @@ class HostedClient:
             "stage_input",
             {
                 "token": self.token,
-                "source_path": str(Path(source_path).expanduser().resolve(strict=True)),
+                "source_path": str(Path(source_path).expanduser().absolute()),
                 "input_id": str(input_id),
                 "kind": str(kind),
                 "expected_sha256": str(expected_sha256),

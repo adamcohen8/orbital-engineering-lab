@@ -1,0 +1,26 @@
+[package]
+name = "oel-rust-orbit"
+version = "0.17.2"
+edition = "2021"
+license = "Apache-2.0"
+description = "Optional Rust numerical orbit engine for Orbital Engineering Lab"
+
+[lib]
+name = "oel_rust_orbit"
+crate-type = ["rlib", "cdylib"]
+
+[features]
+default = []
+python = ["dep:pyo3"]
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("pro"))'] }
+
+[dependencies]
+libm = "=0.2.16"
+pyo3 = { version = "0.29.2", optional = true, features = ["extension-module", "abi3-py310"] }
+sgp4 = { version = "=2.4.0", path = "vendor/sgp4" }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

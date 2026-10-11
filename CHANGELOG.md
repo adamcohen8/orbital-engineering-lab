@@ -6,6 +6,21 @@ This project uses semantic versioning while it is pre-1.0: minor versions may
 still introduce API or workflow changes, and release notes should call out
 migration-sensitive behavior explicitly.
 
+## 0.33.1 - 2026-10-10
+
+- Publish buildable Rust source for public propagation, attitude, estimation,
+  control, coverage, directed-link, spacecraft, standalone-analysis and Trainer
+  numerical paths. Include Cargo and Python build manifests, lockfiles, shared
+  source owners, and vendored dependency licenses and provenance.
+- Separate Pro-only native campaign, Scale, full-force OD and atmospheric RF
+  owners behind a private build feature. Public source builds
+  retain the public kernels and explicit Python reference execution.
+- Document building both required native wheels from a public checkout; advance
+  the changed orbit runtime to 0.17.2. Preserve public workflow boundaries and
+  the existing host-specific managed-install qualification envelope.
+- Exclude tests for private hosted and provider implementations from the public
+  test inventory.
+
 ## 0.33.0 - 2026-10-09
 
 - Promote Earth albedo/infrared radiation pressure, Schwarzschild acceleration,

@@ -1,0 +1,17 @@
+[package]
+name = "oel-rust-game"
+version = "0.5.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Optional native Trainer flight software numerical backend"
+
+[lib]
+name = "oel_rust_game"
+crate-type = ["rlib", "cdylib"]
+
+[features]
+default = []
+python = ["dep:pyo3"]
+
+[dependencies]
+pyo3 = { version = "0.29.2", optional = true, features = ["extension-module", "abi3-py310"] }

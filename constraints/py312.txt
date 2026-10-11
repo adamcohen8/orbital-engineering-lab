@@ -26,5 +26,5 @@ setuptools==83.0.0
 sgp4==2.27
 six==1.17.0
 tqdm==4.69.1
-oel-rust-orbit==0.17.1
+oel-rust-orbit==0.17.2
 oel-rust-game==0.5.0

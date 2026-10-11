@@ -40,6 +40,16 @@ a short-lived user-scoped session whose signed subject matches
 `--authorized-by`, plus the exact `APPROVE <offer_sha256>` confirmation after
 the user reviews the offer.
 
+Scenario offers now obtain free validation receipts from the exact tenant-scoped
+staged YAML before quoting. The service derives config-ref bindings from typed
+scenario input edges, checks source hashes, and performs safe validation without
+importing plugins or advancing simulation state. It never accepts a client
+filesystem path or client-supplied validation receipt as scenario authority.
+Invalid YAML, conflicting config-ref bindings and changed staged bytes cannot
+produce an executable offer. This closes the scenario offer path for controlled
+local Manifold/reference-service integration; production transport remains
+separate work.
+
 Before staging, Public OEL can validate a complete public or Pro analysis
 package without importing Pro code or uploading bytes:
 

@@ -1,0 +1,60 @@
+[package]
+name = "sgp4"
+version = "2.4.0"
+authors = [
+    "International Centre for Neuromorphic Systems",
+    "Alexandre Marcireau",
+]
+description = "A pure Rust implementation of the SGP4 algorithm for satellite propagation"
+homepage = "https://github.com/neuromorphicsystems/sgp4/"
+repository = "https://github.com/neuromorphicsystems/sgp4/"
+readme = "README.md"
+license = "MIT"
+categories = [
+    "aerospace",
+    "algorithms",
+    "no-std",
+    "parser-implementations",
+    "science",
+]
+keywords = ["SGP4", "SDP4", "TLE", "OMM"]
+edition = "2021"
+resolver = "2"
+
+[dependencies]
+chrono = {version = "0.4.43", default-features = false}
+serde = {version = "1.0", default-features = false, optional = true}
+serde_json = {version = "1.0", default-features = false, optional = true}
+num-traits = {version = "0.2.19", default-features = false, optional = true}
+
+[dev-dependencies]
+anyhow = {version = "1.0", default-features = false}
+criterion = "0.8.2"
+toml = "1.0.3"
+ureq = {version = "3.2.0", features = ["json"]}
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--cfg", "docsrs"]
+
+[features]
+default = ["alloc", "std", "serde"]
+alloc = []
+serde = [
+    "alloc",
+    "chrono/serde",
+    "serde/alloc",
+    "serde/derive",
+    "serde_json/alloc",
+]
+std = ["alloc", "anyhow/std", "chrono/std", "serde?/std", "serde_json?/std"]
+libm = ["dep:num-traits", "num-traits/libm"]
+
+[[bench]]
+name = "propagate"
+harness = false
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+strip = true

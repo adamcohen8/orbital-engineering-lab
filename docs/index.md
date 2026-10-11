@@ -9,6 +9,7 @@ Start here if you want to install OEL, run a scenario, and understand the
 public simulation core.
 
 1. [Install On Windows, macOS, Or Linux](installation.md)
+   [Build the public Rust backends from source](native-source-build.md).
 2. [Create And Use A Workspace](workspaces.md)
 3. [Quickstart](quickstart.md)
    — then try [your first relative-motion study](first-relative-study.md).

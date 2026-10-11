@@ -13,6 +13,8 @@ govern.
 The public core includes:
 
 - deterministic single-run orbit and attitude simulation;
+- buildable Rust source for public numeric backends and the Trainer, including
+  build manifests and redistributable dependency source and licenses;
 - OGP-SGP4/SDP4 passive catalog-style propagation and configurable ONP
   numerical propagation;
 - opt-in Earth-centered ONP spacecraft resources with one body thermal node,
@@ -279,6 +281,10 @@ currently available for purchase or execution**, has no MCP execution tools,
 and includes a public fallback. This metadata does not grant entitlement,
 promise price or launch timing, or promote private implementation into the
 public core.
+
+Public numeric capabilities include their corresponding Rust implementation
+source. Shipping a compiled dependency alone does not satisfy the public-source
+boundary. Pro-only workflow and native owners remain outside the public export.
 
 ## Promotion Rule
 

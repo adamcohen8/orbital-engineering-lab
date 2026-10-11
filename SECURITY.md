@@ -30,8 +30,8 @@ Customer or pilot agreements may define stricter response targets.
 
 ## Supported Versions
 
-Security fixes target the current public release line, `v0.33.0`, once
-published. During release preparation, `v0.32.0` remains the published
+Security fixes target the current public release line, `v0.33.1`, once
+published. During release preparation, `v0.33.0` remains the published
 support target. They also target
 active private/Pro customer-supported release lines. The project targets Python
 3.10 through 3.14. The authoritative local release gate exercises the blocking
