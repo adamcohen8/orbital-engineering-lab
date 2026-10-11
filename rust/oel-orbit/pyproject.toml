@@ -1,0 +1,13 @@
+[build-system]
+requires = ["maturin>=1.10,<2"]
+build-backend = "maturin"
+
+[project]
+name = "oel-rust-orbit"
+version = "0.17.2"
+description = "Optional Rust numerical orbit engine for Orbital Engineering Lab"
+requires-python = ">=3.10,<3.15"
+
+[tool.maturin]
+features = ["python"]
+module-name = "oel_rust_orbit"

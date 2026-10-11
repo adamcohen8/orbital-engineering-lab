@@ -64,6 +64,11 @@ workspace adoption, rollback, offline installation, and troubleshooting.
 
 ## Source Installation For Contributors
 
+The public checkout includes the Rust implementations and build inputs for both
+required native packages. Follow [building native source](docs/native-source-build.md)
+before installing OEL from source. Install the Rust toolchain before running
+the native build commands below.
+
 Cloning the repository remains the contributor workflow and manual fallback.
 It is not required for the managed installation above. See
 [Installing OEL](docs/installation.md) for other supported Python minors and
@@ -77,6 +82,10 @@ Set-Location orbital-engineering-lab
 py --list
 py -3.14 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install "maturin>=1.10,<2"
+.\.venv\Scripts\python.exe -m maturin build --release --locked --manifest-path rust/oel-orbit/Cargo.toml --interpreter .\.venv\Scripts\python.exe --out dist/native
+.\.venv\Scripts\python.exe -m maturin build --release --locked --manifest-path rust/oel-game/Cargo.toml --interpreter .\.venv\Scripts\python.exe --out dist/native
+.\.venv\Scripts\python.exe -m pip install --no-index --find-links dist/native "oel-rust-orbit>=0.17.2,<0.18" "oel-rust-game>=0.5,<0.6"
 .\.venv\Scripts\python.exe -m pip install ".[dev]"
 .\.venv\Scripts\python.exe run_simulation.py --doctor
 .\.venv\Scripts\python.exe run_simulation.py --quickstart
@@ -89,6 +98,10 @@ git clone https://github.com/adamcohen8/orbital-engineering-lab.git
 cd orbital-engineering-lab
 python3.14 -m venv .venv
 .venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install "maturin>=1.10,<2"
+.venv/bin/python -m maturin build --release --locked --manifest-path rust/oel-orbit/Cargo.toml --interpreter .venv/bin/python --out dist/native
+.venv/bin/python -m maturin build --release --locked --manifest-path rust/oel-game/Cargo.toml --interpreter .venv/bin/python --out dist/native
+.venv/bin/python -m pip install --no-index --find-links dist/native "oel-rust-orbit>=0.17.2,<0.18" "oel-rust-game>=0.5,<0.6"
 .venv/bin/python -m pip install ".[dev]"
 .venv/bin/python run_simulation.py --doctor
 .venv/bin/python run_simulation.py --quickstart

@@ -6,7 +6,7 @@ macOS, and Linux compatibility targets. Python 3.14 is recommended.
 
 ## Managed Installation
 
-The v0.33.0 managed bundle is qualified for macOS arm64 with CPython 3.11.
+The v0.33.1 managed bundle is qualified for macOS arm64 with CPython 3.11.
 The signed bootstrap selects that installed Python minor, downloads the
 versioned GitHub bundle, verifies its manifest and every dependency wheel,
 and installs without consulting a package index. Install CPython 3.11 first
@@ -15,12 +15,12 @@ Windows/Linux native diagnostic results do not qualify this managed bundle
 for those other targets.
 
 For an existing v0.32.0 managed installation, run `oel update install latest`
-then `oel update activate 0.33.0`. This preserves v0.32.0 for rollback.
+then `oel update activate 0.33.1`. This preserves v0.32.0 for rollback.
 
 For an existing v0.31.0 managed installation using Python 3.11, download
-`oel-public-0.33.0-arm64-py311.bundle.zip` from the official v0.33.0 release,
+`oel-public-0.33.1-arm64-py311.bundle.zip` from the official v0.33.1 release,
 then run `oel update install-bundle <downloaded-bundle> --profile game`
-and `oel update activate 0.33.0`. This preserves the older version for
+and `oel update activate 0.33.1`. This preserves the older version for
 rollback. The v0.31 updater's online `install latest` path predates bundled
 native dependencies; use this bundle route or rerun the official installer.
 From v0.32 onward, online updates fetch and verify the declared bundle wheels.
@@ -250,10 +250,12 @@ for the current platform.
 
 ## Native numeric runtime
 
-Version 0.33.0 requires matching `oel-rust-orbit` >=0.17.1,<0.18 and `oel-rust-game`
+Version 0.33.1 requires matching `oel-rust-orbit` >=0.17.2,<0.18 and `oel-rust-game`
 0.5.x wheels for core installation and runtime-built flight-software stacks. Source
 installations must first install wheels built for their host from the native
 crates; signed offline bundles retain the exact qualified wheel inventory.
+The public repository includes the source and build inputs for both native
+packages; see [building native source](native-source-build.md).
 Rust is the default numeric engine. Explicit `numeric_backend: python` and
 Trainer `--backend python` retain reference execution.
 

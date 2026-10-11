@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import stat
@@ -54,8 +55,8 @@ def link_profile(
 
 
 def load_profile(path: str | Path) -> dict[str, Any]:
-    source = Path(path).expanduser().resolve(strict=True)
-    if source.is_symlink() or not source.is_file():
+    source = Path(path).expanduser().absolute()
+    if any(p.is_symlink() for p in (source, *source.parents)) or not source.is_file():
         raise ValueError("Hosted profile must be a regular file.")
     if os.name == "posix" and stat.S_IMODE(source.stat().st_mode) & 0o077:
         raise PermissionError("Hosted profile must not be readable or writable by group or others.")
@@ -68,6 +69,12 @@ def load_profile(path: str | Path) -> dict[str, Any]:
     if value.get("profile_sha256") != expected:
         raise ValueError("Hosted OEL profile failed digest verification.")
     transport = value.get("transport")
+    if isinstance(transport, Mapping) and transport.get("kind") == "https_json_v1":
+        from .https_transport import validate_https_transport
+        validate_https_transport(transport)
+        if value.get("tenant_id") != value.get("session_token", {}).get("tenant_id"):
+            raise ValueError("Hosted profile tenant differs from its session")
+        return value
     if (
         not isinstance(transport, Mapping)
         or transport.get("kind") != "subprocess_json_v1"
@@ -77,6 +84,29 @@ def load_profile(path: str | Path) -> dict[str, Any]:
     ):
         raise ValueError("Hosted OEL profile contains an unsupported transport.")
     return value
+
+
+def link_https_profile(path, *, service_label, service_url, account_key, scopes,
+                       ca_file=None, timeout_s=30.0):
+    """Exchange a key once; the profile retains only its short-lived session."""
+    from .https_transport import HttpsJsonTransport, validate_https_transport
+    transport = {"kind": "https_json_v1", "url": service_url, "timeout_s": timeout_s}
+    if ca_file:
+        ca = Path(ca_file).expanduser().resolve(strict=True)
+        transport.update(ca_file=str(ca), ca_sha256=hashlib.sha256(ca.read_bytes()).hexdigest())
+    validate_https_transport(transport)
+    if not str(service_label).strip():
+        raise ValueError("Hosted profile requires a service label")
+    token = HttpsJsonTransport({"transport": transport}).exchange(account_key, scopes)
+    if token.get("schema") != "oel.hosted_session_token.v1" or not token.get("tenant_id"):
+        raise ValueError("Service returned an invalid account session")
+    profile = {"schema": HOSTED_PROFILE_SCHEMA, "profile_id": "pending", "service_label": service_label,
+        "transport": transport, "session_token": token, "tenant_id": token["tenant_id"],
+        "linked_at": datetime.now(timezone.utc).isoformat(), "model_credentials_stored": False}
+    profile["profile_id"] = "hosted-profile:" + canonical_sha256(profile)[:24]
+    profile["profile_sha256"] = canonical_sha256(profile)
+    _write_private_json(Path(path), profile)
+    return profile
 
 
 def _write_private_json(path: Path, value: Mapping[str, Any]) -> None:
@@ -96,4 +126,4 @@ def _write_private_json(path: Path, value: Mapping[str, Any]) -> None:
         temporary.unlink(missing_ok=True)
 
 
-__all__ = ["HOSTED_PROFILE_SCHEMA", "link_profile", "load_profile"]
+__all__ = ["HOSTED_PROFILE_SCHEMA", "link_profile", "link_https_profile", "load_profile"]

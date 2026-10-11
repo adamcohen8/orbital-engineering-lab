@@ -97,7 +97,7 @@ class DependencyStatus:
 
 CORE_SPECS = (
     DependencySpec("oel-rust-game", "0.5", "0.6"),
-    DependencySpec("oel-rust-orbit", "0.17.1", "0.18"),
+    DependencySpec("oel-rust-orbit", "0.17.2", "0.18"),
     DependencySpec("numpy", "2.1", "2.5"),
     DependencySpec("matplotlib", "3.8", "3.12"),
     DependencySpec("tqdm", "4.65", "5"),

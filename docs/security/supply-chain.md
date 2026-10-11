@@ -7,7 +7,7 @@ security, legal, export-control, or mission-assurance process.
 ## Supported Versions
 
 - Public releases: security fixes target the current public release line,
-  `v0.33.0` once published. During release preparation, `v0.32.0` remains
+  `v0.33.1` once published. During release preparation, `v0.33.0` remains
   the published support target.
 - Private/Pro releases: security fixes target the active customer-supported
   release line or pilot branch named in the agreement.

@@ -9,7 +9,7 @@ from .package_contract import (
     validate_hosted_execution_package,
     validate_hosted_pro_package,
 )
-from .profile import link_profile, load_profile
+from .profile import link_https_profile, link_profile, load_profile
 from .result_import import import_result_transfer
 
 __all__ = [
@@ -17,6 +17,7 @@ __all__ = [
     "append_event",
     "import_result_transfer",
     "link_profile",
+    "link_https_profile",
     "load_profile",
     "read_ledger",
     "route_planning_result",

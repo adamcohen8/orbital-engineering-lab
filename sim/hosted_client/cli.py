@@ -12,7 +12,7 @@ from .client import HostedClient
 from .contracts import route_planning_result
 from .ledger import append_event
 from .package_contract import hosted_execution_package_schema, validate_hosted_execution_package
-from .profile import link_profile, load_profile
+from .profile import link_https_profile, link_profile, load_profile
 from .transport import HostedServiceError
 
 DEFAULT_LEDGER = Path(".oel/hosted/transactions.jsonl")
@@ -50,6 +50,14 @@ def _parser() -> argparse.ArgumentParser:
     link.add_argument("--transport-command", type=Path, required=True)
     link.add_argument("--session-token", type=Path, required=True)
     link.add_argument("--timeout", type=float, default=30.0)
+    https = profile_commands.add_parser("link-https", help="Exchange an operator account key for a scoped HTTPS session.")
+    https.add_argument("--profile", type=Path, required=True)
+    https.add_argument("--service-label", required=True)
+    https.add_argument("--service-url", required=True)
+    https.add_argument("--account-key-file", type=Path, required=True)
+    https.add_argument("--scope", action="append", required=True)
+    https.add_argument("--ca-file", type=Path)
+    https.add_argument("--timeout", type=float, default=30.0)
 
     route = commands.add_parser("route", help="Classify a content-bound planning result.")
     route.add_argument("--planning-result", type=Path, required=True)
@@ -122,17 +130,25 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
         if args.command == "profile":
-            command = _load_object(args.transport_command)
-            argv_value = command.get("command")
-            if not isinstance(argv_value, list):
-                raise ValueError("Transport-command file must contain a 'command' argv array.")
-            linked_profile = link_profile(
-                args.profile,
-                service_label=args.service_label,
-                transport_command=argv_value,
-                session_token=_load_object(args.session_token),
-                timeout_s=args.timeout,
-            )
+            if args.profile_command == "link-https":
+                key_path = args.account_key_file.expanduser().absolute()
+                if any(p.is_symlink() for p in (key_path, *key_path.parents)) or key_path.stat().st_mode & 0o077:
+                    raise PermissionError("Account key file must be owner-only and contain no symlinks")
+                linked_profile = link_https_profile(args.profile, service_label=args.service_label,
+                    service_url=args.service_url, account_key=_load_object(key_path)["account_key"], scopes=args.scope,
+                    ca_file=args.ca_file, timeout_s=args.timeout)
+            else:
+                command = _load_object(args.transport_command)
+                argv_value = command.get("command")
+                if not isinstance(argv_value, list):
+                    raise ValueError("Transport-command file must contain a 'command' argv array.")
+                linked_profile = link_profile(
+                    args.profile,
+                    service_label=args.service_label,
+                    transport_command=argv_value,
+                    session_token=_load_object(args.session_token),
+                    timeout_s=args.timeout,
+                )
             # The profile must retain the opaque local transport binding, but the
             # public receipt must not echo command arguments or scoped credentials.
             result = {
