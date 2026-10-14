@@ -335,3 +335,33 @@ __all__ = [
     "get_review_plot_recipe",
     "list_review_plot_recipes",
 ]
+
+# Body-neutral recipes consume only the planetary tables.
+for _metric, _label in (("altitude_km", "Altitude (km)"),
+                        ("density_kg_m3", "Density (kg/m³)"),
+                        ("relative_speed_m_s", "Atmosphere-relative speed (m/s)")):
+    _recipe_id = "planetary_" + _metric
+    REVIEW_PLOT_RECIPES[_recipe_id] = ReviewPlotRecipe(
+        recipe_id=_recipe_id, title=_label,
+        description="Recorded planetary sample diagnostics; no integrator-stage history.",
+        sql=f"SELECT s.time_s, e.central_body || ':' || s.object_id AS object_id, s.{_metric} FROM planetary_state s CROSS JOIN planetary_environment e ORDER BY s.object_id,s.time_s",
+        x_column="time_s", y_columns=(_metric,), group_column="object_id",
+        x_label="Elapsed TAI time (s)", y_label=_label,
+        artifact_id="evidence_"+_recipe_id, supported_tables=("planetary_state","planetary_environment"),
+        required_columns=("time_s","object_id",_metric))
+REVIEW_PLOT_RECIPES["planetary_inertial_xy"] = ReviewPlotRecipe(
+    recipe_id="planetary_inertial_xy", title="Body-centered J2000 trajectory",
+    description="Projection in body-centered inertial axes; no Earth map or radius outline.",
+    sql="SELECT x_inertial_km,y_inertial_km,e.central_body || ':' || s.object_id AS object_id FROM planetary_state s CROSS JOIN planetary_environment e ORDER BY s.object_id,s.time_s",
+    x_column="x_inertial_km", y_columns=("y_inertial_km",), group_column="object_id",
+    x_label="J2000 x (km)", y_label="J2000 y (km)", plot_type="line",
+    artifact_id="evidence_planetary_inertial_xy", supported_tables=("planetary_state","planetary_environment"),
+    required_columns=("x_inertial_km","y_inertial_km","object_id"))
+REVIEW_PLOT_RECIPES["planetary_drag"] = ReviewPlotRecipe(
+    recipe_id="planetary_drag", title="Planetary drag acceleration",
+    description="Native drag vector magnitude at recorded samples.",
+    sql="SELECT time_s,e.central_body || ':' || s.object_id AS object_id, sqrt(pow(json_extract(forces_json,'$.drag[0]'),2)+pow(json_extract(forces_json,'$.drag[1]'),2)+pow(json_extract(forces_json,'$.drag[2]'),2)) AS drag_km_s2 FROM planetary_state s CROSS JOIN planetary_environment e ORDER BY s.object_id,s.time_s",
+    x_column="time_s", y_columns=("drag_km_s2",), group_column="object_id",
+    x_label="Elapsed TAI time (s)", y_label="Drag acceleration (km/s²)",
+    artifact_id="evidence_planetary_drag", supported_tables=("planetary_state","planetary_environment"),
+    required_columns=("time_s","object_id","drag_km_s2"))

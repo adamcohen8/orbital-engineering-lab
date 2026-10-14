@@ -54,6 +54,10 @@ def write_single_run_review_store(
     """Write a SQLite review store for a completed single-run output folder."""
 
     cfg = context.cfg
+    if cfg.simulator.central_body != "earth":
+        from sim.reporting.planetary_review import write_review
+        return write_review(payload=payload,context=context,artifacts=artifacts,
+                            config_json=config_json,config_sha256=config_sha256)
     review_cfg = cfg.outputs.review
     if not bool(review_cfg.enabled):
         return {}
@@ -95,6 +99,9 @@ def write_single_run_review_store(
             _insert_object_initialization(conn, payload=payload)
             _insert_object_propagation(conn, payload=payload)
             _insert_object_state_frame(conn, payload=payload)
+            if "additional_gravity" in payload:
+                from sim.reporting.additional_gravity import insert_review
+                insert_review(conn, payload, include_samples=include_standard_detail)
             if include_standard_detail:
                 _insert_time_samples(conn, t_s=t_s)
                 _insert_object_state(conn, t_s=t_s, truth_hist=truth_hist)
@@ -1321,7 +1328,16 @@ def _batched_orbital_elements(states: np.ndarray) -> list[tuple[float, ...] | No
     )
     ordinary &= np.all(np.isfinite(derived), axis=1)
     for local_index in np.flatnonzero(ordinary):
-        output[int(indices[local_index])] = tuple(float(item) for item in derived[local_index])
+        if node_norm[local_index] <= 1.0e-12 * h_norm[local_index]:
+            # Keep singular-plane conventions in the authoritative scalar owner,
+            # including eccentric and retrograde equatorial orientations.
+            coes = rv_to_coe_eci(r[local_index], v[local_index])
+            output[int(indices[local_index])] = (
+                coes.a_km, coes.ecc, coes.inc_deg, coes.raan_deg,
+                coes.argp_deg, coes.true_anomaly_deg,
+            )
+        else:
+            output[int(indices[local_index])] = tuple(float(item) for item in derived[local_index])
     return output
 
 

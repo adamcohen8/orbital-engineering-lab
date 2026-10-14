@@ -1,0 +1,215 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<?xml-model href="http://pds.nasa.gov/pds4/schema/released/pds/v1/PDS4_PDS_1301.sch"
+schematypens="http://purl.oclc.org/dsdl/schematron" ?>
+<Product_Observational
+xmlns="http://pds.nasa.gov/pds4/pds/v1"
+xmlns:pds="http://pds.nasa.gov/pds4/pds/v1"
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+xsi:schemaLocation="http://pds.nasa.gov/pds4/pds/v1
+http://pds.nasa.gov/pds4/pds/v1/PDS4_PDS_1301.xsd">
+  <Identification_Area>
+    <logical_identifier>urn:nasa:pds:maven_acc:profile:pro_acc_p00718</logical_identifier>
+    <version_id>2.1</version_id>
+    <title>MAVEN Accelerometer Profile P00718</title>
+    <information_model_version>1.3.0.1</information_model_version>
+    <product_class>Product_Observational</product_class>
+    <Modification_History>
+      <Modification_Detail>
+        <modification_date>2014-04-15</modification_date>
+        <version_id>1.0</version_id>
+        <description>Version 1 Release 1 uses onboard accel of the COM. Averaging over 99s reduces effects of fuel slosh. Cal. of the aero DB is incomplete, so 20% biases may exist for science orbits and 10% for deep dip orbits. </description>
+      </Modification_Detail>
+      <Modification_Detail>
+        <modification_date>2016-10-31</modification_date>
+        <version_id>1.1</version_id>
+        <description>Version 1 Release 2 adds unsmoothed ACC data and associated uncertainties at 1 second intervals. </description>
+      </Modification_Detail>
+      <Modification_Detail>
+        <modification_date>2020-02-09</modification_date>
+        <version_id>1.2</version_id>
+        <description>Version 1 Release 3 overhauls ACC bias calculation and accounts for leap seconds. </description>
+      </Modification_Detail>
+      <Modification_Detail>
+        <modification_date>2021-11-12</modification_date>
+        <version_id>2.1</version_id>
+        <description>Version 2 Release 1 includes more orbits and adds spacecraft mass and bias noise to the data products.</description>
+      </Modification_Detail>
+    </Modification_History>
+  </Identification_Area>
+  <Observation_Area>
+    <Time_Coordinates>
+      <start_date_time>2015-02-12T02:34:04Z</start_date_time>
+      <stop_date_time>2015-02-12T02:44:04Z</stop_date_time>
+    </Time_Coordinates>
+    <Primary_Result_Summary>
+      <purpose>Science</purpose>
+      <processing_level>Derived</processing_level>
+      <Science_Facets>
+       <domain>Atmosphere</domain>
+       <discipline_name>Atmospheres</discipline_name>
+       <facet1>Structure</facet1>
+      </Science_Facets>
+    </Primary_Result_Summary>
+    <Investigation_Area>
+      <name>Accelerometer</name>
+      <type>Mission</type>
+      <Internal_Reference>
+      <lid_reference>urn:nasa:pds:context:investigation:mission.maven</lid_reference>
+        <reference_type>data_to_investigation</reference_type>
+      </Internal_Reference>
+    </Investigation_Area>
+    <Observing_System>
+      <name>MAVEN</name>
+      <Observing_System_Component>
+        <name>Accelerometer</name>
+        <type>Instrument</type>
+        <Internal_Reference>
+          <lid_reference>urn:nasa:pds:context:instrument:acc.maven</lid_reference>
+          <reference_type>is_instrument</reference_type>
+        </Internal_Reference>
+      </Observing_System_Component>
+      <Observing_System_Component>
+        <name>MAVEN</name>
+        <type>Spacecraft</type>
+        <Internal_Reference>
+          <lid_reference>urn:nasa:pds:context:instrument_host:spacecraft.maven</lid_reference>
+          <reference_type>is_instrument_host</reference_type>
+        </Internal_Reference>
+        </Observing_System_Component>
+    </Observing_System>
+    <Target_Identification>
+      <name>Mars</name>
+      <type>Planet</type>
+      <Internal_Reference>
+        <lid_reference>urn:nasa:pds:context:target:planet.mars</lid_reference>
+        <reference_type>data_to_target</reference_type>
+      </Internal_Reference>
+    </Target_Identification>
+  </Observation_Area>
+  <Reference_List>
+    <Internal_Reference>
+      <lid_reference>urn:nasa:pds:maven_acc:document:sis_acc</lid_reference>
+      <reference_type>data_to_document</reference_type>
+    </Internal_Reference>
+    <Internal_Reference>
+      <lid_reference>urn:nasa:pds:maven_acc:document:profds</lid_reference>
+      <reference_type>data_to_document</reference_type>
+    </Internal_Reference>
+  </Reference_List>
+  <File_Area_Observational>
+    <File>
+      <file_name>mvn_acc_l3_pro-acc-p00718_20150212_v02_r01.tab</file_name>
+      <local_identifier>PRO_acc_P00718_file</local_identifier>
+      <creation_date_time>2022-07-07T14:43:39</creation_date_time>
+      <file_size unit="byte">57095</file_size>
+      <records>601</records>
+    </File>
+    <Table_Character>
+      <local_identifier>pro_acc_P00718_table_character</local_identifier>
+      <offset unit="byte">1</offset>
+      <records>601</records>
+      <record_delimiter>Carriage-Return Line-Feed</record_delimiter>
+      <Record_Character>
+        <fields>12</fields>
+        <groups>0</groups>
+        <record_length unit="byte">95</record_length>
+        <Field_Character>
+          <name>Seconds from Periapsis</name>
+          <field_number>1</field_number>
+          <field_location unit="byte">1</field_location>
+          <data_type>ASCII_Real</data_type>
+          <field_length unit="byte">4</field_length>
+          <unit>Seconds</unit>
+        </Field_Character>
+        <Field_Character>
+          <name>Areodetic Latitude</name>
+          <field_number>2</field_number>
+          <field_location unit="byte">6</field_location>
+          <data_type>ASCII_Real</data_type>
+          <field_length unit="byte">7</field_length>
+          <unit>Degrees</unit>
+        </Field_Character>
+        <Field_Character>
+          <name>Longitude</name>
+          <field_number>3</field_number>
+          <field_location unit="byte">14</field_location>
+          <data_type>ASCII_Real</data_type>
+          <field_length unit="byte">7</field_length>
+          <unit>Degrees</unit>
+        </Field_Character>
+        <Field_Character>
+          <name>True Local Solar Time</name>
+          <field_number>4</field_number>
+          <field_location unit="byte">22</field_location>
+          <data_type>ASCII_Real</data_type>
+          <field_length unit="byte">7</field_length>
+          <unit>Hours</unit>
+        </Field_Character>
+        <Field_Character>
+          <name>Solar Zenith Angle</name>
+          <field_number>5</field_number>
+          <field_location unit="byte">30</field_location>
+          <data_type>ASCII_Real</data_type>
+          <field_length unit="byte">7</field_length>
+          <unit>Degrees</unit>
+        </Field_Character>
+        <Field_Character>
+          <name>AREODETIC ALTITUDE</name>
+          <field_number>6</field_number>
+          <field_location unit="byte">38</field_location>
+          <data_type>ASCII_Real</data_type>
+          <field_length unit="byte">7</field_length>
+          <unit>KM</unit>
+        </Field_Character>
+        <Field_Character>
+          <name>99-SEC DENSITY</name>
+          <field_number>7</field_number>
+          <field_location unit="byte">46</field_location>
+          <data_type>ASCII_Real</data_type>
+          <field_length unit="byte">7</field_length>
+          <unit>KG/KM**3</unit>
+        </Field_Character>
+        <Field_Character>
+          <name>SIGMA 99-SEC DENSITY</name>
+          <field_number>8</field_number>
+          <field_location unit="byte">54</field_location>
+          <data_type>ASCII_Real</data_type>
+          <field_length unit="byte">7</field_length>
+          <unit>KG/KM**3</unit>
+        </Field_Character>
+        <Field_Character>
+          <name>1-SEC DENSITY</name>
+          <field_number>9</field_number>
+          <field_location unit="byte">62</field_location>
+          <data_type>ASCII_Real</data_type>
+          <field_length unit="byte">7</field_length>
+          <unit>KG/KM**3</unit>
+        </Field_Character>
+        <Field_Character>
+          <name>SIGMA 1-SEC DENSITY</name>
+          <field_number>10</field_number>
+          <field_location unit="byte">70</field_location>
+          <data_type>ASCII_Real</data_type>
+          <field_length unit="byte">7</field_length>
+          <unit>KG/KM**3</unit>
+        </Field_Character>
+        <Field_Character>
+          <name>SPACECRAFT MASS</name>
+          <field_number>11</field_number>
+          <field_location unit="byte">78</field_location>
+          <data_type>ASCII_Real</data_type>
+          <field_length unit="byte">7</field_length>
+          <unit>KG</unit>
+        </Field_Character>
+        <Field_Character>
+          <name>BIAS NOISE 1-SIGMA</name>
+          <field_number>12</field_number>
+          <field_location unit="byte">86</field_location>
+          <data_type>ASCII_Real</data_type>
+          <field_length unit="byte">7</field_length>
+          <unit>KG/KM**3</unit>
+        </Field_Character>
+      </Record_Character>
+    </Table_Character>
+  </File_Area_Observational>
+</Product_Observational>

@@ -1,4 +1,4 @@
 # Compatibility shim for environments that still install from requirements files.
 .
-oel-rust-orbit>=0.17.2,<0.18
+oel-rust-orbit>=0.18.2,<0.19
 oel-rust-game>=0.5,<0.6

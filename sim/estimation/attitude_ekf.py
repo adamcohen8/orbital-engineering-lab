@@ -45,6 +45,8 @@ class AttitudeEKFEstimator(Estimator):
         self.numeric_backend = str(self.numeric_backend).strip().lower()
         if self.numeric_backend not in {"python", "rust"}:
             raise ValueError("numeric_backend must be 'python' or 'rust'.")
+        if not np.isfinite(float(self.dt_s)) or float(self.dt_s) <= 0.0:
+            raise ValueError("dt_s must be positive and finite.")
         if self.numeric_backend == "rust":
             from sim.rust_attitude_ekf_backend import _factory
 

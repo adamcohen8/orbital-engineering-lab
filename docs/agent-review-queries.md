@@ -411,3 +411,8 @@ See [Ground segment](models/ground-segment.md) for model limits and timestamps.
 SELECT time_s, station_id, object_id, measurement_time_s, received_time_s, kind, disposition
 FROM ground_segment_packets ORDER BY time_s, station_id, object_id
 ```
+
+
+## Planetary trajectories
+
+For non-Earth runs query `planetary_state` and `planetary_environment`; Earth `object_state` is empty. See [Planetary ONP](planetary-onp.md) for origin/axes and diagnostic columns.

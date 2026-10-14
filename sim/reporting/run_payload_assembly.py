@@ -223,12 +223,14 @@ class SingleRunPayloadAssembler:
             if object_id in object_propagation:
                 continue
             propagator = getattr(getattr(agent, "dynamics", None), "orbit_propagator", None)
-            if getattr(propagator, "state_frame", "eci") != "eci":
+            if getattr(propagator, "state_frame", "eci") != "eci" or engine.cfg.simulator.additional_gravity is not None:
                 object_propagation[object_id] = propagator.propagation_metadata()
 
         payload = build_single_run_payload(
             SingleRunPayloadContext(
                 cfg=engine.cfg,
+                planetary_environment=getattr(engine, "planetary_environment", None),
+                planetary_force_plans={oid: agent.dynamics.orbit_propagator.plan for oid, agent in engine.agents.items()} if getattr(engine, "planetary_environment", None) is not None else None,
                 object_ids=list(engine.agents.keys()),
                 dt_s=engine.dt,
                 t_s=parts.t_s,
@@ -283,6 +285,11 @@ class SingleRunPayloadAssembler:
             )
         )
 
+        if getattr(engine, "planetary_domain_exit", None) is not None:
+            payload["summary"]["gravity_domain_exit"] = dict(engine.planetary_domain_exit)
+        if engine.cfg.simulator.central_body == "earth" and engine.cfg.simulator.additional_gravity is not None:
+            from sim.reporting.additional_gravity import attach_earth_evidence
+            attach_earth_evidence(payload, engine, parts)
         resources = {
             aid: [row for row in rows if row["time_s"] <= float(parts.t_s[-1]) + 1e-9]
             for aid, rows in getattr(engine, "resource_hist", {}).items()

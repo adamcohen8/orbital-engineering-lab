@@ -171,7 +171,7 @@ fn info_tuple(
 #[cfg(feature = "python")]
 #[pyclass(name = "ONPForceContext")]
 pub struct NativeForcePlanContext {
-    plan: ForcePlan,
+    pub(crate) plan: ForcePlan,
 }
 
 #[cfg(feature = "python")]

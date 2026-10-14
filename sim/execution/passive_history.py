@@ -72,6 +72,9 @@ class PassiveHistoryCache:
     def _definition(self, agent: Any, initial: StateTruth) -> tuple[Any, ...] | None:
         provider = getattr(self.engine, "general_propagation", {}).get(agent.object_id)
         if provider is not None:
+            # Keep catalog-style OGP dependencies lazy.  The passive-history
+            # cache also serves ordinary ONP runs, and importing the SGP4
+            # provider here would eagerly load numba/scipy for every run.
             from sim.dynamics.orbit.sgp4 import SGP4EphemerisProvider
             if type(provider) is not SGP4EphemerisProvider or provider.numeric_backend != "rust":
                 return None

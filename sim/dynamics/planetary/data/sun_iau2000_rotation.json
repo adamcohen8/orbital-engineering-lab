@@ -1,0 +1,32 @@
+{
+  "body_id": "sun",
+  "frame_id": "IAU2000_SUN",
+  "kind": "pole_meridian",
+  "inertial_axes": "J2000",
+  "ra_deg": [
+    286.13,
+    0.0,
+    0.0
+  ],
+  "dec_deg": [
+    63.87,
+    0.0,
+    0.0
+  ],
+  "meridian_deg": [
+    84.1,
+    14.1844,
+    0.0
+  ],
+  "periodic_terms": [],
+  "valid_tdb_seconds": [
+    -883656000,
+    978307200
+  ],
+  "source": {
+    "url": "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/a_old_versions/pck00008.tpc",
+    "sha256": "ca07df56e9f1bca85a4c6748b618a46c0bf8e081f96f81e324896f2fdc54ea27",
+    "reference": "IAU 2000 rotational elements, Seidelmann et al. 2002",
+    "coverage_note": "1972-2030 implementation envelope; no long-term orientation accuracy claim"
+  }
+}

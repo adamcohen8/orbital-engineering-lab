@@ -52,6 +52,9 @@ def scenario_config_from_dict(
     path_policy: ConfigPathPolicy | None = None,
 ) -> SimulationScenarioConfig:
     root = _as_dict(data, "root")
+    if str(_as_dict(root.get("simulator"), "simulator").get("central_body", "earth")).strip().lower() != "earth":
+        from .planetary import apply_planetary_defaults
+        root = apply_planetary_defaults(root)
     _reject_unsupported_aliases(root, "", _ROOT_UNSUPPORTED_ALIASES)
     _reject_unknown_fields(
         root,

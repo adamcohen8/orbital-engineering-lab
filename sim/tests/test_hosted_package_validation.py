@@ -234,6 +234,49 @@ def test_generic_package_validator_keeps_public_local_and_hosted_closed(tmp_path
     assert result["files_uploaded"] is False
 
 
+def test_package_validator_rejects_unqualified_planetary_origin(tmp_path: Path) -> None:
+    root = _public_package(tmp_path)
+    (root / "inputs/scenario.yaml").write_bytes((ROOT / "configs/mars_reference_drag.yaml").read_bytes())
+    result = validate_hosted_execution_package(root, workspace_root=tmp_path)
+    assert result["status"] == "CLIENT_INVALID"
+    assert "package.planetary_unsupported" in {item["code"] for item in result["issues"]}
+    assert result["execution_authorized"] is False
+
+
+def test_package_validator_rejects_unqualified_additional_gravity(tmp_path: Path) -> None:
+    import hashlib
+
+    import yaml
+
+    from sim.tests.test_additional_gravity import raw_scenario
+
+    root = _public_package(tmp_path)
+    path = root / "inputs/scenario.yaml"
+    document = raw_scenario(root / "inputs")
+    document["outputs"]["output_dir"] = str(root / "outputs")
+    path.write_text(yaml.safe_dump(document))
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    def bind_digest(value):
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if key == "content_sha256":
+                    value[key] = digest
+                else:
+                    bind_digest(child)
+        elif isinstance(value, list):
+            for child in value:
+                bind_digest(child)
+    for name in ("request.json", "plan.json"):
+        control = root / name
+        value = json.loads(control.read_text())
+        bind_digest(value)
+        _write_json(control, value)
+    result = validate_hosted_execution_package(root, workspace_root=tmp_path)
+    assert result["status"] == "CLIENT_INVALID"
+    assert "package.additional_gravity_unsupported" in {item["code"] for item in result["issues"]}
+    assert result["execution_authorized"] is False
+
+
 def test_package_validator_rejects_tampering_and_missing_port_metadata(tmp_path: Path) -> None:
     root = _package(tmp_path)
     request_path = root / "request.json"

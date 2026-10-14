@@ -87,10 +87,12 @@ selects another projection. Movies also support GIF and rotating zero-velocity
 overlays. Rendering transforms recorded samples; it never reruns dynamics.
 
 Python callers use `sim.review.render_cr3bp_research(workspace, object_id, ...)`.
-This is a local review API/CLI workflow. The generic MCP recipe/plan/render
-contracts do **not** yet expose CR3BP research rendering; do not invent an MCP
-recipe ID. When connected MCP cannot express the figure, identify that limit
-and use this documented local OEL review surface if available.
+Local MCP callers use the dedicated `oel.plan_cr3bp_render.v1` and
+`oel.render_cr3bp.v1` contracts, rather than a generic plot recipe ID. Plan
+against the recorded evidence, then render the unchanged specification with
+the matching plan ID and operator-configured write approval. The MCP surface
+preserves this renderer's experimental model and frame limits; its declared
+resource bounds may be narrower than the Python/CLI interface.
 
 The reader requires explicit `cr3bp_rotating` frame and matching CR3BP system
 metadata. Missing frames, ECI input, unknown systems, duplicate/nonfinite times,

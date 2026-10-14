@@ -34,12 +34,23 @@ def compute_scores(log: SimLog) -> ScoreSummary:
     p95_runtime = {}
     jitter = {}
     for oid in object_ids:
-        rt = log.controller_runtime_ms_by_object[oid][1:]
-        skip = log.controller_skipped_by_object[oid][1:]
+        # The first log row is the initial state and is excluded from runtime
+        # statistics. A zero-duration or otherwise single-row run therefore
+        # has no measured controller samples; return finite zero metrics
+        # instead of asking NumPy for statistics on an empty array.
+        runtime = np.asarray(log.controller_runtime_ms_by_object[oid], dtype=float).reshape(-1)
+        skipped = np.asarray(log.controller_skipped_by_object[oid], dtype=bool).reshape(-1)
+        rt = runtime[1:] if runtime.size > 1 else np.empty(0, dtype=float)
+        skip = skipped[1:] if skipped.size > 1 else np.empty(0, dtype=bool)
         overruns[oid] = int(np.sum(skip))
-        mean_runtime[oid] = float(np.mean(rt))
-        p95_runtime[oid] = float(np.percentile(rt, 95.0))
-        jitter[oid] = float(np.std(rt))
+        if rt.size == 0:
+            mean_runtime[oid] = 0.0
+            p95_runtime[oid] = 0.0
+            jitter[oid] = 0.0
+        else:
+            mean_runtime[oid] = float(np.mean(rt))
+            p95_runtime[oid] = float(np.percentile(rt, 95.0))
+            jitter[oid] = float(np.std(rt))
 
     return ScoreSummary(
         min_separation_km=min_sep,

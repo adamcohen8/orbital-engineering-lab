@@ -1,0 +1,46 @@
+scenario_name: sun_centered_srp
+scenario_description: Heliocentric point-mass ONP and cannonball SRP; emitting Sun
+  has no self-shadow.
+objects:
+  probe:
+    kind: satellite
+    runtime_profile: trajectory_only
+    specs:
+      mass_kg: 100.0
+      cr: 1.3
+      srp_area_m2: 2.0
+    initial_state:
+      position_inertial_km:
+      - 149597870.7
+      - 0.0
+      - 0.0
+      velocity_inertial_km_s:
+      - 0.0
+      - 29.784691831696804
+      - 0.0
+simulator:
+  central_body: sun
+  initial_jd_utc: 2457065.5
+  duration_s: 86400.0
+  dt_s: 600.0
+  planetary:
+    srp:
+      enabled: true
+  dynamics:
+    orbit:
+      integrator: rkf78
+      numeric_backend: rust
+      adaptive_atol: 1.0e-11
+      adaptive_rtol: 1.0e-11
+outputs:
+  stats:
+    save_full_log: false
+    save_csv: true
+  review:
+    enabled: true
+    detail: standard
+  output_dir: outputs/sun_centered_srp
+metadata:
+  owner: public
+  public_surface: public-config
+  support_level: demonstration

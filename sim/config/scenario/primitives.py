@@ -159,7 +159,10 @@ def _enforce_strict_booleans(value: Any, path: str = "root") -> None:
                 and child.strip().lower() == "auto"
             ):
                 continue
-            if _is_bool_like_key(str(key)) and not isinstance(child, bool):
+            planetary_force_block = child_path in {
+                "root.simulator.planetary.drag", "root.simulator.planetary.srp"
+            } and isinstance(child, dict)
+            if _is_bool_like_key(str(key)) and not isinstance(child, bool) and not planetary_force_block:
                 raise ValueError(f"{child_path} must be a boolean true/false value, not {child!r}.")
             _enforce_strict_booleans(child, child_path)
     elif isinstance(value, list):

@@ -127,6 +127,8 @@ def test_batched_orbital_elements_are_scalar_exact_for_ordinary_states() -> None
         (7200.0, 0.0, 28.5, 80.0, 0.0, 190.0),
         (7000.0, 0.0, 0.0, 0.0, 0.0, 123.0),
         (9000.0, 0.2, 0.0, 0.0, 37.0, 100.0),
+        (9000.0, 0.2, 180.0, 0.0, 37.0, 100.0),
+        (7000.0, 0.0, 180.0, 0.0, 0.0, 123.0),
     ]
     states = []
     expected = []
@@ -167,13 +169,14 @@ def test_batched_orbital_elements_leave_edge_cases_for_scalar_fallback() -> None
     assert _batched_orbital_elements(states) == [None, None, None]
 
 
-def test_batched_orbital_elements_preserve_sqlite_bytes(tmp_path: Path, monkeypatch) -> None:
+@pytest.mark.parametrize("ecc, inc_deg", [(0.05, 51.6), (0.2, 0.0), (0.2, 180.0), (0.0, 180.0)])
+def test_batched_orbital_elements_preserve_sqlite_bytes(tmp_path: Path, monkeypatch, ecc: float, inc_deg: float) -> None:
     states = []
     for true_anomaly_deg in np.linspace(0.0, 359.0, 128):
         r, v = coe_to_rv_eci(
             a_km=7200.0,
-            ecc=0.05,
-            inc_deg=51.6,
+            ecc=ecc,
+            inc_deg=inc_deg,
             raan_deg=23.0,
             argp_deg=147.0,
             true_anomaly_deg=float(true_anomaly_deg),

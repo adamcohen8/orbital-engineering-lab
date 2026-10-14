@@ -111,6 +111,8 @@ class EvidencePlotter:
                 f"Unknown evidence plot recipe '{recipe_id}'. "
                 f"Available recipes: {', '.join(sorted(EVIDENCE_PLOT_RECIPES))}."
             )
+        if "planetary_environment" in self.workspace.tables() and "planetary_state" not in recipe.required_tables:
+            raise ValueError(f"Recipe {recipe_id!r} cannot consume planetary evidence; select a planetary recipe or explicit neutral SQL")
         self._require_tables(recipe.required_tables, recipe_id=recipe.recipe_id)
         return self.plot(
             sql=recipe.sql,
@@ -352,6 +354,11 @@ def _save_review_plot_from_result(
             if _needs_legend(spec):
                 ax.legend(loc="best")
             fig.tight_layout(rect=(0, 0.025, 1, 0.96 if spec.subtitle else 1))
+            if str(spec.extra.get("recipe_id", "")).startswith("planetary_"):
+                from matplotlib.ticker import MaxNLocator
+
+                ax.yaxis.set_major_locator(MaxNLocator(nbins=7, prune="both"))
+                fig.subplots_adjust(left=max(fig.subplotpars.left, 0.16))
         else:
             raise ValueError(f"Unsupported review plot renderer_id '{spec.renderer_id}'.")
         add_artifact_footer(fig, metadata=plot_metadata, artifact_id=artifact_id)

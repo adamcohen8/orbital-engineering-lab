@@ -59,7 +59,7 @@ dependencies = [
 
 [[package]]
 name = "oel-rust-orbit"
-version = "0.17.2"
+version = "0.18.2"
 dependencies = [
  "libm",
  "pyo3",

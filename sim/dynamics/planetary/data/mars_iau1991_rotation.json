@@ -1,0 +1,31 @@
+{
+  "body_id": "mars",
+  "frame_id": "IAU1991_MARS",
+  "kind": "pole_meridian",
+  "inertial_axes": "J2000",
+  "ra_deg": [
+    317.681,
+    -0.108,
+    0.0
+  ],
+  "dec_deg": [
+    52.886,
+    -0.061,
+    0.0
+  ],
+  "meridian_deg": [
+    176.868,
+    350.891983,
+    0.0
+  ],
+  "valid_tdb_seconds": [
+    -883656000,
+    978307200
+  ],
+  "source": {
+    "url": "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/a_old_versions/pck00005.tpc",
+    "sha256": "3525fcfe21a25eaaf89e3f0ae08b8279b4cc13ec785bbf959e9b04f2ac0b0b75",
+    "reference": "IAU 1991 elements quoted in the Mars old-values section; not the IAU 1994 current-values block",
+    "coverage_note": "1972-2030 implementation envelope; no long-term orientation accuracy claim"
+  }
+}

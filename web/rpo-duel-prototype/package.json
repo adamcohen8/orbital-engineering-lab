@@ -15,6 +15,6 @@
     "ws": "^8.18.3"
   },
   "devDependencies": {
-    "wrangler": "4.125.0"
+    "wrangler": "4.150.0"
   }
 }

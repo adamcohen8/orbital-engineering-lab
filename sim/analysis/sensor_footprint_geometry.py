@@ -345,21 +345,13 @@ def intersect_rays_wgs84(
     backend = str(numeric_backend).strip().lower()
     if backend not in {"python", "rust"}:
         raise ValueError(f"Unknown coverage numeric backend {numeric_backend!r}.")
-    if backend == "rust":
-        from sim.rust_coverage_backend import intersect_rays_wgs84 as rust_intersect_rays_wgs84
-
-        return rust_intersect_rays_wgs84(
-            observer_ecef_km,
-            direction_ecef,
-            discriminant_tolerance=discriminant_tolerance,
-            distance_tolerance_km=distance_tolerance_km,
-        )
-
     observer = np.asarray(observer_ecef_km, dtype=float).reshape(3)
     directions, _ = _unit_rows(direction_ecef, "direction_ecef")
-    if not np.isfinite(float(discriminant_tolerance)) or float(discriminant_tolerance) < 0.0:
+    discriminant_tolerance = float(discriminant_tolerance)
+    distance_tolerance_km = float(distance_tolerance_km)
+    if not np.isfinite(discriminant_tolerance) or discriminant_tolerance < 0.0:
         raise ValueError("discriminant_tolerance must be finite and non-negative.")
-    if not np.isfinite(float(distance_tolerance_km)) or float(distance_tolerance_km) < 0.0:
+    if not np.isfinite(distance_tolerance_km) or distance_tolerance_km < 0.0:
         raise ValueError("distance_tolerance_km must be finite and non-negative.")
     if not np.all(np.isfinite(observer)):
         raise ValueError("observer_ecef_km must contain three finite values.")
@@ -367,17 +359,27 @@ def intersect_rays_wgs84(
     observer_scaled = observer / axes
     if float(np.dot(observer_scaled, observer_scaled)) <= 1.0:
         raise ValueError("Ray observer must be outside the WGS84 ellipsoid.")
+    if backend == "rust":
+        from sim.rust_coverage_backend import intersect_rays_wgs84 as rust_intersect_rays_wgs84
+
+        return rust_intersect_rays_wgs84(
+            observer,
+            directions,
+            discriminant_tolerance=discriminant_tolerance,
+            distance_tolerance_km=distance_tolerance_km,
+        )
+
     direction_scaled = directions / axes[None, :]
     quadratic = np.einsum("ij,ij->i", direction_scaled, direction_scaled)
     linear = direction_scaled @ observer_scaled
     constant = float(np.dot(observer_scaled, observer_scaled) - 1.0)
     discriminant = linear * linear - quadratic * constant
-    candidate = discriminant >= -float(discriminant_tolerance)
+    candidate = discriminant >= -discriminant_tolerance
     root = np.sqrt(np.clip(discriminant, 0.0, None))
     first = (-linear - root) / quadratic
     second = (-linear + root) / quadratic
-    first_valid = first > float(distance_tolerance_km)
-    second_valid = second > float(distance_tolerance_km)
+    first_valid = first > distance_tolerance_km
+    second_valid = second > distance_tolerance_km
     distance = np.where(first_valid, first, np.where(second_valid, second, np.nan))
     hit = candidate & (first_valid | second_valid)
     distance = np.where(hit, distance, np.nan)

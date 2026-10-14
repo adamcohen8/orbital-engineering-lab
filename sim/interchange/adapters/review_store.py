@@ -328,6 +328,8 @@ def export_completed_run_state(
 
 def _require_review_contract(workspace: ReviewWorkspace) -> None:
     columns = workspace.table_columns()
+    if "planetary_environment" in columns:
+        raise CompletedRunStateExportError("Planetary states cannot be exported through the Earth ECI v1 state-product contract.")
     required = {
         "run_metadata": {
             "run_id",

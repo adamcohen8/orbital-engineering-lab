@@ -69,7 +69,7 @@ physics evidence.
 ### Historical v0.23.1 Release Qualification
 
 This retained historical packet is not qualification evidence for the current
-`0.27.1` source. The `v0.23.1` release source completed clean local installation and runtime
+source checkout. The `v0.23.1` release source completed clean local installation and runtime
 smoke checks on macOS 15 arm64 with each supported Python minor, 3.10 through
 3.14. Boundary-minor full regression and acceleration/validation checks, the
 blocking Python 3.11 full suite, the authoritative compatibility acceptance

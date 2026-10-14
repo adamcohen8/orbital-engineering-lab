@@ -1,0 +1,16 @@
+{
+  "source": "NAIF DE440 physical-center GM; IAU 2000 reference radii, solar nominal radius 695700 km",
+  "resources": [
+    {
+      "file": "gm_de440.tpc",
+      "sha256": "924ddf4fb9ead9fe8a1aa55780bcabde40b09d00065d58226e24b68d8092f140",
+      "url": "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/gm_de440.tpc"
+    },
+    {
+      "file": "pck00008.tpc",
+      "sha256": "ca07df56e9f1bca85a4c6748b618a46c0bf8e081f96f81e324896f2fdc54ea27",
+      "url": "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/a_old_versions/pck00008.tpc"
+    }
+  ],
+  "solar_radius_source": "IAU 2015 Resolution B3 nominal solar radius 6.957e8 m (https://www.iau.org/static/resolutions/IAU2015_English.pdf); diagnostic reference sphere only"
+}

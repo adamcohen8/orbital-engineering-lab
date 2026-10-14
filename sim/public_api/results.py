@@ -558,6 +558,7 @@ class SimulationResult:
                 )
             ),
             spacecraft_resources=resource_snapshot(self.payload.get("spacecraft_resources", {}), time_s),
+            state_metadata={key: self.summary[key] for key in ("central_body", "origin_center_id", "inertial_axes") if key in self.summary},
         )
 
     def state_history(self, object_id: str) -> np.ndarray:
@@ -609,6 +610,9 @@ class SimulationResult:
         mask = self.time_window_mask(start_s=start_s, end_s=end_s)[:n]
         indices = np.flatnonzero(mask)
         frame_key = str(frame or "ric_rect").strip().lower()
+        planetary = self.payload.get("summary", {}).get("central_body", "earth") != "earth"
+        if planetary and frame_key != "inertial":
+            raise ValueError("Planetary relative states require frame='inertial'; Earth ECI/RIC recipes are unsupported")
         if frame_key in {"eci", "inertial"}:
             rel = dep[indices] - ref[indices]
         elif frame_key in {"ric", "ric_rect", "rect", "rectangular"}:
@@ -640,7 +644,7 @@ class SimulationResult:
         end_s: float | None = None,
         units: str = "km",
     ) -> np.ndarray:
-        rel = self.relative_state(a, b, frame="eci", start_s=start_s, end_s=end_s)
+        rel = self.relative_state(a, b, frame="inertial" if self.summary.get("central_body", "earth") != "earth" else "eci", start_s=start_s, end_s=end_s)
         if rel.size == 0:
             return np.array([], dtype=float)
         return np.linalg.norm(rel[:, :3], axis=1) * _range_scale(units)
@@ -687,7 +691,7 @@ class SimulationResult:
         end_s: float | None = None,
     ) -> dict[str, Any]:
         radius = _validate_event_radius_km(radius_km)
-        rel = self.relative_state(a, b, frame="eci", start_s=start_s, end_s=end_s)
+        rel = self.relative_state(a, b, frame="inertial" if self.summary.get("central_body", "earth") != "earth" else "eci", start_s=start_s, end_s=end_s)
         times = self.time_s[self.time_window_mask(start_s=start_s, end_s=end_s)]
         n = int(min(rel.shape[0], times.size))
         min_range_km = float("nan")
@@ -728,7 +732,7 @@ class SimulationResult:
         end_s: float | None = None,
     ) -> list[dict[str, float]]:
         radius = _validate_event_radius_km(radius_km)
-        rel = self.relative_state(a, b, frame="eci", start_s=start_s, end_s=end_s)
+        rel = self.relative_state(a, b, frame="inertial" if self.summary.get("central_body", "earth") != "earth" else "eci", start_s=start_s, end_s=end_s)
         times = self.time_s[self.time_window_mask(start_s=start_s, end_s=end_s)]
         n = int(min(rel.shape[0], times.size))
         violations: list[dict[str, float]] = []
@@ -812,10 +816,15 @@ class SimulationResult:
             columns = ["tx_body_nm", "ty_body_nm", "tz_body_nm"]
         else:
             columns = _STATE_COLUMNS[: arr.shape[1]]
+        planetary = self.payload.get("summary", {}).get("central_body", "earth") != "earth"
+        if planetary:
+            columns = [name.replace("_eci_", "_inertial_") for name in columns]
         n = int(min(self.time_s.size, arr.shape[0]))
         records = []
         for idx in range(n):
             row = {"time_s": float(self.time_s[idx]), "object_id": oid}
+            if planetary:
+                row.update(origin_center_id=self.payload["summary"]["origin_center_id"], inertial_axes="J2000")
             row.update({columns[j]: float(arr[idx, j]) for j in range(min(len(columns), arr.shape[1]))})
             records.append(row)
         return records
@@ -837,10 +846,14 @@ class SimulationResult:
         n = int(min(rel.shape[0], times.size))
         frame_key = str(frame or "ric_rect").strip().lower()
         columns = _ECI_REL_STATE_COLUMNS if frame_key in {"eci", "inertial"} else _RIC_STATE_COLUMNS
+        if self.summary.get("central_body", "earth") != "earth":
+            columns = [name.replace("_eci", "_inertial") for name in columns]
         records = []
         for idx in range(n):
             row = {"time_s": float(times[idx]), "deputy": str(deputy), "chief": str(chief), "frame": frame_key}
             row.update({columns[j]: float(rel[idx, j]) for j in range(min(len(columns), rel.shape[1]))})
+            if self.summary.get("central_body", "earth") != "earth":
+                row.update(origin_center_id=self.summary["origin_center_id"], inertial_axes="J2000")
             records.append(row)
         return records
 

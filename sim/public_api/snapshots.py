@@ -20,6 +20,8 @@ class SimulationSnapshot:
 
     ground_segment: dict = field(default_factory=dict)
 
+    state_metadata: dict = field(default_factory=dict)
+
     @property
     def object_ids(self) -> tuple[str, ...]:
         return tuple(sorted(self.truth.keys()))

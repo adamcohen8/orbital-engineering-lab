@@ -47,3 +47,13 @@ integrations.
   configuration changes.
 - Verify imports, signatures, class identity, repr, serialization, and
   representative run output parity for public API changes.
+
+
+## Planetary trajectories
+
+`sim.config.scenario.planetary` owns non-Earth normalization and compatibility validation; `sim.dynamics.planetary` owns prepared resources and the Rust adapter. Public snapshots retain an optional body-neutral state descriptor. See [Planetary ONP](planetary-onp.md).
+
+`sim.config.scenario.additional_gravity` owns optional external harmonic sources
+for Earth and planetary origins. Resource preparation lives in
+`sim.dynamics.planetary.additional_gravity`; omitted selections retain existing
+Earth serialization and normalized digests.

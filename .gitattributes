@@ -1,1 +1,7 @@
 * text=auto eol=lf
+# Preserve the original archive bytes used by planetary provenance hashes.
+sim/dynamics/planetary/data/*.sha -text -whitespace
+sim/dynamics/planetary/data/*.lbl -text -whitespace
+sim/dynamics/planetary/data/*.tab -text -whitespace
+sim/dynamics/planetary/data/*.xml -text -whitespace
+sim/dynamics/planetary/data/*.tpc -text -whitespace

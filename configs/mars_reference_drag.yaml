@@ -1,0 +1,52 @@
+scenario_name: mars_reference_drag
+scenario_description: Fixed MAVEN reference conditions; GMM-2B static gravity, bounded
+  135.017–164.937 km atmosphere.
+objects:
+  probe:
+    kind: satellite
+    runtime_profile: trajectory_only
+    specs:
+      mass_kg: 100.0
+      cd: 2.2
+      drag_area_m2: 1.0
+    initial_state:
+      reference_axes: J2000
+      coes:
+        a_km: 3546.19
+        ecc: 0.0
+        inc_deg: 37.1135
+        raan_deg: 47.68143
+        argp_deg: 0.0
+        true_anomaly_deg: 0.0
+simulator:
+  central_body: mars
+  initial_jd_utc: 2457065.5
+  duration_s: 120.0
+  dt_s: 5.0
+  planetary:
+    gravity:
+      model: gmm2b_static
+      max_degree: 20
+      max_order: 20
+    atmosphere:
+      model: mars_reference_table
+    drag:
+      enabled: true
+  dynamics:
+    orbit:
+      integrator: rkf78
+      numeric_backend: rust
+      adaptive_atol: 1.0e-11
+      adaptive_rtol: 1.0e-11
+outputs:
+  stats:
+    save_full_log: false
+    save_csv: true
+  review:
+    enabled: true
+    detail: standard
+  output_dir: outputs/mars_reference_drag
+metadata:
+  owner: public
+  public_surface: public-config
+  support_level: demonstration

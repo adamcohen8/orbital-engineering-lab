@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "orbital-engineering-lab"
-version = "0.33.1"
+version = "0.34.0"
 description = "Integrated spacecraft simulation and analysis platform for rendezvous, control, validation, and mission prototyping."
 readme = "README.md"
 requires-python = ">=3.10,<3.15"
@@ -28,7 +28,7 @@ classifiers = [
 ]
 dependencies = [
   "oel-rust-game>=0.5,<0.6",
-  "oel-rust-orbit>=0.17.2,<0.18",
+  "oel-rust-orbit>=0.18.2,<0.19",
   "numpy>=2.1,<2.5",
   "matplotlib>=3.8,<3.12",
   "tqdm>=4.65,<5",
@@ -52,7 +52,7 @@ dev = [
 ]
 game = [
   "oel-rust-game>=0.5,<0.6",
-  "oel-rust-orbit>=0.17.2,<0.18",
+  "oel-rust-orbit>=0.18.2,<0.19",
   "pygame>=2.5,<3; python_version < '3.14'",
   "pygame-ce>=2.5,<3; python_version >= '3.14'",
   "Pillow>=12,<13",
@@ -76,7 +76,7 @@ cross-platform = [
   "setuptools>=83,<84",
   "tomli>=2,<3; python_version < '3.11'",
   "oel-rust-game>=0.5,<0.6",
-  "oel-rust-orbit>=0.17.2,<0.18",
+  "oel-rust-orbit>=0.18.2,<0.19",
   "pygame>=2.5,<3; python_version < '3.14'",
   "pygame-ce>=2.5,<3; python_version >= '3.14'",
   "Pillow>=12,<13",
@@ -94,7 +94,7 @@ full = [
   "setuptools>=83,<84",
   "tomli>=2,<3; python_version < '3.11'",
   "oel-rust-game>=0.5,<0.6",
-  "oel-rust-orbit>=0.17.2,<0.18",
+  "oel-rust-orbit>=0.18.2,<0.19",
   "pygame>=2.5,<3; python_version < '3.14'",
   "pygame-ce>=2.5,<3; python_version >= '3.14'",
   "Pillow>=12,<13",
@@ -114,7 +114,7 @@ include-package-data = false
 py-modules = ["run_simulation"]
 
 [tool.setuptools.data-files]
-"share/oel/configs" = ["configs/quickstart_5min.yaml", "configs/acceptance_relative_coast.yaml"]
+"share/oel/configs" = ["configs/quickstart_5min.yaml", "configs/acceptance_relative_coast.yaml", "configs/mars_reference_drag.yaml", "configs/sun_centered_srp.yaml"]
 
 [tool.setuptools.package-data]
 sim = [
@@ -123,6 +123,7 @@ sim = [
   "dynamics/orbit/data/*.dat",
   "dynamics/orbit/data/*.json",
   "dynamics/orbit/data/*.txt",
+  "dynamics/planetary/data/*",
   "interchange/schemas/*.json",
   "interchange/examples/*.json",
   "interchange/examples/*.md",

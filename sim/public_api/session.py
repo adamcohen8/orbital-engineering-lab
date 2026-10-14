@@ -147,6 +147,7 @@ class SimulationSession:
             applied_torque=dict(snap["applied_torque"]),
             spacecraft_resources=dict(snap.get("spacecraft_resources", {})),
             ground_segment=snap.get("ground_segment", {}),
+            state_metadata=dict(snap.get("state_metadata", {})),
         )
 
     def run(self, *, step_callback: Any | None = None) -> SimulationResult:
@@ -192,6 +193,7 @@ class SimulationSession:
             applied_torque=dict(snap["applied_torque"]),
             spacecraft_resources=dict(snap.get("spacecraft_resources", {})),
             ground_segment=snap.get("ground_segment", {}),
+            state_metadata=dict(snap.get("state_metadata", {})),
         )
 
     def publish_fsw_input(self, object_id: str, event: object) -> None:

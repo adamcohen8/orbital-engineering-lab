@@ -216,23 +216,31 @@ class _SingleRunEngine:
             policy=str(att_cfg.get("guardrail_policy", "error") or "error")
         )
         activate_attitude_guardrail_stats(self.attitude_guardrail_stats)
-        self.frame_context = frame_context_from_mapping(
-            dict(getattr(cfg.simulator, "frames", {}) or {}),
-            jd_utc_start=cfg.simulator.initial_jd_utc,
-        )
-        self.base_environment = configure_spherical_harmonics_env(dict(cfg.simulator.environment or {}), orbit_cfg)
-        atmosphere_env = self.base_environment.pop("atmosphere_env", None)
-        if isinstance(atmosphere_env, dict):
-            self.base_environment = {**dict(atmosphere_env), **self.base_environment}
-        if orbit_cfg.get("atmosphere_model") not in (None, "") and "atmosphere_model" not in self.base_environment:
-            self.base_environment["atmosphere_model"] = str(orbit_cfg.get("atmosphere_model")).strip().lower()
-        if cfg.simulator.initial_jd_utc is not None and "jd_utc_start" not in self.base_environment:
-            self.base_environment["jd_utc_start"] = float(cfg.simulator.initial_jd_utc)
-        self.base_environment = _apply_frame_context_to_environment(
-            self.base_environment,
-            frame_context=self.frame_context,
-            orbit_cfg=orbit_cfg,
-        )
+        self.planetary_environment = None
+        if cfg.simulator.central_body != "earth":
+            from sim.dynamics.planetary.preparation import prepare_environment
+            self.planetary_environment = prepare_environment(cfg)
+            self.planetary_environment.verify_resources()
+            self.frame_context = None
+            self.base_environment = {}
+        else:
+            self.frame_context = frame_context_from_mapping(
+                dict(getattr(cfg.simulator, "frames", {}) or {}),
+                jd_utc_start=cfg.simulator.initial_jd_utc,
+            )
+            self.base_environment = configure_spherical_harmonics_env(dict(cfg.simulator.environment or {}), orbit_cfg)
+            atmosphere_env = self.base_environment.pop("atmosphere_env", None)
+            if isinstance(atmosphere_env, dict):
+                self.base_environment = {**dict(atmosphere_env), **self.base_environment}
+            if orbit_cfg.get("atmosphere_model") not in (None, "") and "atmosphere_model" not in self.base_environment:
+                self.base_environment["atmosphere_model"] = str(orbit_cfg.get("atmosphere_model")).strip().lower()
+            if cfg.simulator.initial_jd_utc is not None and "jd_utc_start" not in self.base_environment:
+                self.base_environment["jd_utc_start"] = float(cfg.simulator.initial_jd_utc)
+            self.base_environment = _apply_frame_context_to_environment(
+                self.base_environment,
+                frame_context=self.frame_context,
+                orbit_cfg=orbit_cfg,
+            )
         self._time_dependent_env_cache: dict[tuple, dict[str, np.ndarray]] = {}
         self.reentry_cfg = reentry_config_from_dynamics(dynamics_cfg)
         self.attitude_enabled = bool(att_cfg.get("enabled", True))
@@ -252,7 +260,11 @@ class _SingleRunEngine:
         )
         self.rocket_stepper = _RocketStepper(self)
         self.satellite_stepper = _SatelliteStepper(self)
-        self.termination_monitor = _TerminationMonitor(self)
+        if self.planetary_environment is None:
+            self.termination_monitor = _TerminationMonitor(self)
+        else:
+            from sim.dynamics.planetary.runtime import PlanetaryTerminationMonitor
+            self.termination_monitor = PlanetaryTerminationMonitor(self)
 
         self.agents: dict[str, AgentRuntime] = {}
         self.object_configs = configured_objects(cfg)
@@ -269,6 +281,7 @@ class _SingleRunEngine:
                     cfg,
                     np.random.default_rng(int(rng.integers(0, 2**31 - 1))),
                     scenario_uses_aerodynamic_lift=scenario_uses_aerodynamic_lift,
+                    planetary_environment=self.planetary_environment,
                 )
         for agent in self.agents.values():
             if agent.kind == "satellite" and agent.deploy_source in {"rocket_deployment", "rocket_insertion"}:
@@ -826,6 +839,9 @@ class _SingleRunEngine:
             "applied_thrust": {oid: np.array(hist[idx], dtype=float) for oid, hist in self.thrust_hist.items()},
             "applied_torque": {oid: np.array(hist[idx], dtype=float) for oid, hist in self.torque_hist.items()},
             "flight_software": flight_software,
+            **({"state_metadata": {"central_body": self.planetary_environment.body.body_id,
+               "origin_center_id": self.planetary_environment.body.center_id, "inertial_axes": "J2000",
+               "environment_sha256": self.planetary_environment.digest}} if self.planetary_environment is not None else {}),
             "spacecraft_resources": resource_snapshot(self.resource_hist, float(self.t_s[idx])),
             "ground_segment": self.ground_segment.ground.snapshot(float(self.t_s[idx])) if self.ground_segment else {},
         }
@@ -1413,6 +1429,11 @@ class _SingleRunEngine:
                 "auto planner fell back to serial after object-worker transport became unavailable"
             )
             object_results = self.object_step_executor.step_objects(object_inputs)
+        except ValueError as exc:
+            if self.planetary_environment is None or not self.termination_monitor.handle_gravity_domain_exit(exc, object_inputs):
+                raise
+            self.runtime_profiler.record_stage("step_wall", perf_counter() - step_wall_t0)
+            return self.snapshot(include_flight_software=False) if return_snapshot else {}
         self._validate_object_step_results(object_inputs, object_results)
         for result in object_results:
             self._apply_object_step_result(result, sample_index=k)

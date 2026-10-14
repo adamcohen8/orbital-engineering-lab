@@ -280,9 +280,15 @@ def _parse_analysis_monte_carlo_section(value: Any) -> AnalysisMonteCarloSection
         if not isinstance(vars_raw, list):
             raise ValueError("analysis.monte_carlo.variations must be a list.")
         variations = [_parse_mc_variation(v) for v in vars_raw]
-    bundles_raw = d.get("bundles", []) or []
-    constraints_raw = d.get("constraints", []) or []
-    correlated_raw = d.get("correlated_normals", []) or []
+    bundles_raw = d.get("bundles", [])
+    constraints_raw = d.get("constraints", [])
+    correlated_raw = d.get("correlated_normals", [])
+    if bundles_raw is None:
+        bundles_raw = []
+    if constraints_raw is None:
+        constraints_raw = []
+    if correlated_raw is None:
+        correlated_raw = []
     if not all(isinstance(item, list) for item in (bundles_raw, constraints_raw, correlated_raw)):
         raise ValueError("analysis.monte_carlo.bundles, constraints, and correlated_normals must be lists.")
     bundles = [_parse_mc_bundle(item) for item in bundles_raw]

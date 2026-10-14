@@ -161,6 +161,9 @@ def write_single_run_artifacts(
     payload: dict[str, Any],
     context: SingleRunArtifactContext,
 ) -> dict[str, Any]:
+    if context.cfg.simulator.central_body != "earth":
+        from sim.reporting.planetary import write_artifacts
+        return write_artifacts(payload, context)
     summary = payload.setdefault("summary", {})
     orbital_analysis: dict[str, Any] = {}
     if bool(context.cfg.outputs.orbital_analysis.enabled):

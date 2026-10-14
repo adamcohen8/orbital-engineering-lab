@@ -354,6 +354,9 @@ def integrate_rkf78_hpop(
         raise ValueError("dt_s must be finite.")
     if dt_s < 0.0:
         raise ValueError("dt_s must be non-negative.")
+    tolerance = float(tolerance)
+    if not np.isfinite(tolerance) or tolerance <= 0.0:
+        raise ValueError("HPOP RKF78 tolerance must be positive and finite.")
     if dt_s == 0.0:
         return _finish(np.array(x, dtype=float, copy=True), float(h_init if h_init is not None else 0.01), 0.0)
 
@@ -370,7 +373,7 @@ def integrate_rkf78_hpop(
     if h > (x_end - x_now):
         h = x_end - x_now
 
-    tol_per_unit = float(tolerance) / (x_end - x_now)
+    tol_per_unit = tolerance / (x_end - x_now)
 
     while x_now < x_end:
         scale = 1.0
@@ -467,18 +470,28 @@ def integrate_adaptive(
         raise ValueError("dt_s must be finite.")
     if dt_s < 0.0:
         raise ValueError("dt_s must be non-negative.")
-    if dt_s == 0.0:
-        return _finish(np.array(x, dtype=float, copy=True), AdaptiveStepInfo(method=str(method).strip().lower()))
 
     method_name = str(method).strip().lower()
+    if method_name not in {"rkf78", "dopri5", "dopri45"}:
+        raise ValueError(f"Unknown adaptive integrator method '{method}'.")
+    atol = float(atol)
+    rtol = float(rtol)
+    if (
+        not np.isfinite(atol)
+        or atol < 0.0
+        or not np.isfinite(rtol)
+        or rtol < 0.0
+    ):
+        raise ValueError("Adaptive integrator tolerances must be finite and non-negative.")
+    if dt_s == 0.0:
+        return _finish(np.array(x, dtype=float, copy=True), AdaptiveStepInfo(method=method_name))
+
     if method_name == "rkf78":
         step_fn = rkf78_step
         growth_exponent = -1.0 / 8.0
     elif method_name in ("dopri5", "dopri45"):
         step_fn = dopri45_step
         growth_exponent = -1.0 / 5.0
-    else:
-        raise ValueError(f"Unknown adaptive integrator method '{method}'.")
 
     t = t_s
     xk = x

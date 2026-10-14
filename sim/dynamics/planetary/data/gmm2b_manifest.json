@@ -1,0 +1,11 @@
+{
+  "model": "gmm2b_static",
+  "coefficients": "gmm2b80.sha",
+  "label": "gmm2b80.lbl",
+  "frame_id": "IAU1991_MARS",
+  "coefficients_sha256": "39b63803305af9f0de4c99b1246a3c57aa72aff44b06530514d9aa0c24dd452b",
+  "label_sha256": "7829641b3cda7f8d1e09e92f95344eb54f57a512a12c7cd435dd1a4ea7969036",
+  "source": "https://pds-geosciences.wustl.edu/mgs/mgs-m-rss-5-sdp-v1/mors_1008/sha/",
+  "doi": "10.1029/2000JE001426",
+  "limits": "Static field only; degree and order at most 20 initially qualified; no seasonal gravity or tides."
+}

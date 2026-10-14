@@ -423,6 +423,9 @@ def _parse_simulator_section(value: Any) -> SimulatorSection:
             "termination",
             "system_force_models",
             "collisions",
+            "central_body",
+            "planetary",
+            "additional_gravity",
         },
     )
     plugin_validation = {"strict": True}
@@ -455,7 +458,27 @@ def _parse_simulator_section(value: Any) -> SimulatorSection:
                 fill_defaults=False,
             )
         termination["by_object"] = by_object
-    dynamics = _normalize_dynamics_section(dict(d.get("dynamics", {}) or {}))
+    body_id = str(d.get("central_body", "earth")).strip().lower()
+    planetary = None
+    dynamics_raw = dict(d.get("dynamics", {}) or {})
+    if body_id != "earth":
+        from .planetary import normalize_planetary
+        planetary = normalize_planetary(d.get("planetary"), body_id)
+        if d.get("frames") or d.get("environment") or d.get("termination"):
+            raise ValueError("Non-Earth frames, environment and impact policy belong in simulator.planetary.")
+        dynamics_raw.setdefault("attitude", {"enabled": False})
+        if isinstance(dynamics_raw["attitude"], dict):
+            dynamics_raw["attitude"].setdefault("enabled", False)
+        dynamics_raw.setdefault("orbit", {})
+        dynamics_raw["orbit"].setdefault("numeric_backend", "rust")
+        termination = {"earth_impact_enabled": False, "earth_radius_km": 6378.137, "by_object": {}}
+    elif d.get("planetary") is not None:
+        raise ValueError("simulator.planetary is only valid with a non-Earth central_body.")
+    dynamics = _normalize_dynamics_section(dynamics_raw)
+    additional_gravity = None
+    if d.get("additional_gravity") is not None:
+        from .additional_gravity import normalize_additional_gravity
+        additional_gravity = normalize_additional_gravity(d["additional_gravity"], body_id)
     system_force_models = d.get("system_force_models", [])
     if not isinstance(system_force_models, list) or any(item is None for item in system_force_models):
         raise ValueError("simulator.system_force_models must be a list without null entries.")
@@ -477,6 +500,9 @@ def _parse_simulator_section(value: Any) -> SimulatorSection:
     if collision_enabled and len(radii_m) != 2:
         raise ValueError("simulator.collisions requires radii_m for exactly two objects.")
     out = SimulatorSection(
+        central_body=body_id,
+        planetary=planetary,
+        additional_gravity=additional_gravity,
         duration_s=_parse_float(d.get("duration_s", 3600.0), "simulator.duration_s"),
         dt_s=_parse_float(d.get("dt_s", 1.0), "simulator.dt_s"),
         initial_jd_utc=_parse_optional_float(d.get("initial_jd_utc"), "simulator.initial_jd_utc"),

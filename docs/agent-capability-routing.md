@@ -195,5 +195,8 @@ and no campaign/report machinery unless the user asks for it.
 
 For rotating/nonrotating or barycenter/P1/P2 transformations, Jacobi diagnostics,
 zero-velocity slices, and completed-run cislunar plots/movies, use
-[CR3BP research workflows](cr3bp-research.md). This experimental local Python/CLI
-surface requires frame-labeled review evidence and is not an MCP recipe ID.
+[CR3BP research workflows](cr3bp-research.md). This experimental surface
+requires frame-labeled review evidence. Local MCP callers use
+`oel.plan_cr3bp_render.v1` then `oel.render_cr3bp.v1` with the unchanged
+specification, matching plan ID, and approved write scope; Python/CLI callers
+use the documented research renderer.

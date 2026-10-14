@@ -13,6 +13,7 @@ from integrations.oel_mcp.contracts import (
     handling_properties,
     object_schema,
 )
+from integrations.oel_mcp.cr3bp_registry import CR3BP_TOOL_CONTRACTS
 from integrations.oel_mcp.execution import M4_RESOURCE_PROFILES
 from integrations.oel_mcp.fsw_authoring_registry import FSW_AUTHORING_TOOL_CONTRACTS, FSW_AUTHORING_TOOL_IDS
 from sim.review.animation_recipes import list_review_animation_recipes
@@ -1556,7 +1557,7 @@ PUBLIC_TOOL_CONTRACTS: tuple[ToolContract, ...] = (
     ),
 )
 
-PUBLIC_TOOL_CONTRACTS = PUBLIC_TOOL_CONTRACTS + FSW_AUTHORING_TOOL_CONTRACTS
+PUBLIC_TOOL_CONTRACTS = PUBLIC_TOOL_CONTRACTS + FSW_AUTHORING_TOOL_CONTRACTS + CR3BP_TOOL_CONTRACTS
 
 
 def public_contracts_for_profile(profile: str) -> tuple[ToolContract, ...]:

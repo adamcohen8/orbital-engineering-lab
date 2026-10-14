@@ -40,29 +40,6 @@ def evaluate_surface_targets_ecef(
     backend = str(numeric_backend).strip().lower()
     if backend not in {"python", "rust"}:
         raise ValueError(f"Unknown coverage numeric backend {numeric_backend!r}.")
-    if backend == "rust":
-        from sim.rust_coverage_backend import surface_targets_ecef
-
-        result = surface_targets_ecef(
-            observer_ecef_km,
-            target_ecef_km,
-            target_outward_normal_ecef,
-            boresight_ecef,
-            half_angle_rad,
-            max_range_km,
-            angular_tolerance_rad=angular_tolerance_rad,
-            range_tolerance_km=range_tolerance_km,
-        )
-        return SurfaceTargetGeometry(
-            range_km=result.range_km,
-            cosine_off_axis=result.cosine_off_axis,
-            horizon_clearance_km=result.horizon_clearance_km,
-            visible=result.visible,
-            inside_pattern=result.inside_pattern,
-            inside_range=result.inside_range,
-            available=result.available,
-        )
-
     observer = np.asarray(observer_ecef_km, dtype=float).reshape(3)
     targets = np.asarray(target_ecef_km, dtype=float)
     normals = np.asarray(target_outward_normal_ecef, dtype=float)
@@ -79,11 +56,11 @@ def evaluate_surface_targets_ecef(
     normal_norms = np.linalg.norm(normals, axis=1)
     if np.any(np.abs(normal_norms - 1.0) > 1.0e-10):
         raise ValueError("Target outward normals must be unit vectors within 1e-10.")
-    if not np.isfinite(float(half_angle_rad)) or not 0.0 < float(half_angle_rad) < 0.5 * np.pi:
+    half_angle = float(half_angle_rad)
+    if not np.isfinite(half_angle) or not 0.0 < half_angle < 0.5 * np.pi:
         raise ValueError("half_angle_rad must be finite and strictly within (0, pi/2).")
-    if max_range_km is not None and (
-        not np.isfinite(float(max_range_km)) or float(max_range_km) <= 0.0
-    ):
+    maximum_range = None if max_range_km is None else float(max_range_km)
+    if maximum_range is not None and (not np.isfinite(maximum_range) or maximum_range <= 0.0):
         raise ValueError("max_range_km must be positive and finite when provided.")
     angular_tolerance = float(angular_tolerance_rad)
     range_tolerance = float(range_tolerance_km)
@@ -91,8 +68,31 @@ def evaluate_surface_targets_ecef(
         raise ValueError("angular_tolerance_rad must be finite and nonnegative.")
     if not np.isfinite(range_tolerance) or range_tolerance < 0.0:
         raise ValueError("range_tolerance_km must be finite and nonnegative.")
-    if float(half_angle_rad) + angular_tolerance >= np.pi:
+    if half_angle + angular_tolerance >= np.pi:
         raise ValueError("half_angle_rad plus angular_tolerance_rad must remain below pi.")
+
+    if backend == "rust":
+        from sim.rust_coverage_backend import surface_targets_ecef
+
+        result = surface_targets_ecef(
+            observer,
+            targets,
+            normals,
+            boresight,
+            half_angle,
+            maximum_range,
+            angular_tolerance_rad=angular_tolerance,
+            range_tolerance_km=range_tolerance,
+        )
+        return SurfaceTargetGeometry(
+            range_km=result.range_km,
+            cosine_off_axis=result.cosine_off_axis,
+            horizon_clearance_km=result.horizon_clearance_km,
+            visible=result.visible,
+            inside_pattern=result.inside_pattern,
+            inside_range=result.inside_range,
+            available=result.available,
+        )
 
     delta = targets - observer
     ranges = np.linalg.norm(delta, axis=1)
@@ -102,12 +102,12 @@ def evaluate_surface_targets_ecef(
     cosine_off_axis = (delta @ boresight) / ranges
     visible = horizon_clearance > range_tolerance
     inside_pattern = cosine_off_axis >= float(
-        np.cos(float(half_angle_rad) + angular_tolerance)
+        np.cos(half_angle + angular_tolerance)
     )
-    if max_range_km is None:
+    if maximum_range is None:
         inside_range = np.ones(ranges.shape, dtype=bool)
     else:
-        inside_range = ranges <= float(max_range_km) + range_tolerance
+        inside_range = ranges <= maximum_range + range_tolerance
     return SurfaceTargetGeometry(
         range_km=ranges,
         cosine_off_axis=cosine_off_axis,

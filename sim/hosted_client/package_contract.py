@@ -304,7 +304,18 @@ def validate_hosted_execution_package(
                 receipt, document = validate_config_path(str(config_ref), source, workspace_root=authorized_root)
                 config_receipts.append(receipt)
                 if document is not None:
-                    normalized_configs[str(config_ref)] = document
+                    if str(document.get("simulator", {}).get("central_body", "earth")).lower() != "earth":
+                        issues.append(PackageIssue(
+                            "package.planetary_unsupported", f"$.inputs[{index}].config_ref",
+                            "Planetary ONP is available locally; Hosted execution is not qualified for non-Earth origins.",
+                        ))
+                    elif document.get("simulator", {}).get("additional_gravity") is not None:
+                        issues.append(PackageIssue(
+                            "package.additional_gravity_unsupported", f"$.inputs[{index}].config_ref",
+                            "Extended third-body gravity is available locally; Hosted execution is not qualified for additional harmonic fields.",
+                        ))
+                    else:
+                        normalized_configs[str(config_ref)] = document
         elif config_ref is not None:
             issues.append(PackageIssue("package.config_ref_not_applicable", f"$.inputs[{index}].config_ref", "Only scenario_config inputs may declare config_ref."))
         inventory.append(
