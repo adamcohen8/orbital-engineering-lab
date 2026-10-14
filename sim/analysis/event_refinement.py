@@ -71,21 +71,6 @@ def refine_availability_transitions(
     """Refine sampled boolean changes without inventing an interpolation model."""
 
     backend = normalize_numeric_backend(numeric_backend)
-    if backend == "rust":
-        from sim.rust_coverage_backend import (
-            refine_availability_transitions as rust_refine_availability_transitions,
-        )
-
-        raw = rust_refine_availability_transitions(
-            times_s,
-            available,
-            reasons,
-            evaluator_at_time=evaluator_at_time,
-            time_tolerance_s=time_tolerance_s,
-            max_iterations=max_iterations,
-        )
-        return tuple(RefinedTransition(*value) for value in raw)
-
     times, mask, reason_tuple = _validated_samples(times_s, available, reasons)
     if evaluator_at_time is None:
         if time_tolerance_s is not None or max_iterations is not None:
@@ -102,6 +87,20 @@ def refine_availability_transitions(
             or int(max_iterations) <= 0
         ):
             raise ValueError("max_iterations must be a positive integer for refinement.")
+    if backend == "rust":
+        from sim.rust_coverage_backend import (
+            refine_availability_transitions as rust_refine_availability_transitions,
+        )
+
+        raw = rust_refine_availability_transitions(
+            times,
+            mask,
+            reason_tuple,
+            evaluator_at_time=evaluator_at_time,
+            time_tolerance_s=time_tolerance_s,
+            max_iterations=max_iterations,
+        )
+        return tuple(RefinedTransition(*value) for value in raw)
 
     transitions: list[RefinedTransition] = []
     for index in np.flatnonzero(mask[1:] != mask[:-1]):

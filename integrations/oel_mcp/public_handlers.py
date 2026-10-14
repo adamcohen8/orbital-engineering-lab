@@ -17,6 +17,7 @@ from integrations.oel_mcp.contracts import (
     MAX_REVIEW_VALUE_BYTES,
     ToolContract,
 )
+from integrations.oel_mcp.cr3bp_handlers import call_cr3bp_tool
 from integrations.oel_mcp.execution import (
     ExecutionApprovalPolicy,
     MCPExecutionCancelled,
@@ -179,6 +180,12 @@ class PublicOELMCPHandlers(BaseOELMCPHandlers):
     def convert_frame_time(self, **arguments: Any) -> dict[str, Any]:
         return self.call("oel.convert_frame_time.v1", arguments)
 
+    def plan_cr3bp_render(self, **arguments: Any) -> dict[str, Any]:
+        return self.call("oel.plan_cr3bp_render.v1", arguments)
+
+    def render_cr3bp(self, **arguments: Any) -> dict[str, Any]:
+        return self.call("oel.render_cr3bp.v1", arguments)
+
     def _call_contract(
         self,
         contract: ToolContract,
@@ -187,6 +194,11 @@ class PublicOELMCPHandlers(BaseOELMCPHandlers):
         cancel_event: Event | None = None,
         progress: Any | None = None,
     ) -> dict[str, Any]:
+        cr3bp_result = call_cr3bp_tool(
+            self, contract, arguments, cancel_event=cancel_event, progress=progress,
+        )
+        if cr3bp_result is not None:
+            return cr3bp_result
         fsw_result = call_fsw_authoring_tool(self, contract, arguments)
         if fsw_result is not None:
             return fsw_result

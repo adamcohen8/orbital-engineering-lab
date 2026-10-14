@@ -20,6 +20,32 @@ def _validate_config_read_paths(root: dict[str, Any], path_policy: ConfigPathPol
         return
     input_base_dir = _config_input_base_dir(path_policy)
     simulator = _as_dict(root.get("simulator"), "simulator")
+    planetary = _as_dict(simulator.get("planetary"), "simulator.planetary")
+    for section_name in ("gravity", "gravity_frame", "atmosphere", "atmosphere_frame", "ephemeris"):
+        section = _as_dict(planetary.get(section_name), f"simulator.planetary.{section_name}")
+        for key in ("data_path", "coeff_path", "label_path"):
+            if section.get(key) not in (None, ""):
+                section[key] = str(path_policy.resolve_input_file(
+                    str(section[key]), purpose=f"simulator.planetary.{section_name}.{key}",
+                    base_dir=input_base_dir, must_exist=False,
+                ))
+        if section_name in planetary:
+            planetary[section_name] = section
+    if "planetary" in simulator:
+        simulator["planetary"] = planetary
+    if simulator.get("additional_gravity") is not None:
+        additional = _as_dict(simulator["additional_gravity"], "simulator.additional_gravity")
+        sections = [(additional.get("ephemeris"), "ephemeris")]
+        for i, source in enumerate(additional.get("sources", []) or []):
+            if isinstance(source, dict):
+                sections.extend((source.get(name), f"sources[{i}].{name}") for name in ("gravity", "gravity_frame"))
+        for section, name in sections:
+            if isinstance(section, dict):
+                for key in ("data_path", "coeff_path", "label_path", "eop_path"):
+                    if section.get(key) not in (None, ""):
+                        section[key] = str(path_policy.resolve_input_file(str(section[key]),
+                            purpose=f"simulator.additional_gravity.{name}.{key}",
+                            base_dir=input_base_dir, must_exist=False))
     environment = _as_dict(simulator.get("environment"), "simulator.environment")
     atmosphere_env = _as_dict(environment.get("atmosphere_env"), "simulator.environment.atmosphere_env")
     environment_path_fields = (

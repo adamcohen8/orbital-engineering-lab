@@ -301,7 +301,7 @@ objects:
         line2: "2 25544  51.6416  43.6012 0005423  52.3066  50.1234 15.50000000  1004"
 ```
 
-OGP objects are passive in the initial implementation. They can
+OGP objects are passive in the current implementation. They can
 participate in truth histories, review-store queries, ground access, plots, and
 relative-state analysis, but they do not accept OEL thrust, orbit controllers,
 maneuver objectives, or special-perturbations force flags as trajectory
@@ -626,7 +626,7 @@ supported kernels before the run starts.
 
 `simulator.dynamics.orbit.numeric_backend` defaults to `rust` in v0.32.0.
 Select `python` explicitly for reference execution. The required `oel_rust_orbit` wheel for
-Earth-centered two-body ONP special propagation with RK4, RKF78, or DOPRI5,
+Earth-centered two-body ONP special propagation with RK4, RKF78 (`rkf78`/`adaptive`), or DOPRI5,
 or ideal rotating barycentric CR3BP (`model: cr3bp`, requiring wheel 0.6.0
 or newer). CR3BP state and reference/STM integration use native equations
 and the existing configured Earth–Moon system and physical units.
@@ -1271,3 +1271,14 @@ See [Spacecraft resources](models/spacecraft-resources.md) for the single-node
 heat balance, fixed-panel generation, bounded battery, units, geometry contract,
 and evidence fields. The [example](../configs/spacecraft_resources_demo.yaml)
 includes Earth albedo/IR and eclipse with SRP acceleration disabled.
+
+
+## Planetary trajectories
+
+Non-Earth primaries use the separate `simulator.central_body` / `simulator.planetary` contract; see [Planetary ONP](planetary-onp.md). Earth remains the default optimized path.
+
+Use `gravity.model: pds_sha_static` and `atmosphere.model: table` to bring your
+own compatible datasets, with matching frames, explicit units and validity
+bounds. Mars also offers opt-in `gmm2b_static` gravity and
+`mars_reference_table` atmosphere. Non-Earth defaults remain point mass and no
+atmosphere.

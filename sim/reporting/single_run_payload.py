@@ -49,6 +49,8 @@ class SingleRunPayloadContext:
     termination_object_id: str | None
     rocket_inserted: bool
     rocket_insertion_time_s: float | None
+    planetary_environment: Any | None = None
+    planetary_force_plans: Any | None = None
 
 
 def _summarize_actuator_diagnostics(controller_debug_hist: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
@@ -319,6 +321,9 @@ def _summarize_reentry_metrics(
 
 
 def build_single_run_payload(context: SingleRunPayloadContext) -> dict[str, Any]:
+    if context.cfg.simulator.central_body != "earth":
+        from sim.reporting.planetary import build_payload
+        return build_payload(context)
     from sim.installation.provenance import execution_provenance
 
     frame_context = frame_context_from_mapping(

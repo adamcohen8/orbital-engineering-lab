@@ -18,7 +18,7 @@ cargo test --locked --manifest-path rust/oel-orbit/Cargo.toml
 cargo test --locked --manifest-path rust/oel-game/Cargo.toml
 python -m maturin build --release --locked --manifest-path rust/oel-orbit/Cargo.toml --interpreter python --out dist/native
 python -m maturin build --release --locked --manifest-path rust/oel-game/Cargo.toml --interpreter python --out dist/native
-python -m pip install --no-index --find-links dist/native "oel-rust-orbit>=0.17.2,<0.18" "oel-rust-game>=0.5,<0.6"
+python -m pip install --no-index --find-links dist/native "oel-rust-orbit>=0.18.2,<0.19" "oel-rust-game>=0.5,<0.6"
 python -m pip install .
 python run_simulation.py --doctor
 python run_simulation.py --quickstart --validate-only
@@ -34,7 +34,7 @@ route for the qualified target described in `docs/installation.md`.
 ## Public implementation coverage
 
 `rust/oel-orbit/src/` contains the shared implementations for ONP integrators
-and force models, OGP-SGP4/SDP4, CR3BP, relative dynamics, attitude, estimation,
+and force models, planetary ONP and external harmonic gravity, OGP-SGP4/SDP4, CR3BP, relative dynamics, attitude, estimation,
 control and actuation, environment and frames, coverage and free-space links,
 spacecraft and vehicle geometry, and public standalone analysis kernels.
 `rust/oel-game/src/` contains the Trainer's numerical, boundary, frame,
@@ -46,3 +46,9 @@ publish private campaign orchestration, operational Scale workflows,
 customer inputs, private qualification fixtures, or external licensed datasets.
 The public precision-force crate remains a source-level library entry point
 sharing the same numeric owners rather than duplicating their implementations.
+
+For the new planetary and external gravity routes, also run:
+
+```bash
+python -m pytest sim/tests/test_additional_gravity.py sim/tests/test_planetary_onp.py
+```

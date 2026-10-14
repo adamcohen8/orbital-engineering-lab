@@ -1,0 +1,229 @@
+{
+  "body_id": "moon",
+  "frame_id": "IAU2000_MOON",
+  "kind": "pole_meridian",
+  "inertial_axes": "J2000",
+  "ra_deg": [
+    269.9949,
+    0.0031,
+    0.0
+  ],
+  "dec_deg": [
+    66.5392,
+    0.013,
+    0.0
+  ],
+  "meridian_deg": [
+    38.3213,
+    13.17635815,
+    -1.4e-12
+  ],
+  "periodic_terms": [
+    {
+      "angle": 0,
+      "amplitude_deg": -3.8787,
+      "phase_deg": 125.045,
+      "rate_deg_day": -0.0529921,
+      "trig": "sin"
+    },
+    {
+      "angle": 0,
+      "amplitude_deg": -0.1204,
+      "phase_deg": 250.089,
+      "rate_deg_day": -0.1059842,
+      "trig": "sin"
+    },
+    {
+      "angle": 0,
+      "amplitude_deg": 0.07,
+      "phase_deg": 260.008,
+      "rate_deg_day": 13.0120009,
+      "trig": "sin"
+    },
+    {
+      "angle": 0,
+      "amplitude_deg": -0.0172,
+      "phase_deg": 176.625,
+      "rate_deg_day": 13.3407154,
+      "trig": "sin"
+    },
+    {
+      "angle": 0,
+      "amplitude_deg": 0.0072,
+      "phase_deg": 311.589,
+      "rate_deg_day": 26.405708399999998,
+      "trig": "sin"
+    },
+    {
+      "angle": 0,
+      "amplitude_deg": -0.0052,
+      "phase_deg": 15.134,
+      "rate_deg_day": -0.15897630000000001,
+      "trig": "sin"
+    },
+    {
+      "angle": 0,
+      "amplitude_deg": 0.0043,
+      "phase_deg": 25.053,
+      "rate_deg_day": 12.959008800000001,
+      "trig": "sin"
+    },
+    {
+      "angle": 1,
+      "amplitude_deg": 1.5419,
+      "phase_deg": 125.045,
+      "rate_deg_day": -0.0529921,
+      "trig": "cos"
+    },
+    {
+      "angle": 1,
+      "amplitude_deg": 0.0239,
+      "phase_deg": 250.089,
+      "rate_deg_day": -0.1059842,
+      "trig": "cos"
+    },
+    {
+      "angle": 1,
+      "amplitude_deg": -0.0278,
+      "phase_deg": 260.008,
+      "rate_deg_day": 13.0120009,
+      "trig": "cos"
+    },
+    {
+      "angle": 1,
+      "amplitude_deg": 0.0068,
+      "phase_deg": 176.625,
+      "rate_deg_day": 13.3407154,
+      "trig": "cos"
+    },
+    {
+      "angle": 1,
+      "amplitude_deg": -0.0029,
+      "phase_deg": 311.589,
+      "rate_deg_day": 26.405708399999998,
+      "trig": "cos"
+    },
+    {
+      "angle": 1,
+      "amplitude_deg": 0.0009,
+      "phase_deg": 134.963,
+      "rate_deg_day": 13.064993,
+      "trig": "cos"
+    },
+    {
+      "angle": 1,
+      "amplitude_deg": 0.0008,
+      "phase_deg": 15.134,
+      "rate_deg_day": -0.15897630000000001,
+      "trig": "cos"
+    },
+    {
+      "angle": 1,
+      "amplitude_deg": -0.0009,
+      "phase_deg": 25.053,
+      "rate_deg_day": 12.959008800000001,
+      "trig": "cos"
+    },
+    {
+      "angle": 2,
+      "amplitude_deg": 3.561,
+      "phase_deg": 125.045,
+      "rate_deg_day": -0.0529921,
+      "trig": "sin"
+    },
+    {
+      "angle": 2,
+      "amplitude_deg": 0.1208,
+      "phase_deg": 250.089,
+      "rate_deg_day": -0.1059842,
+      "trig": "sin"
+    },
+    {
+      "angle": 2,
+      "amplitude_deg": -0.0642,
+      "phase_deg": 260.008,
+      "rate_deg_day": 13.0120009,
+      "trig": "sin"
+    },
+    {
+      "angle": 2,
+      "amplitude_deg": 0.0158,
+      "phase_deg": 176.625,
+      "rate_deg_day": 13.3407154,
+      "trig": "sin"
+    },
+    {
+      "angle": 2,
+      "amplitude_deg": 0.0252,
+      "phase_deg": 357.529,
+      "rate_deg_day": 0.9856003000000001,
+      "trig": "sin"
+    },
+    {
+      "angle": 2,
+      "amplitude_deg": -0.0066,
+      "phase_deg": 311.589,
+      "rate_deg_day": 26.405708399999998,
+      "trig": "sin"
+    },
+    {
+      "angle": 2,
+      "amplitude_deg": -0.0047,
+      "phase_deg": 134.963,
+      "rate_deg_day": 13.064993,
+      "trig": "sin"
+    },
+    {
+      "angle": 2,
+      "amplitude_deg": -0.0046,
+      "phase_deg": 276.617,
+      "rate_deg_day": 0.3287146,
+      "trig": "sin"
+    },
+    {
+      "angle": 2,
+      "amplitude_deg": 0.0028,
+      "phase_deg": 34.226,
+      "rate_deg_day": 1.7484876999999999,
+      "trig": "sin"
+    },
+    {
+      "angle": 2,
+      "amplitude_deg": 0.0052,
+      "phase_deg": 15.134,
+      "rate_deg_day": -0.15897630000000001,
+      "trig": "sin"
+    },
+    {
+      "angle": 2,
+      "amplitude_deg": 0.004,
+      "phase_deg": 119.743,
+      "rate_deg_day": 0.0036096,
+      "trig": "sin"
+    },
+    {
+      "angle": 2,
+      "amplitude_deg": 0.0019,
+      "phase_deg": 239.961,
+      "rate_deg_day": 0.1643573,
+      "trig": "sin"
+    },
+    {
+      "angle": 2,
+      "amplitude_deg": -0.0044,
+      "phase_deg": 25.053,
+      "rate_deg_day": 12.959008800000001,
+      "trig": "sin"
+    }
+  ],
+  "valid_tdb_seconds": [
+    -883656000,
+    978307200
+  ],
+  "source": {
+    "url": "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/a_old_versions/pck00008.tpc",
+    "sha256": "ca07df56e9f1bca85a4c6748b618a46c0bf8e081f96f81e324896f2fdc54ea27",
+    "reference": "IAU 2000 rotational elements, Seidelmann et al. 2002",
+    "coverage_note": "1972-2030 implementation envelope; no long-term orientation accuracy claim"
+  }
+}

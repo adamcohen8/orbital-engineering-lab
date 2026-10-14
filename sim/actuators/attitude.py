@@ -71,7 +71,15 @@ class AttitudeActuator(Actuator):
     _wheel_native_prepared: bytes | None = field(default=None, init=False, repr=False)
 
     def apply(self, command: Command, limits: dict, dt_s: float) -> Command:
+        dt_s = float(dt_s)
+        if not np.isfinite(dt_s):
+            raise ValueError("dt_s must be finite")
+        # Match the attitude propagator's guardrail: a stale timestamp cannot
+        # integrate wheel momentum backward in time, so it becomes a zero step.
+        dt_s = max(dt_s, 0.0)
         requested_torque = np.array(command.torque_body_nm, dtype=float)
+        if requested_torque.shape != (3,) or not np.all(np.isfinite(requested_torque)):
+            raise ValueError("command.torque_body_nm must be a finite three-vector")
         allocated_torque = np.zeros(3, dtype=float)
         auxiliary_torque = np.zeros(3, dtype=float)
         has_primary_device = False

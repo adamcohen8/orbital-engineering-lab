@@ -1,6 +1,6 @@
 """Experimental CR3BP research figures and movies from frame-checked review rows.
 
-Local Python/CLI surface; does not extend the MCP plan/render contract.
+Shared Python/CLI renderer used by the dedicated MCP CR3BP plan/render tools.
 """
 
 from __future__ import annotations

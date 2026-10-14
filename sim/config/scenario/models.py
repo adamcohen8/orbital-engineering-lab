@@ -72,6 +72,16 @@ def _plain_config_data(value: Any) -> Any:
         return data
     if isinstance(value, SimulatorSection):
         data = {item.name: _plain_config_data(getattr(value, item.name)) for item in fields(value)}
+        # The omitted and explicit Earth cases retain their established digest.
+        if value.central_body == "earth":
+            data.pop("central_body", None)
+        else:
+            data.pop("frames", None)
+            data.pop("termination", None)
+        if value.planetary is None:
+            data.pop("planetary", None)
+        if value.additional_gravity is None:
+            data.pop("additional_gravity", None)
         if not value.system_force_models:
             data.pop("system_force_models", None)
         if not value.collisions:
@@ -281,6 +291,9 @@ class SimulatorSection:
     termination: SimulatorTerminationSection = field(default_factory=lambda: SimulatorTerminationSection())
     system_force_models: list[AlgorithmPointer] = field(default_factory=list)
     collisions: dict[str, Any] = field(default_factory=dict)
+    central_body: str = "earth"
+    planetary: dict[str, Any] | None = None
+    additional_gravity: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "acceleration", SimulatorAccelerationSection(self.acceleration))

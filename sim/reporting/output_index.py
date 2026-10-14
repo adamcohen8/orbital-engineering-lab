@@ -197,6 +197,8 @@ def _single_run_status(summary: dict[str, Any]) -> str:
 def _single_run_provenance(summary: dict[str, Any]) -> list[str]:
     propagation = dict(summary.get("object_propagation", {}) or {})
     frame = dict(summary.get("frame_provenance", {}) or {})
+    if summary.get("central_body", "earth") != "earth":
+        frame["model"] = f"{summary['central_body']}-centered {summary.get('inertial_axes', 'J2000')}"
     review_status = str(summary.get("review_store_status", "not requested") or "not requested")
     installation = dict(summary.get("installation_provenance", {}) or {})
     families = sorted(

@@ -38,3 +38,14 @@ fails the applicable feature/validation check.
 External callers should continue using `sim.execution`, `sim.api`, or the
 existing compatibility modules. These implementation modules are ownership
 boundaries, not a replacement public API.
+
+
+## Planetary trajectories
+
+Non-Earth passive trajectories dispatch once at construction to `sim.dynamics.planetary.runtime`; the dedicated native `PlanetaryPlan` integrates forces without Python stage callbacks. Planetary reporting uses separate neutral state tables. Earth runtime and force ABI remain on their established path. See [Planetary ONP](planetary-onp.md).
+
+Opt-in `simulator.additional_gravity` selects `EarthAdditionalGravityPropagator`
+at factory construction or wraps the planetary native plan. Its separate Rust
+composition evaluator adds complete relative external fields; ordinary Earth
+force and integration loops have no additional-body dispatch. See
+[extended third-body gravity](additional-gravity.md).

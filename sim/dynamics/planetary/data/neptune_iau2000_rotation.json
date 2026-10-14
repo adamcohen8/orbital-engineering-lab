@@ -1,0 +1,54 @@
+{
+  "body_id": "neptune",
+  "frame_id": "IAU2000_NEPTUNE",
+  "kind": "pole_meridian",
+  "inertial_axes": "J2000",
+  "ra_deg": [
+    299.36,
+    0.0,
+    0.0
+  ],
+  "dec_deg": [
+    43.46,
+    0.0,
+    0.0
+  ],
+  "meridian_deg": [
+    253.18,
+    536.3128492,
+    0.0
+  ],
+  "periodic_terms": [
+    {
+      "angle": 0,
+      "amplitude_deg": 0.7,
+      "phase_deg": 357.85,
+      "rate_deg_day": 0.0014323340177960302,
+      "trig": "sin"
+    },
+    {
+      "angle": 1,
+      "amplitude_deg": -0.51,
+      "phase_deg": 357.85,
+      "rate_deg_day": 0.0014323340177960302,
+      "trig": "cos"
+    },
+    {
+      "angle": 2,
+      "amplitude_deg": -0.48,
+      "phase_deg": 357.85,
+      "rate_deg_day": 0.0014323340177960302,
+      "trig": "sin"
+    }
+  ],
+  "valid_tdb_seconds": [
+    -883656000,
+    978307200
+  ],
+  "source": {
+    "url": "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/a_old_versions/pck00008.tpc",
+    "sha256": "ca07df56e9f1bca85a4c6748b618a46c0bf8e081f96f81e324896f2fdc54ea27",
+    "reference": "IAU 2000 rotational elements, Seidelmann et al. 2002",
+    "coverage_note": "1972-2030 implementation envelope; no long-term orientation accuracy claim"
+  }
+}

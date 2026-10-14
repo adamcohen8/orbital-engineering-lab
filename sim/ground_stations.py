@@ -38,20 +38,36 @@ def _first_last_time(t_s: np.ndarray, mask: np.ndarray) -> tuple[float | None, f
 
 
 def _line_of_sight_from_ground(station_ecef_km: np.ndarray, target_ecef_km: np.ndarray) -> bool:
-    """Return whether the segment stays outside the WGS-84 reference ellipsoid."""
+    """Return whether the segment stays outside the WGS-84 reference ellipsoid.
+
+    Inputs are ECEF coordinates, where the WGS-84 ellipsoid axes are aligned.
+    Keeping this test in ECEF also preserves correctness when a high-fidelity
+    ECI/ECEF transform includes polar-motion tilts.
+    """
 
     station = np.array(station_ecef_km, dtype=float).reshape(3)
     target = np.array(target_ecef_km, dtype=float).reshape(3)
-    scale = np.array([WGS84_A_KM, WGS84_A_KM, WGS84_B_KM])
+    scale = np.array([WGS84_A_KM, WGS84_A_KM, WGS84_B_KM], dtype=float)
+    axes_squared = scale * scale
+    station_level = float(np.dot(station * station, 1.0 / axes_squared))
+    target_level = float(np.dot(target * target, 1.0 / axes_squared))
+    # Geodetic surface construction can round a boundary level by a few ulps;
+    # retain a small dimensionless tolerance while still rejecting physical
+    # penetration well beyond floating-point noise.
+    ellipsoid_level_tolerance = 1.0e-12
+    if (
+        station_level < 1.0 - ellipsoid_level_tolerance
+        or target_level < 1.0 - ellipsoid_level_tolerance
+    ):
+        return False
     station_scaled = station / scale
     segment = (target - station) / scale
     denom = float(np.dot(segment, segment))
     if denom <= 0.0:
-        return bool(np.dot(station_scaled, station_scaled) >= 1.0 - 1e-14)
+        return bool(station_level >= 1.0 - ellipsoid_level_tolerance)
     tau = float(np.clip(-np.dot(station_scaled, segment) / denom, 0.0, 1.0))
     closest = station_scaled + tau * segment
-    return bool(np.dot(closest, closest) >= 1.0 - 1e-14)
-
+    return bool(np.dot(closest, closest) >= 1.0 - ellipsoid_level_tolerance)
 
 
 def evaluate_ground_station_access(

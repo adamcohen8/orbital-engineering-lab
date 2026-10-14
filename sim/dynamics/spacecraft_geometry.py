@@ -211,8 +211,10 @@ class GeometryAreaProfile:
                 normals[fallback] = area_vectors[fallback] / areas[fallback, None]
 
         directions = np.asarray(directions_body, dtype=float)
+        if directions.ndim != 2 or directions.shape[1] != 3:
+            raise ValueError("Profile directions must be an Nx3 array of nonzero body-frame vectors.")
         direction_norms = np.linalg.norm(directions, axis=1)
-        if directions.ndim != 2 or directions.shape[1] != 3 or np.any(direction_norms <= 0.0):
+        if np.any(~np.isfinite(direction_norms)) or np.any(direction_norms <= 0.0):
             raise ValueError("Profile directions must be an Nx3 array of nonzero body-frame vectors.")
         directions = directions / direction_norms[:, None]
 

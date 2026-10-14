@@ -7,6 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 from jsonschema import Draft202012Validator
 
 from sim.execution.run_lifecycle.models import RunPhase, RunState, local_host_sha256
@@ -138,7 +139,8 @@ def test_real_process_loss_wakes_and_reconciles(tmp_path: Path) -> None:
             sleeper.wait(timeout=10.0)
 
 
-def test_cli_jsonl_start_await_inspect_and_events(tmp_path: Path) -> None:
+@pytest.mark.parametrize("config_name", ["automation_smoke.yaml", "mars_reference_drag.yaml"])
+def test_cli_jsonl_start_await_inspect_and_events(tmp_path: Path, config_name: str) -> None:
     output_root = tmp_path / "outputs"
     state_root = tmp_path / "state"
     completed = subprocess.run(
@@ -148,7 +150,7 @@ def test_cli_jsonl_start_await_inspect_and_events(tmp_path: Path) -> None:
             "sim.execution.run_lifecycle",
             "start",
             "--config",
-            str(CONFIG),
+            str(ROOT / "configs" / config_name),
             "--output-dir",
             "cli-run",
             "--output-root",
@@ -170,6 +172,10 @@ def test_cli_jsonl_start_await_inspect_and_events(tmp_path: Path) -> None:
     Draft202012Validator(_schema("run_handle.schema.json")).validate(terminal["handle"])
     Draft202012Validator(_schema("run_state.schema.json")).validate(terminal["state"])
     assert terminal["state"]["state"] == "completed"
+    if config_name == "mars_reference_drag.yaml":
+        with sqlite3.connect(output_root / "cli-run" / "review" / "run.sqlite") as connection:
+            assert connection.execute("SELECT COUNT(*) FROM planetary_state").fetchone()[0] > 0
+            assert connection.execute("SELECT COUNT(*) FROM object_state").fetchone()[0] == 0
 
     common = ["--output-root", str(output_root), "--state-root", str(state_root)]
     await_completed = subprocess.run(

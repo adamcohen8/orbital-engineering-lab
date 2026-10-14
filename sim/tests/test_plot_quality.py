@@ -194,3 +194,9 @@ def test_quality_report_is_manifest_ready_and_preserves_unresolved_failures() ->
     assert "text_overlap" in payload["failed_checks"]
     assert payload["visual_review_required"] is True
     assert payload["visual_qa_status"] == "pending_agent_review"
+
+
+def test_small_density_axis_excludes_outside_ticks():
+    from sim.plotting.quality import _tick_is_in_view
+    assert not _tick_is_in_view(2.30e-10, (2.25e-10, 2.29e-10))
+    assert _tick_is_in_view(2.27e-10, (2.25e-10, 2.29e-10))

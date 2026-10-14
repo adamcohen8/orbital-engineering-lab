@@ -57,7 +57,13 @@ class GimbaledThrusterController(Controller):
         accel = np.array(cmd.thrust_eci_km_s2, dtype=float).reshape(3)
         i0, i1 = self.attitude_quat_slice
         gimbal_angle = 0.0
-        if belief.state.size >= max(i1, 13) and float(np.linalg.norm(accel)) > 0.0:
+        # A compact belief ending at the quaternion slice is valid, as is the
+        # full 13-state attitude layout.  A 12-state relative/chief belief can
+        # also reach this controller, though, and its [6:10] entries are not a
+        # quaternion; keep that legacy layout from being mistaken for one.
+        has_compact_attitude = belief.state.size == i1
+        has_full_attitude = belief.state.size >= max(i1, 13)
+        if (has_compact_attitude or has_full_attitude) and float(np.linalg.norm(accel)) > 0.0:
             q = np.array(belief.state[i0:i1], dtype=float).reshape(4)
             qn = float(np.linalg.norm(q))
             if np.all(np.isfinite(q)) and qn > 0.0:

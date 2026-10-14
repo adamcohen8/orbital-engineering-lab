@@ -320,6 +320,7 @@ _INITIAL_STATE_AUX_KEYS = {
 }
 _INITIAL_STATE_FORM_KEYS = {
     "position_eci_km",
+    "position_inertial_km",
     "tle",
     "ogp_mean_elements",
     "coes",
@@ -336,6 +337,8 @@ _INITIAL_STATE_FORM_KEYS = {
 }
 _INITIAL_STATE_ALLOWED_KEYS = _INITIAL_STATE_AUX_KEYS | _INITIAL_STATE_FORM_KEYS | {
     "velocity_eci_km_s",
+    "velocity_inertial_km_s",
+    "reference_axes",
     "launch_lon_deg",
     "launch_alt_km",
     "launch_azimuth_deg",
@@ -403,6 +406,12 @@ def _parse_initial_state_section(value: Any, role: str) -> dict[str, Any]:
             + "."
         )
     form = forms[0]
+    if form == "position_inertial_km" and "velocity_inertial_km_s" not in state:
+        raise ValueError(f"{path}.position_inertial_km requires velocity_inertial_km_s.")
+    if form != "position_inertial_km" and "velocity_inertial_km_s" in state:
+        raise ValueError(f"{path}.velocity_inertial_km_s is only valid with position_inertial_km.")
+    if "reference_axes" in state and state["reference_axes"] != "J2000":
+        raise ValueError(f"{path}.reference_axes must be J2000.")
     if form == "position_eci_km" and "velocity_eci_km_s" not in state:
         raise ValueError(f"{path}.position_eci_km requires {path}.velocity_eci_km_s.")
     if form != "position_eci_km" and "velocity_eci_km_s" in state:
@@ -472,6 +481,8 @@ def _parse_initial_state_section(value: Any, role: str) -> dict[str, Any]:
     for key, length in (
         ("position_eci_km", 3),
         ("velocity_eci_km_s", 3),
+        ("position_inertial_km", 3),
+        ("velocity_inertial_km_s", 3),
         ("angular_rate_body_rad_s", 3),
         ("attitude_quat_bn", 4),
         ("deploy_dv_body_m_s", 3),

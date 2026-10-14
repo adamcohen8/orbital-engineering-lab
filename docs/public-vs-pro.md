@@ -334,3 +334,14 @@ For public limitations, use [Known Limitations](known-limitations.md).
 run locally without a Hosted account. The bundled client and package validator
 do not grant service access. Only invited operators with a configured profile
 can request alpha offers; the alpha uses simulated settlement, not real payments.
+
+
+## Planetary trajectories
+
+Public deterministic planetary ONP source and permitted fixed reference data follow the [bounded planetary contract](planetary-onp.md). No governed planetary campaign, OD or operational qualification workflow is promoted.
+
+Planetary environments use a bring-your-own-data contract for compatible gravity
+coefficients and atmosphere tables. Mars includes built-in GMM-2B gravity and a
+bounded MAVEN reference profile; other non-Earth bodies provide the reusable
+mechanics and require user-selected environmental datasets. Import compatibility
+does not establish the scientific fidelity of a supplied model.

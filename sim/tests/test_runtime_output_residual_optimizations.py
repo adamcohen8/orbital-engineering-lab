@@ -204,7 +204,10 @@ def test_review_writer_failure_preserves_previous_store_and_cleans_temporary(tmp
     if failure == "insert":
         monkeypatch.setattr(review_owner, "_insert_run_metadata", fail_insert)
     context = SimpleNamespace(
-        cfg=SimpleNamespace(outputs=SimpleNamespace(review=SimpleNamespace(enabled=True, detail="standard"))),
+        cfg=SimpleNamespace(
+            simulator=SimpleNamespace(central_body="earth"),
+            outputs=SimpleNamespace(review=SimpleNamespace(enabled=True, detail="standard")),
+        ),
         outdir=tmp_path, t_s=np.array([0.0]), truth_hist={}, thrust_hist={},
     )
     error, message = (sqlite3.DatabaseError, "not authorized") if failure == "schema" else (RuntimeError, "insert failure")

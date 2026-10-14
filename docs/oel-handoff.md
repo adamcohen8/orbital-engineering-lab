@@ -508,7 +508,7 @@ packets, and ONP report labels. Historical `hpop_handoff`, `handoff-hpop`,
 remain compatibility aliases because existing configs and persisted Scale
 stores depend on them.
 
-The v0.24 sentence was historical. As of the current 0.27.1 source, no removal
+The v0.24 sentence was historical. In the current source checkout, no removal
 release has been announced and the aliases remain compatibility exports without
 an active removal warning. Removal requires
 a complete config/artifact/store migration, an ONP-first replacement for every

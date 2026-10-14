@@ -595,22 +595,6 @@ def free_space_link_ledger(
     if backend not in {"python", "rust"}:
         raise ValueError(f"Unknown directed-link numeric backend {numeric_backend!r}.")
     ranges = np.asarray(range_km, dtype=float)
-    if backend == "rust":
-        from sim.rust_coverage_backend import free_space_link_ledger as rust_free_space_link_ledger
-
-        return rust_free_space_link_ledger(
-            ranges,
-            carrier_frequency_hz=carrier_frequency_hz,
-            tx_power_w=tx_power_w,
-            tx_gain_dbi=tx_gain_dbi,
-            rx_gain_dbi=rx_gain_dbi,
-            data_rate_bps=data_rate_bps,
-            system_noise_temperature_k=system_noise_temperature_k,
-            required_eb_n0_db=required_eb_n0_db,
-            tx_line_loss_db=tx_line_loss_db,
-            rx_line_loss_db=rx_line_loss_db,
-            misc_loss_db=misc_loss_db,
-        )
     if ranges.size == 0 or np.any(~np.isfinite(ranges)) or np.any(ranges <= 0.0):
         raise ValueError("range_km must contain positive finite values.")
     positive_inputs = {
@@ -640,6 +624,22 @@ def free_space_link_ledger(
     rx_gain = np.broadcast_to(np.asarray(rx_gain_dbi, dtype=float), ranges.shape).copy()
     if np.any(~np.isfinite(tx_gain)) or np.any(~np.isfinite(rx_gain)):
         raise ValueError("Terminal gains must be finite and broadcastable to range_km.")
+    if backend == "rust":
+        from sim.rust_coverage_backend import free_space_link_ledger as rust_free_space_link_ledger
+
+        return rust_free_space_link_ledger(
+            ranges,
+            carrier_frequency_hz=normalized_positive["carrier_frequency_hz"],
+            tx_power_w=normalized_positive["tx_power_w"],
+            tx_gain_dbi=tx_gain,
+            rx_gain_dbi=rx_gain,
+            data_rate_bps=normalized_positive["data_rate_bps"],
+            system_noise_temperature_k=normalized_positive["system_noise_temperature_k"],
+            required_eb_n0_db=required,
+            tx_line_loss_db=losses["tx_line_loss_db"],
+            rx_line_loss_db=losses["rx_line_loss_db"],
+            misc_loss_db=losses["misc_loss_db"],
+        )
     tx_power_dbw = np.full(
         ranges.shape,
         10.0 * np.log10(normalized_positive["tx_power_w"]),

@@ -227,8 +227,9 @@ Primary implementation files:
   force plans.
 - `sim/dynamics/orbit/custom_force.py`: validation and stage-time adapter for
   opt-in external acceleration models.
-- `sim/acceleration/kernels/orbit_force_plan.py`: exact compiled fixed-step and
-  per-component kernels shared by supported RK4 and RKF78 force plans.
+- `sim/acceleration/kernels/orbit_force_plan.py`: exact compiled RK4 and
+  per-component kernels shared by supported RK4, adaptive RKF78
+  (`rkf78`/`adaptive`), and Dormand-Prince (`dopri5`) force plans.
 - `sim/dynamics/orbit/accelerations.py`: two-body, J2, J3, J4, drag, lift,
   SRP, and third-body acceleration functions.
 - `sim/dynamics/orbit/integrators.py`: RK4, RKF78, Dormand-Prince, and adaptive
@@ -240,7 +241,8 @@ Primary implementation files:
 - `sim/dynamics/orbit/atmosphere.py`: density-model dispatch used by drag and
   lift.
 - `sim/dynamics/orbit/eclipse.py`: SRP Sun geometry and shadow factor.
-- `sim/dynamics/orbit/cr3bp.py`: CR3BP system and RK4 propagation path.
+- `sim/dynamics/orbit/cr3bp.py`: CR3BP system and Python RK4/adaptive
+  (`rkf78`/`adaptive`/`dopri5`) propagation paths.
 - `sim/runtime_support.py::_build_orbit_propagator`: scenario YAML to runtime
   propagator/plugin wiring.
 

@@ -579,11 +579,16 @@ class AerodynamicEffectorHardware:
 
 
 def _limit_norm(vector: Vector3, maximum: float) -> tuple[Vector3, bool]:
-    norm = sqrt(sum(float(value) ** 2 for value in vector))
+    values = tuple(float(value) for value in vector)
+    if len(values) != 3 or not all(isfinite(value) for value in values):
+        raise ValueError("wrench command vectors must be finite three-vectors")
+    if isnan(float(maximum)) or maximum < 0.0:
+        raise ValueError("wrench limit must be nonnegative and not NaN")
+    norm = sqrt(sum(value**2 for value in values))
     if norm <= maximum or norm == 0.0:
-        return tuple(float(value) for value in vector), False  # type: ignore[return-value]
+        return values, False  # type: ignore[return-value]
     scale = maximum / norm
-    return tuple(float(value) * scale for value in vector), True  # type: ignore[return-value]
+    return tuple(value * scale for value in values), True  # type: ignore[return-value]
 
 
 def _coordinate_limits(values: tuple[float, ...], count: int, name: str) -> np.ndarray:

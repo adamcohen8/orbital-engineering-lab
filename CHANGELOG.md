@@ -6,6 +6,46 @@ This project uses semantic versioning while it is pre-1.0: minor versions may
 still introduce API or workflow changes, and release notes should call out
 migration-sensitive behavior explicitly.
 
+## 0.34.0 - 2026-10-14
+
+- Add public Rust planetary ONP for passive body-centered trajectories, keeping
+  Earth on its existing optimized path. Support user-supplied static harmonic
+  gravity and bounded atmosphere data, matching rotating frames, third bodies
+  and solar radiation pressure. Bundle GMM-2B Mars gravity and a bounded MAVEN
+  reference atmosphere; include Mars and Sun examples and body-neutral review
+  outputs. Advance the native orbit runtime to 0.18.2. Planetary numerical
+  qualification is bounded; the Mars profile is not global climatology, and
+  GMM-3 remains unavailable pending verification of its exact rotation model.
+- Add opt-in extended third-body gravity for simultaneous primary and external
+  harmonic fields, including Earth and Moon. Reuse the existing Earth primary
+  path, accept independently configured coefficients, rotations and geometric
+  ephemerides, subtract the complete field at the simulation origin, and record
+  per-source provenance and sampled acceleration. Qualify passive serial Rust
+  ONP with degree 2–20 external fields; lunar datasets remain user-supplied.
+- Reject ignored atmosphere options and honor bundled-profile hash pins;
+  ingest external Earth ICGEM data through one strict parser. Reject unsupported
+  dry/fuel mass fields, preserve fixed initial attitude and existing COE alias
+  precedence, and stop planetary harmonic-domain exits at the last valid
+  sample without reporting physical impact or retaining a partial interval.
+- Assemble canonical explicit NRLMSISE-00 stage inputs in Rust while retaining
+  the density core, configured force models and compatibility fallbacks.
+- Correct equatorial orbital-element orientation and preserve its scalar
+  conventions in batched review output; validate atmosphere and
+  integrator domains, reject invalid OD epochs, and skip nonconverged Lambert
+  hypotheses. Preserve the deterministic engine and existing model limits.
+- Repair attitude/actuator input validation, gimbal limits, single-sample
+  scoring, ellipsoid line-of-sight geometry, and coverage/screening validation.
+- Preserve lazy single-run imports, validate Monte Carlo collections, and
+  serialize durable execution-owner creation and heartbeats.
+- Expand MCP workflow discovery to the active public and Pro registry. Add
+  experimental evidence-bound CR3BP figure/movie planning and rendering.
+- Add bounded Pro-local ground-sensor, OGP TEME PV, sequential EKF/UKF, and
+  batch relative OD adapters, plus safe JSON metadata inspection. Retain
+  entitlement, approval, resource, and quality-gate boundaries.
+- Refresh the RPO Duel deployment-tool lockfile to remove dependency advisories.
+- Refresh stale agent/model documentation and add focused audit, MCP, SDK,
+  and engine-integration regressions.
+
 ## 0.33.1 - 2026-10-10
 
 - Publish buildable Rust source for public propagation, attitude, estimation,

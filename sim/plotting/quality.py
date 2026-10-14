@@ -395,7 +395,7 @@ def _collect_text_boxes(fig: Any, renderer: Any) -> list[_TextBox]:
 
 def _tick_is_in_view(value: float, limits: tuple[float, float]) -> bool:
     lower, upper = sorted(limits)
-    tolerance = max(abs(lower), abs(upper), 1.0) * 1.0e-12
+    tolerance = max(abs(lower), abs(upper), upper - lower, 1.0e-300) * 1.0e-12
     return lower - tolerance <= value <= upper + tolerance
 
 

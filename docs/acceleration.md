@@ -26,9 +26,9 @@ Numba.
 .venv/bin/python -m pip install -e ".[accel]"
 ```
 
-For compatibility installs, `.[full]` also includes the acceleration extra.
-The acceleration extra installs Numba plus SciPy because Numba's linear algebra
-lowering uses SciPy BLAS symbols on supported JIT paths.
+For compatibility installs, `.[full]` also includes Numba.
+The base package already depends on SciPy, so `.[accel]` adds Numba without
+duplicating that core dependency.
 
 ## Warmup
 
@@ -135,7 +135,8 @@ altitudes below 300 km, and acceleration-off mode retain the authoritative
 implementations.
 
 A staged compiled-component tier covers richer plans outside that fused domain
-for both fixed-step RK4 and adaptive RKF78. It supports explicit J2/J3/J4,
+for fixed-step RK4 and adaptive RKF78 (`rkf78`/`adaptive`) or Dormand-Prince
+(`dopri5`) propagation. It supports explicit J2/J3/J4,
 normalized spherical harmonics, drag and lift with constant density or any OEL
 atmosphere family (exponential, USSA-1976, NRLMSISE-00, MSIS-86, Jacchia-70,
 JB2006, JB2008, and Harris-Priester), cannonball SRP, Sun/Moon and selected

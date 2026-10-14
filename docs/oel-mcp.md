@@ -61,9 +61,11 @@ It does not start the stdio server or perform a tool effect. Generated host
 configuration contains no approval IDs; add short-lived, purpose-specific IDs
 only when a connected workflow needs them.
 
-M4 interoperability is verified: the official SDK client, pinned MCP Inspector
-2.0.0, Codex CLI, and Claude Code all pass the same public capability fixture.
-Reproduce the checks with:
+The dated M4 interoperability record covers the historical public registry and
+remains immutable evidence. The current source checkout includes later
+contracts and ten public resources, so that record is not current
+interoperability or release-qualification evidence. Rerun the host checks after
+source or contract changes with:
 
 ```bash
 .venv/bin/python -m integrations.oel_mcp.interop --all \
@@ -85,10 +87,10 @@ language request and receive an inspectable image:
 This opt-in check invokes the configured model-backed hosts and may incur their
 normal usage. It is not part of the offline release gate.
 
-This command invokes the configured model-backed host CLIs and may incur their
-normal usage. It isolates host configuration and enables only the read-only
-capability tool. See the
-[versioned result](operations/evidence/oel_mcp_sdk_v2/interop-m4-2026-07-31.json).
+The selected host checks may invoke configured model-backed CLIs and may incur
+their normal usage. They isolate host configuration and enable only the
+read-only capability tool. See the preserved
+[historical result](operations/evidence/oel_mcp_sdk_v2/interop-m4-2026-07-31.json).
 
 By default, paths are restricted to the OEL workspace. Configure distinct
 operating-system path-separated roots when an authorized host needs other
@@ -134,8 +136,9 @@ execution manifests.
 
 Start with `oel.describe_capabilities.v1` and the shared agent bootstrap at
 `oel://agent/bootstrap/v1`. `oel://agent/workflows/v1` connects common workflows
-to tools actually registered on this connection and identifies the separate
-study-planning prototype. It does not connect another server or change policy.
+to a compact subset of tools registered on this connection and identifies the
+separate study-planning prototype. Some registered workflows remain absent from
+this route catalog; it does not connect another server or change policy.
 
 Discovery includes additive `agent_guide_uri`, `workflow_routes_uri` and
 `readiness` fields. Per-tool `configuration_ready` describes configured process
@@ -308,6 +311,56 @@ not prove that every narrative interpretation is correct.
 
 These tools are local-only and absent from `direct_frontier_restricted`.
 
+## CR3BP Research Rendering
+
+`oel.plan_cr3bp_render.v1` and `oel.render_cr3bp.v1` expose the existing
+experimental CR3BP review renderer in local profiles. Plan against completed
+review evidence, then supply the unchanged specification and matching plan ID
+with a server-configured write approval. Planning grants no write authority.
+The renderer checks recorded frame/system metadata and transforms recorded
+samples; it does not propagate a new trajectory or establish J2000 alignment.
+Inspect the returned figure and, for a movie, its contact sheet and encoded
+movie before handoff. See [CR3BP research workflows](cr3bp-research.md).
+
+For example, plan with `output_dir`, `object_id`, `kind: "trajectory"`,
+`axes: "rotating"`, `origin: "barycenter"`, `plane: "xy"`, and authoritative
+`handling` metadata. Render with those same fields, the returned
+`cr3bp_plan_id`, and a write-scoped `approval`. `output_dir` identifies the
+completed source run: figures and receipts are written beneath its review
+directory and its artifact index is updated, so that run must also be within
+the configured write roots. CR3BP tools are absent from frontier, sealed, and
+tandem profiles.
+
+The workflow resource now groups the tools registered in the active profile,
+including animation, task recipes, reports, handoffs, FSW, and available Pro
+workflows. Registration and route completeness do not establish input trust,
+entitlement, approval, or execution authority. The typed study planner remains
+a separate prototype connection.
+
+## Current source-tree surfaces without dedicated MCP contracts
+
+The generic scenario, review-query, and handoff tools can still be used when a
+workflow is expressed as an existing validated scenario or completed-run
+product. The current source tree also contains local workflows that are not
+represented by a dedicated MCP tool or recipe:
+
+- Experimental trajectory targeting remains a local CLI workflow. Use
+  `python -m sim.trajectory_targeting` or
+  `python -m sim.trajectory_targeting.two_burn_cli` with the maintained specs;
+  inspect the generated packet and any OEL review store separately.
+- Pro-local MCP exposes bounded ground-sensor, OGP TEME PV, sequential
+  EKF/UKF, and batch relative OD alongside the existing dynamics-OD tool.
+  Use the active Pro capability catalog for tool IDs and input boundaries.
+  Integrated-relative truth comparisons and general OD evidence
+  productization still use their documented Python/CLI workflows.
+- Thermal and power resources are available through scenario YAML and the
+  ordinary scenario/review path, but have no typed MCP authoring or dedicated
+  MCP evidence route.
+
+These are capability gaps for a future MCP contract review, not permissions to
+broaden the current registry. Use the documented local fallback only when the
+host has authorized the corresponding source, paths, and workflow.
+
 ## Public Resources
 
 | URI | Content | Source |
@@ -364,11 +417,12 @@ model-provider call:
   --output /tmp/oel-mcp-release-gate.json
 ```
 
-This verifies the restricted three-tool profile, then exercises all thirty-five
-public tools—including product export and inspection, ONP and patch
+This verifies the restricted three-tool profile, then exercises the supported
+public workflow tools—including product export and inspection, ONP and patch
 materialization, semantic handoff comparison, maneuver readiness, and bounded
 FSW authoring, plus read-only study, CCSDS, and frame/time adapters—through
-real SDK stdio subprocesses. Generated exports record
+real SDK stdio subprocesses. Dedicated CR3BP rendering is covered separately
+by its focused SDK/renderer tests. Generated exports record
 `oel_commit: unavailable_public_export` instead of requiring `.git`. Add
 `--with-hosts` only when model-backed Codex/Claude and Inspector checks are
 intentionally authorized; those optional host checks may incur their normal

@@ -250,6 +250,7 @@ pub(crate) struct NativeStageContext {
     density_callback: Option<Py<PyAny>>,
     density_body_inputs: bool,
     density_frame_inputs: bool,
+    nrlmsise00_inputs: Option<(Vec<f64>, Option<f64>, Option<Py<PyAny>>)>,
     body_callback: Option<Py<PyAny>>,
     body_mode: u8,
     jd: Option<f64>,
@@ -264,7 +265,7 @@ pub(crate) struct NativeStageContext {
 impl NativeStageContext {
     #[new]
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature=(native, frames, codes, density_mode, density_values, geodetic, density_callback, body_callback, body_mode, jd, fixed_jd, dat, resource_paths, fallback, density_body_inputs=false, density_frame_inputs=false))]
+    #[pyo3(signature=(native, frames, codes, density_mode, density_values, geodetic, density_callback, body_callback, body_mode, jd, fixed_jd, dat, resource_paths, fallback, density_body_inputs=false, density_frame_inputs=false, nrlmsise00_inputs=None))]
     fn new(
         native: Option<Py<NativeEnvironmentContext>>,
         frames: Vec<FrameSpec>,
@@ -282,6 +283,7 @@ impl NativeStageContext {
         fallback: Py<PyAny>,
         density_body_inputs: bool,
         density_frame_inputs: bool,
+        nrlmsise00_inputs: Option<(Vec<f64>, Option<f64>, Option<Py<PyAny>>)>,
     ) -> PyResult<Self> {
         if frames.len() != 5
             || density_mode > 2
@@ -313,6 +315,18 @@ impl NativeStageContext {
         {
             return Err(error("stage scalars must be finite"));
         }
+        if let Some((drivers, lst, solar)) = &nrlmsise00_inputs {
+            if density_mode != 2
+                || drivers.len() != 10
+                || drivers.iter().any(|x| !x.is_finite())
+                || lst.is_some_and(|x| !x.is_finite())
+                || solar.is_none()
+                || (jd.is_none() && fixed_jd.is_none())
+                || body_mode != 1
+            {
+                return Err(error("invalid explicit NRLMSISE stage inputs"));
+            }
+        }
         Ok(Self {
             native,
             frames: frames
@@ -326,6 +340,7 @@ impl NativeStageContext {
             density_callback,
             density_body_inputs,
             density_frame_inputs,
+            nrlmsise00_inputs,
             body_callback,
             body_mode,
             jd,
@@ -357,6 +372,25 @@ impl NativeStageContext {
     fn supports_density_frame_inputs() -> bool {
         true
     }
+    #[staticmethod]
+    fn supports_nrlmsise00_inputs() -> bool {
+        true
+    }
+    #[getter]
+    fn native_nrlmsise00_inputs(&self) -> bool {
+        self.nrlmsise00_inputs.is_some() && !self.using_fallback()
+    }
+    #[staticmethod]
+    fn _nrlmsise00_packet(
+        jd: f64,
+        coordinates: [f64; 3],
+        lst: f64,
+        drivers: [f64; 10],
+    ) -> PyResult<Vec<f64>> {
+        crate::nrlmsise00_stage::packet(jd, coordinates, lst, &drivers)
+            .map(|x| x.to_vec())
+            .ok_or_else(|| error("unsupported NRLMSISE UTC calendar"))
+    }
     fn using_fallback(&self) -> bool {
         self.stale.load(Ordering::Relaxed)
     }
@@ -379,12 +413,16 @@ impl NativeStageContext {
         visit.call(&self.native)?;
         visit.call(&self.fallback)?;
         visit.call(&self.density_callback)?;
+        if let Some((_, _, solar)) = &self.nrlmsise00_inputs {
+            visit.call(solar)?;
+        }
         visit.call(&self.body_callback)
     }
     fn __clear__(&mut self) {
         self.native = None;
         self.fallback = None;
         self.density_callback = None;
+        self.nrlmsise00_inputs = None;
         self.body_callback = None;
         self.stale.store(true, Ordering::Relaxed);
     }
@@ -511,21 +549,55 @@ impl NativeStageContext {
                         .density_callback
                         .as_ref()
                         .ok_or_else(|| error("density callback required"))?;
-                    let density = if self.density_body_inputs {
+                    let prepared_density = if let Some((drivers, _lst, solar)) =
+                        &self.nrlmsise00_inputs
+                    {
+                        // The compatibility callback observes replaced owners and
+                        // mutable Ap histories before any snapshot is consumed.
+                        let lst: Option<f64> = solar
+                            .as_ref()
+                            .unwrap()
+                            .call1(py, (t, coords[2], [row[13], row[14], row[15]], rot))?
+                            .extract(py)?;
+                        match lst {
+                            Some(lst) => {
+                                let jd = self
+                                    .fixed_jd
+                                    .unwrap_or_else(|| self.jd.unwrap() + t / 86400.);
+                                let drivers: &[f64; 10] = drivers.as_slice().try_into().unwrap();
+                                match crate::nrlmsise00_stage::packet(jd, coords, lst, drivers) {
+                                    Some(values) => Some(
+                                        crate::nrlmsise00_native::density(values).map_err(error)?,
+                                    ),
+                                    None => None,
+                                }
+                            }
+                            None => None,
+                        }
+                    } else {
+                        None
+                    };
+                    let density = if let Some(value) = prepared_density {
+                        value
+                    } else if self.density_body_inputs {
                         // Reuse this exact stage's resource-bound ephemerides.
                         // Density and state-derived coordinates are never cached.
                         let bodies = ([row[13], row[14], row[15]], [row[16], row[17], row[18]]);
                         if self.density_frame_inputs {
                             // Share the exact guarded density-frame matrix;
                             // retain the Python solar projection arithmetic.
-                            callback.call1(py, (t, state, coords, bodies, rot))?
+                            callback
+                                .call1(py, (t, state, coords, bodies, rot))?
+                                .extract::<f64>(py)?
                         } else {
-                            callback.call1(py, (t, state, coords, bodies))?
+                            callback
+                                .call1(py, (t, state, coords, bodies))?
+                                .extract::<f64>(py)?
                         }
                     } else {
-                        callback.call1(py, (t, state, coords))?
+                        callback.call1(py, (t, state, coords))?.extract::<f64>(py)?
                     };
-                    density.extract(py)?
+                    density
                 }
             };
             let relative = if self.frames[1].mode == 0 {

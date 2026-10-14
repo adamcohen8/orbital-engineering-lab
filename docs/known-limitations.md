@@ -88,7 +88,7 @@ dependency vulnerability fixes require Python 3.10 or newer.
   continue as catalog-style OGP propagation unless the object explicitly uses
   `propagation_method: general` with `general.model: sgp4`. The legacy
   Keplerian mean-element initializer is available only as an explicit opt-in.
-- OGP objects are passive catalog-style objects in the initial
+- OGP objects are passive catalog-style objects in the current
   implementation. They do not accept thrust, orbit controllers, maneuvers, or
   covariance. TLEs with orbital period at or above 225 minutes dispatch to
   OGP-SDP4 instead of being treated as near-Earth SGP4. Continuous simulation

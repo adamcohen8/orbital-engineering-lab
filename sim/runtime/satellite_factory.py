@@ -203,7 +203,11 @@ def _build_orbit_propagator(
         orbit.get("numeric_backend", "rust"),
         field_name="simulator.dynamics.orbit.numeric_backend",
     )
-    return OrbitPropagator(
+    propagator_class = OrbitPropagator
+    if cfg.simulator.additional_gravity is not None:
+        from sim.dynamics.orbit.additional_gravity import EarthAdditionalGravityPropagator
+        propagator_class = EarthAdditionalGravityPropagator
+    propagator = propagator_class(
         model=str(orbit.get("model", "two_body") or "two_body"),
         cr3bp_system_name=str(orbit.get("cr3bp_system", "earth_moon") or "earth_moon"),
         integrator=str(orbit.get("integrator", "rk4")),
@@ -213,6 +217,9 @@ def _build_orbit_propagator(
         acceleration_mode=str(acceleration.get("mode", "off") or "off"),
         numeric_backend=numeric_backend,
     )
+    if cfg.simulator.additional_gravity is not None:
+        propagator.configure_additional_gravity(cfg)
+    return propagator
 
 
 def _create_satellite_runtime(
@@ -222,7 +229,11 @@ def _create_satellite_runtime(
     rng: np.random.Generator,
     *,
     scenario_uses_aerodynamic_lift: bool | None = None,
+    planetary_environment: Any | None = None,
 ) -> AgentRuntime:
+    if cfg.simulator.central_body != "earth":
+        from sim.dynamics.planetary.runtime import create_runtime
+        return create_runtime(object_id, agent_cfg, cfg, planetary_environment)
     initial_state = dict(agent_cfg.initial_state or {})
     general_cfg = dict(getattr(agent_cfg, "general", {}) or {})
     if "numeric_backend" in general_cfg:

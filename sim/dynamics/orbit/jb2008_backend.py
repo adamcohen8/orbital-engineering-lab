@@ -154,10 +154,20 @@ def _xlocal(z_km: float, tc: np.ndarray) -> float:
     return float((((-9.8204695e-6 * dz - 7.3039742e-4) * dz * dz + 1.0) * dz * tc[1]) + tc[0])
 
 
+def _validate_jb_altitude(alt_km: float, model_name: str) -> float:
+    altitude = float(alt_km)
+    if not math.isfinite(altitude):
+        raise ValueError(f"{model_name} requires a finite altitude in km.")
+    if altitude < 90.0:
+        raise ValueError(f"{model_name} is defined for altitudes at or above 90 km; got {altitude:g} km.")
+    return altitude
+
+
 def _integrate_lower_atmosphere_python(
     zht: float, tc: tuple[float, float, float, float],
 ) -> tuple[float, float, float, float, float, float, float, float, float]:
     """Authoritative JB2006/JB2008 90–105 km quadrature, unchanged ordering."""
+    zht = _validate_jb_altitude(zht, "JB2006/JB2008")
     tc0, tc1, tc2, tc3 = tc
     xambar_c0, xambar_c1, xambar_c2, xambar_c3, xambar_c4, xambar_c5, xambar_c6 = _XAMBAR_COEFFICIENTS
     r1 = 0.010
@@ -722,6 +732,7 @@ def _semian06(day: float, ht_km: float, f10bar: float) -> tuple[float, float, fl
 
 def jb2006_density(alt_km: float, lat_deg: float, lon_deg: float, dt_utc: datetime, env: dict | None = None) -> float:
     env = {} if env is None else env
+    zht = _validate_jb_altitude(alt_km, "JB2006")
     if dt_utc.tzinfo is None:
         dt_utc = dt_utc.replace(tzinfo=timezone.utc)
     dt_utc = dt_utc.astimezone(timezone.utc)
@@ -758,7 +769,6 @@ def jb2006_density(alt_km: float, lat_deg: float, lon_deg: float, dt_utc: dateti
     r_sat_eci_km = _position_eci_from_geodetic(float(lat_deg), float(lon_deg), float(alt_km), jd_utc, env)
     ra_sat = math.atan2(float(r_sat_eci_km[1]), float(r_sat_eci_km[0])) % (2.0 * math.pi)
     latgc = _gd2gc_rad(math.radians(float(lat_deg)))
-    zht = float(alt_km)
 
     r_sun = _sun_position_from_env(jd_utc, env)
     ra_sun = math.atan2(float(r_sun[1]), float(r_sun[0])) % (2.0 * math.pi)
@@ -882,6 +892,7 @@ def jb2006_density(alt_km: float, lat_deg: float, lon_deg: float, dt_utc: dateti
 
 def jb2008_density(alt_km: float, lat_deg: float, lon_deg: float, dt_utc: datetime, env: dict | None = None) -> float:
     env = {} if env is None else env
+    zht = _validate_jb_altitude(alt_km, "JB2008")
     if dt_utc.tzinfo is None:
         dt_utc = dt_utc.replace(tzinfo=timezone.utc)
     dt_utc = dt_utc.astimezone(timezone.utc)
@@ -913,7 +924,6 @@ def jb2008_density(alt_km: float, lat_deg: float, lon_deg: float, dt_utc: dateti
     r_sat_eci_km = _position_eci_from_geodetic(float(lat_deg), float(lon_deg), float(alt_km), jd_utc, env)
     ra_sat = math.atan2(float(r_sat_eci_km[1]), float(r_sat_eci_km[0])) % (2.0 * math.pi)
     latgc = _gd2gc_rad(math.radians(float(lat_deg)))
-    zht = float(alt_km)
 
     r_sun = _sun_position_from_env(jd_utc, env)
     ra_sun = math.atan2(float(r_sun[1]), float(r_sun[0])) % (2.0 * math.pi)

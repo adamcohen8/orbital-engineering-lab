@@ -95,7 +95,7 @@ def build_sdk_server(handlers: BaseOELMCPHandlers) -> Any:
         except Exception as exc:
             raise MCPError(-32603, "Internal server error without local diagnostic details.") from exc
         content: list[Any] = [TextContent(text=json.dumps(payload, sort_keys=True))]
-        if str(params.name) in {"oel.plot_evidence.v1", "oel.render_review_plot.v2"}:
+        if str(params.name) in {"oel.plot_evidence.v1", "oel.render_review_plot.v2", "oel.render_cr3bp.v1"}:
             result = dict(payload.get("result", {}) or {})
             artifact = dict(result.get("artifact", {}) or {})
             image_path = Path(str(artifact.get("path", "") or ""))

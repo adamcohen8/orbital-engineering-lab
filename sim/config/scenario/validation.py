@@ -94,6 +94,16 @@ def _require_rust_symbols(path: str, symbols: tuple[str, ...]) -> None:
 
 
 def _validate_physics_runtime_settings(cfg: SimulationScenarioConfig) -> None:
+    if cfg.simulator.additional_gravity is not None:
+        from .additional_gravity import validate_additional_gravity
+        validate_additional_gravity(cfg)
+    if cfg.simulator.central_body != "earth":
+        from .planetary import validate_planetary_scenario
+        validate_planetary_scenario(cfg)
+        return
+    for object_id, obj in cfg.objects.items():
+        if "position_inertial_km" in obj.initial_state or "reference_axes" in obj.initial_state:
+            raise ValueError(f"Earth objects.{object_id} must use existing Earth state fields; neutral states require non-Earth central_body.")
     dynamics = dict(cfg.simulator.dynamics or {})
     native_requirements = {
         "attitude": ("attitude_propagate_exponential_map", "attitude_builtin_disturbance_torque"),
@@ -117,7 +127,7 @@ def _validate_physics_runtime_settings(cfg: SimulationScenarioConfig) -> None:
         getattr(cfg.analysis.covariance, "numeric_backend", "rust"),
         field_name="analysis.covariance.numeric_backend",
     )
-    if covariance_backend == "rust":
+    if cfg.analysis.enabled and cfg.analysis.covariance.enabled and covariance_backend == "rust":
         _require_rust_symbols("analysis.covariance.numeric_backend=rust", ("covariance_propagate_history",))
     for object_id, obj in cfg.objects.items():
         knowledge = dict(getattr(obj, "knowledge", {}) or {})

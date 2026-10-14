@@ -332,9 +332,7 @@ def summarize_sampled_coverage_mask(
 ) -> CoverageCellMetrics:
     """Convert a sampled boolean mask into frozen sparse interval semantics."""
 
-    backend = str(numeric_backend).strip().lower()
-    if backend not in {"python", "rust"}:
-        raise ValueError(f"Unknown coverage numeric backend {numeric_backend!r}.")
+    backend = normalize_numeric_backend(numeric_backend)
     mask, times, cells = _validated_sparse_coverage_inputs(covered_by_sample, times_s, cell_indices)
     if backend == "rust":
         from sim.rust_coverage_backend import summarize_sampled_mask

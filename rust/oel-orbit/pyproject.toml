@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "oel-rust-orbit"
-version = "0.17.2"
+version = "0.18.2"
 description = "Optional Rust numerical orbit engine for Orbital Engineering Lab"
 requires-python = ">=3.10,<3.15"
 

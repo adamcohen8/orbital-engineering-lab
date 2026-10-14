@@ -403,9 +403,10 @@ class LifecycleStore:
             stale_after_s=float(stale_after_s),
         ).with_digest()
         owner_path = manifest_path.parent / OWNER_NAME
-        if owner_path.exists():
-            raise FileExistsError("Lifecycle execution owner already exists.")
-        _atomic_write_json(owner_path, owner.to_dict())
+        with _RunLock(owner_path.parent / ".run.lock"):
+            if owner_path.exists():
+                raise FileExistsError("Lifecycle execution owner already exists.")
+            _atomic_write_json(owner_path, owner.to_dict())
         return owner
 
     def heartbeat_owner(
@@ -416,16 +417,17 @@ class LifecycleStore:
         status: str = "active",
     ) -> ExecutionOwner:
         owner_path = self._manifest_path(run_id).parent / OWNER_NAME
-        current = ExecutionOwner.from_dict(_read_json_object(owner_path))
-        if current.run_id != run_id or current.owner_token != owner_token:
-            raise RunPolicyError("Lifecycle execution-owner identity does not match.")
-        updated = replace(
-            current,
-            status=status,
-            updated_at=utc_now(),
-            owner_sha256="",
-        ).with_digest()
-        _atomic_write_json(owner_path, updated.to_dict())
+        with _RunLock(owner_path.parent / ".run.lock"):
+            current = ExecutionOwner.from_dict(_read_json_object(owner_path))
+            if current.run_id != run_id or current.owner_token != owner_token:
+                raise RunPolicyError("Lifecycle execution-owner identity does not match.")
+            updated = replace(
+                current,
+                status=status,
+                updated_at=utc_now(),
+                owner_sha256="",
+            ).with_digest()
+            _atomic_write_json(owner_path, updated.to_dict())
         return updated
 
     def read_owner(self, run_id: str) -> ExecutionOwner | None:

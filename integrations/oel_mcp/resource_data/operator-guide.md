@@ -4,9 +4,11 @@ This packaged guide covers the supported local stdio OEL MCP surface.
 
 Agents should start with `oel.describe_capabilities.v1`, then read
 `oel://agent/bootstrap/v1` and `oel://agent/workflows/v1`. The bootstrap is also
-installed as `AGENTS.md` in new managed workspaces. Workflow routes distinguish
-tools registered here from the separate `oel-study-mcp` planning prototype.
-Configure that connection through the host operator only when needed.
+installed as `AGENTS.md` in new managed workspaces. Workflow routes provide a
+compact subset of tools registered here and distinguish them from the separate
+`oel-study-mcp` planning prototype; some registered workflows remain absent
+from the route catalog. Configure that connection through the host operator
+only when needed.
 
 Discovery's `readiness.tools` reports process-configuration blockers and local
 entitlement status without exposing approval IDs or granting authority. A
@@ -105,6 +107,27 @@ Successful results are checked against the advertised result schema. Pro Scale
 refresh runs against an isolated snapshot of the exact validated store, and
 Pro workflows that require more than one feature report and enforce every
 entitlement.
+
+Discover active workflow groups with `oel://agent/workflows/v1`. Local CR3BP
+research figures and movies use `oel.plan_cr3bp_render.v1`, followed by
+`oel.render_cr3bp.v1` with an unchanged specification, matching
+`cr3bp_plan_id`, and configured write approval. The source run must be writable
+because its review artifacts and index are updated. These experimental
+transforms do not establish J2000 alignment or rerun dynamics; inspect the
+image and any contact sheet/movie before handoff.
+
+Entitled Pro-local profiles also expose bounded ground-sensor, OGP TEME PV,
+sequential EKF/UKF, and batch relative OD with JSON inspection. Inspect the
+active tool schemas and readiness first. Execution requires local-only
+handling and configured execution approval; derived products remain subject
+to their quality gates and do not carry execution authority.
+
+Trajectory targeting still uses `python -m sim.trajectory_targeting ...`.
+Integrated-relative truth comparisons and general OD evidence packaging use
+the documented `sim.estimation` Python/CLI surfaces. Thermal and power
+resources use the generic scenario/review path; MCP has no dedicated typed
+authoring route for them. Use local fallbacks only within the host-authorized
+workflow and paths.
 
 Remote transport, arbitrary filesystem resources, prompts, sampling,
 unrestricted scenario generation, private campaigns, and frontier release
