@@ -8,13 +8,13 @@ import pytest
 from sim.core.models import Measurement, StateBelief
 from sim.estimation.relative_hcw_ekf import (
     HCWRelativeEKFEstimator,
-    MorseGlintGateConfig,
+    InnovationSpikeGateConfig,
     SSJ2RelativeEKFEstimator,
     hcw_measurement_dimension,
     hcw_measurement_jacobian,
     hcw_measurement_vector,
     hcw_state_transition_matrix,
-    morse_glint_gate,
+    innovation_spike_gate,
 )
 
 
@@ -222,7 +222,7 @@ def test_hcw_relative_ekf_uses_full_epoch_measurement_covariance() -> None:
     )
 
 
-def test_morse_glint_gate_rejects_single_sample_optical_glint_and_holds_prediction() -> None:
+def test_innovation_spike_gate_rejects_single_sample_optical_glint_and_holds_prediction() -> None:
     n = 0.0011
     dt_s = 10.0
     phi = hcw_state_transition_matrix(n, dt_s)
@@ -255,7 +255,7 @@ def test_morse_glint_gate_rejects_single_sample_optical_glint_and_holds_predicti
         dt_s=dt_s,
         process_noise_diag=np.array([1.0e-8] * 3 + [1.0e-12] * 3),
         meas_noise_diag=np.array([1.0e-6] * 3 + [1.0e-10] * 3),
-        morse_glint_gate=MorseGlintGateConfig(enabled=True, nis_threshold=9.21, glint_weight=0.0),
+        innovation_spike_gate=InnovationSpikeGateConfig(),
     )
 
     ungated_belief = initial_belief
@@ -270,8 +270,6 @@ def test_morse_glint_gate_rejects_single_sample_optical_glint_and_holds_predicti
             assert gate_diag is not None
             assert gate_diag.evaluated is True
             assert gate_diag.classification == "glint_rejected"
-            assert gate_diag.delta_dot < 0.0
-            assert gate_diag.exterior_curl == pytest.approx(1.0, abs=1.0e-12)
             assert gate_diag.return_ratio == pytest.approx(0.0, abs=1.0e-12)
             # glint_weight=0 holds the prediction: state and covariance stay mutually consistent.
             assert gated.last_update_diagnostics.update_applied is False
@@ -284,8 +282,7 @@ def test_morse_glint_gate_rejects_single_sample_optical_glint_and_holds_predicti
             assert gated_glint_err == pytest.approx(0.0, abs=1.0e-12)
 
 
-
-def test_morse_glint_gate_preserves_full_step_response_on_impulsive_target_delta_v() -> None:
+def test_innovation_spike_gate_preserves_full_step_response_on_impulsive_target_delta_v() -> None:
     n = 0.0011
     dt_s = 10.0
     phi = hcw_state_transition_matrix(n, dt_s)
@@ -316,7 +313,7 @@ def test_morse_glint_gate_preserves_full_step_response_on_impulsive_target_delta
         dt_s=dt_s,
         process_noise_diag=np.array([1.0e-12] * 3 + [1.0e-16] * 3),
         meas_noise_diag=np.array([1.0e-6] * 3 + [1.0e-10] * 3),
-        morse_glint_gate=MorseGlintGateConfig(enabled=True, nis_threshold=9.21, step_gain_floor=1.0),
+        innovation_spike_gate=InnovationSpikeGateConfig(),
     )
 
     ungated_belief = initial_belief
@@ -331,12 +328,9 @@ def test_morse_glint_gate_preserves_full_step_response_on_impulsive_target_delta
             assert gate_diag is not None
             assert gate_diag.evaluated is True
             assert gate_diag.classification == "step_maneuver"
-            assert gate_diag.delta_dot >= -1.0e-15
             assert gate_diag.return_ratio == pytest.approx(1.0, abs=1.0e-12)
-            # step_gain_floor=1 with H = I gives K_eff = I, so the Joseph-form posterior collapses to R exactly.
-            assert gated.last_update_diagnostics.posterior_cov_trace == pytest.approx(
-                3.0e-6 + 3.0e-10, rel=1.0e-9
-            )
+            # With H = I the step update re-initializes from the measurement, so the posterior is exactly R.
+            np.testing.assert_allclose(gated_belief.covariance, np.diag([1.0e-6] * 3 + [1.0e-10] * 3), rtol=1.0e-12)
 
             np.testing.assert_allclose(gated_belief.state[3:], truth_arc[3][3:], atol=1.0e-12)
             ungated_vel_err = float(np.linalg.norm(ungated_belief.state[3:] - truth_arc[3][3:]))
@@ -377,7 +371,7 @@ def test_hcw_relative_ekf_streaming_and_window_modes_handle_glint_and_delta_v_ar
         dt_s=dt_s,
         process_noise_diag=np.array([1.0e-10] * 3 + [1.0e-14] * 3),
         meas_noise_diag=np.array([1.0e-6] * 3 + [1.0e-10] * 3),
-        morse_glint_gate=MorseGlintGateConfig(enabled=True, nis_threshold=9.21),
+        innovation_spike_gate=InnovationSpikeGateConfig(),
     )
 
     window_beliefs = estimator.filter_measurements(initial_belief, measurements)
@@ -397,9 +391,9 @@ def test_hcw_relative_ekf_streaming_and_window_modes_handle_glint_and_delta_v_ar
     np.testing.assert_allclose(streaming_states[5], truth_arc[6], atol=1.0e-12)
     np.testing.assert_allclose(streaming_states[-1], truth_arc[-1], atol=1.0e-12)
 
-    direct_glint = morse_glint_gate(np.zeros(3), np.array([1.0, -2.0, 0.5]), np.zeros(3), nis=50.0)
+    direct_glint = innovation_spike_gate(np.zeros(3), np.array([1.0, -2.0, 0.5]), np.zeros(3), nis=50.0)
     assert direct_glint.classification == "glint_rejected"
-    direct_step = morse_glint_gate(
+    direct_step = innovation_spike_gate(
         np.zeros(3),
         np.array([0.0, 2.0, 0.0]),
         np.array([0.0, 2.0, 0.0]),
@@ -408,17 +402,18 @@ def test_hcw_relative_ekf_streaming_and_window_modes_handle_glint_and_delta_v_ar
     assert direct_step.classification == "step_maneuver"
 
 
-
-def _glint_and_delta_v_arc(phi: np.ndarray, dt_s: float) -> tuple[list[np.ndarray], list[Measurement]]:
+def _glint_and_delta_v_arc(
+    phi: np.ndarray, dt_s: float, *, glint_step: int = 2, dv_step: int = 5
+) -> tuple[list[np.ndarray], list[Measurement]]:
     truth_arc = [np.array([0.3, -0.6, 0.2, 0.00015, -0.0001, 0.00005], dtype=float)]
     for step in range(1, 9):
         propagated = phi @ truth_arc[-1]
-        if step == 5:
+        if step == dv_step:
             propagated = propagated + np.array([0.0, 0.0, 0.0, -0.0012, 0.0020, -0.0008])
         truth_arc.append(propagated)
     glint_spike = np.array([0.08, -0.05, 0.04, 0.003, -0.002, 0.001], dtype=float)
     measurements = [
-        Measurement(vector=truth_arc[step] + (glint_spike if step == 2 else 0.0), t_s=step * dt_s)
+        Measurement(vector=truth_arc[step] + (glint_spike if step == glint_step else 0.0), t_s=step * dt_s)
         for step in range(1, len(truth_arc))
     ]
     return truth_arc, measurements
@@ -434,7 +429,7 @@ def test_ss_j2_relative_ekf_gate_handles_glint_and_delta_v_in_window_and_streami
         reference_radius_km=6900.0,
         reference_inclination_rad=0.9,
         numeric_backend="python",
-        morse_glint_gate=MorseGlintGateConfig(),
+        innovation_spike_gate=InnovationSpikeGateConfig(),
     )
     truth_arc, measurements = _glint_and_delta_v_arc(estimator._relative_dynamics.state_transition_matrix(dt_s), dt_s)
     initial_belief = StateBelief(
@@ -478,7 +473,7 @@ def test_gate_resolves_pending_impulse_when_caller_switches_to_lookahead() -> No
             dt_s=dt_s,
             process_noise_diag=np.array([1.0e-10] * 3 + [1.0e-14] * 3),
             meas_noise_diag=np.array([1.0e-6] * 3 + [1.0e-10] * 3),
-            morse_glint_gate=MorseGlintGateConfig(),
+            innovation_spike_gate=InnovationSpikeGateConfig(),
         )
 
     reference = make().filter_measurements(initial_belief, measurements)
@@ -505,16 +500,111 @@ def test_gate_requires_full_state_measurement_model_and_matches_closed_forms() -
             process_noise_diag=np.ones(6),
             meas_noise_diag=np.array([1.0e-8, 1.0e-8]),
             measurement_model="relative_angles",
-            morse_glint_gate=MorseGlintGateConfig(),
+            innovation_spike_gate=InnovationSpikeGateConfig(),
         )
 
     rng = np.random.default_rng(3)
-    for _ in range(50):
-        y_prev, y_curr, y_next = rng.normal(size=(3, 6))
-        diag = morse_glint_gate(y_prev, y_curr, y_next, nis=50.0)
+    for _ in range(200):
+        y_prev, y_curr, y_next = rng.normal(size=(3, 6)) * rng.choice([0.1, 1.0], size=(3, 1))
+        diag = innovation_spike_gate(y_prev, y_curr, y_next, nis=50.0)
         d_minus, d_plus = y_curr - y_prev, y_next - y_curr
-        energy = d_minus @ d_minus + d_plus @ d_plus
-        assert diag.delta_dot == pytest.approx(d_minus @ d_plus)
-        assert diag.exterior_curl == pytest.approx(np.linalg.norm(d_plus - d_minus) / np.sqrt(2.0 * energy))
-        assert diag.exterior_curl**2 == pytest.approx(0.5 - diag.delta_dot / energy)
         assert diag.return_ratio == pytest.approx(np.linalg.norm(y_next - y_prev) / np.linalg.norm(d_minus))
+        assert diag.classification == ("glint_rejected" if diag.return_ratio <= 0.35 else "step_maneuver")
+        if diag.classification == "glint_rejected":
+            assert d_minus @ d_plus < 0.0  # implied by return_ratio < 1, hence no separate sign test
+    assert innovation_spike_gate(y_prev, y_curr, y_next, nis=1.0).classification == "nominal"
+    with pytest.raises(ValueError, match="max_return_ratio"):
+        InnovationSpikeGateConfig(max_return_ratio=1.0)
+
+
+def _gated_estimator(**overrides: object) -> HCWRelativeEKFEstimator:
+    kwargs: dict[str, object] = {
+        "mean_motion_rad_s": 0.0011,
+        "dt_s": 10.0,
+        "process_noise_diag": np.array([1.0e-10] * 3 + [1.0e-14] * 3),
+        "meas_noise_diag": np.array([1.0e-6] * 3 + [1.0e-10] * 3),
+        "innovation_spike_gate": InnovationSpikeGateConfig(),
+    }
+    kwargs.update(overrides)
+    return HCWRelativeEKFEstimator(**kwargs)
+
+
+def test_gate_defers_on_unusable_lookahead_and_rejects_backwards_lookahead() -> None:
+    truth_arc, measurements = _glint_and_delta_v_arc(hcw_state_transition_matrix(0.0011, 10.0), 10.0)
+    initial_belief = StateBelief(
+        state=truth_arc[0].copy(), covariance=np.diag([1.0e-8] * 3 + [1.0e-12] * 3), last_update_t_s=0.0
+    )
+    reference = _gated_estimator().filter_measurements(initial_belief, measurements)
+    estimator = _gated_estimator()
+    belief = estimator.update(initial_belief, measurements[0], measurements[0].t_s, next_measurement=measurements[1])
+    with pytest.raises(ValueError, match="precede"):
+        estimator.update(belief, measurements[1], measurements[1].t_s, next_measurement=measurements[0])
+
+    estimator.reset_gate_state()
+    unusable = Measurement(vector=np.full(6, np.nan), t_s=measurements[2].t_s)
+    belief = estimator.update(belief, measurements[1], measurements[1].t_s, next_measurement=unusable)
+    # Fail safe: an unusable lookahead defers the glint instead of accepting it as a step.
+    assert estimator.last_update_diagnostics.update_applied is False
+    assert estimator.last_update_diagnostics.gate_diagnostics.classification == "pending_impulse"
+    for idx in range(2, len(measurements)):
+        next_meas = measurements[idx + 1] if idx + 1 < len(measurements) else None
+        belief = estimator.update(belief, measurements[idx], measurements[idx].t_s, next_measurement=next_meas)
+        np.testing.assert_allclose(belief.state, reference[idx].state, atol=1.0e-12)
+        np.testing.assert_allclose(belief.covariance, reference[idx].covariance, rtol=1.0e-9, atol=1.0e-20)
+
+
+def test_gate_streaming_does_not_accept_outlier_after_step_or_override_caller_belief() -> None:
+    truth_arc, measurements = _glint_and_delta_v_arc(hcw_state_transition_matrix(0.0011, 10.0), 10.0, glint_step=6)
+    initial_belief = StateBelief(
+        state=truth_arc[0].copy(), covariance=np.diag([1.0e-8] * 3 + [1.0e-12] * 3), last_update_t_s=0.0
+    )
+    estimator = _gated_estimator()
+    belief, classes = initial_belief, []
+    for idx, meas in enumerate(measurements):
+        belief = estimator.update(belief, meas, meas.t_s)
+        classes.append(estimator.last_update_diagnostics.gate_diagnostics.classification)
+        if idx not in (4, 5):
+            np.testing.assert_allclose(belief.state, truth_arc[idx + 1], atol=1.0e-12)
+    # The glint right after the resolved step is deferred (prediction output), not accepted as another step.
+    assert classes[4] == "pending_impulse" and classes[5] == "pending_impulse"
+    np.testing.assert_allclose(belief.state, truth_arc[-1], atol=1.0e-12)
+
+    estimator.reset_gate_state()
+    truth_arc, measurements = _glint_and_delta_v_arc(hcw_state_transition_matrix(0.0011, 10.0), 10.0)
+    belief = initial_belief
+    for meas in measurements[:2]:
+        belief = estimator.update(belief, meas, meas.t_s)
+    assert estimator.last_update_diagnostics.gate_diagnostics.classification == "pending_impulse"
+    offset = np.array([1.0e-4, 0.0, 0.0, 0.0, 0.0, 0.0])
+    replaced = StateBelief(state=truth_arc[2] + offset, covariance=belief.covariance, last_update_t_s=belief.last_update_t_s)
+    belief = estimator.update(replaced, measurements[2], measurements[2].t_s)
+    # A caller-replaced belief is respected: the pending glint is dropped rather than replayed from the old prior.
+    assert estimator.last_update_diagnostics.gate_diagnostics.classification == "nominal"
+    assert np.linalg.norm(belief.state - truth_arc[3]) < 2.0e-4
+
+
+def test_gate_default_threshold_leaves_nominal_noisy_tracking_unchanged() -> None:
+    n, dt_s = 0.0011, 10.0
+    phi = hcw_state_transition_matrix(n, dt_s)
+    rng = np.random.default_rng(11)
+    sigma = np.sqrt([1.0e-6] * 3 + [1.0e-10] * 3)
+    truth = np.array([0.3, -0.6, 0.2, 0.00015, -0.0001, 0.00005])
+    measurements, truth_arc = [], []
+    for step in range(1, 301):
+        truth = phi @ truth
+        truth_arc.append(truth)
+        measurements.append(Measurement(vector=truth + rng.normal(size=6) * sigma, t_s=step * dt_s))
+    initial_belief = StateBelief(
+        state=np.array([0.3, -0.6, 0.2, 0.00015, -0.0001, 0.00005]),
+        covariance=np.diag([1.0e-6] * 3 + [1.0e-10] * 3),
+        last_update_t_s=0.0,
+    )
+    gated = _gated_estimator()
+    ungated = _gated_estimator(innovation_spike_gate=None)
+    gated_beliefs = gated.filter_measurements(initial_belief, measurements)
+    ungated_beliefs = ungated.filter_measurements(initial_belief, measurements)
+    gated_err = np.sqrt(np.mean([np.sum((b.state[:3] - t[:3]) ** 2) for b, t in zip(gated_beliefs, truth_arc)]))
+    ungated_err = np.sqrt(np.mean([np.sum((b.state[:3] - t[:3]) ** 2) for b, t in zip(ungated_beliefs, truth_arc)]))
+    # The 6-dof 99.9% NIS threshold keeps false triggers rare; the old 9.21 default fired on ~20% of epochs.
+    assert gated_err < 1.1 * ungated_err
+

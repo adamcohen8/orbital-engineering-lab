@@ -23,59 +23,52 @@ HCW_MEASUREMENT_MODELS = {
 
 
 @dataclass(frozen=True, slots=True)
-class MorseGlintGateConfig:
-    """Configuration for the 3-point discrete Morse glint vs. step-maneuver gate."""
+class InnovationSpikeGateConfig:
+    """Configuration for the 3-sample innovation gate separating 1-sample glints from impulsive steps.
+
+    The default ``nis_threshold`` is the 99.9% chi-square quantile for the 6-dof ``relative_state`` innovation.
+    """
 
     enabled: bool = True
-    nis_threshold: float = 9.21
-    min_exterior_curl: float = 0.65
+    nis_threshold: float = 22.46
     max_return_ratio: float = 0.35
     glint_weight: float = 0.0
-    step_gain_floor: float = 1.0
 
     def __post_init__(self) -> None:
         if not np.isfinite(self.nis_threshold) or self.nis_threshold <= 0.0:
             raise ValueError("nis_threshold must be finite and positive.")
-        if not np.isfinite(self.min_exterior_curl) or not 0.0 <= self.min_exterior_curl <= 1.0:
-            raise ValueError("min_exterior_curl must lie in [0, 1].")
-        if not np.isfinite(self.max_return_ratio) or self.max_return_ratio < 0.0:
-            raise ValueError("max_return_ratio must be finite and non-negative.")
+        if not np.isfinite(self.max_return_ratio) or not 0.0 <= self.max_return_ratio < 1.0:
+            raise ValueError("max_return_ratio must lie in [0, 1).")
         if not np.isfinite(self.glint_weight) or not 0.0 <= self.glint_weight <= 1.0:
             raise ValueError("glint_weight must lie in [0, 1].")
-        if not np.isfinite(self.step_gain_floor) or not 0.0 <= self.step_gain_floor <= 1.0:
-            raise ValueError("step_gain_floor must lie in [0, 1].")
 
 
 @dataclass(frozen=True, slots=True)
-class MorseGlintGateDiagnostics:
-    """Diagnostic output of the 3-point discrete Morse innovation discriminator."""
+class InnovationSpikeGateDiagnostics:
+    """Diagnostic output of :func:`innovation_spike_gate`."""
 
     evaluated: bool
     classification: str = "nominal"
-    delta_dot: float = float("nan")
-    exterior_curl: float = float("nan")
     return_ratio: float = float("nan")
     innovation_weight: float = 1.0
 
 
-def morse_glint_gate(
+def innovation_spike_gate(
     y_prev: np.ndarray,
     y_curr: np.ndarray,
     y_next: np.ndarray,
     *,
     nis: float | None = None,
-    config: MorseGlintGateConfig | None = None,
-) -> MorseGlintGateDiagnostics:
-    """Discriminate 1-sample optical glint spikes from impulsive delta-v steps.
+    config: InnovationSpikeGateConfig | None = None,
+) -> InnovationSpikeGateDiagnostics:
+    """Classify a large innovation ``y_t`` as a 1-sample glint or an impulsive step from its neighbours.
 
-    Evaluates backward/forward finite differences ``Delta_- y_t = y_t - y_{t-1}``
-    and ``Delta_+ y_t = y_{t+1} - y_t``, ``delta_dot = <Delta_-, Delta_+>``, the
-    normalized second difference ``exterior_curl = ||Delta_+ - Delta_-||_2 /
-    sqrt(2 (||Delta_-||^2 + ||Delta_+||^2))`` in [0, 1] (>= 1/sqrt(2) iff
-    ``delta_dot <= 0``), and the return ratio ``||y_{t+1} - y_{t-1}||_2 / ||Delta_- y_t||_2``.
+    The return ratio ``||y_{t+1} - y_{t-1}||_2 / ||y_t - y_{t-1}||_2`` is ~0 when the innovation falls back
+    to its previous level (glint) and ~1 when it persists (step). A ratio ``<= max_return_ratio < 1``
+    implies ``<y_t - y_{t-1}, y_{t+1} - y_t> < 0``, so no separate sign test is needed.
     """
 
-    cfg = MorseGlintGateConfig() if config is None else config
+    cfg = InnovationSpikeGateConfig() if config is None else config
     prev_vec = np.asarray(y_prev, dtype=float).reshape(-1)
     curr_vec = np.asarray(y_curr, dtype=float).reshape(-1)
     next_vec = np.asarray(y_next, dtype=float).reshape(-1)
@@ -84,22 +77,13 @@ def morse_glint_gate(
     if not (np.all(np.isfinite(prev_vec)) and np.all(np.isfinite(curr_vec)) and np.all(np.isfinite(next_vec))):
         raise ValueError("innovation vectors must contain finite values.")
 
-    delta_minus = curr_vec - prev_vec
-    delta_plus = next_vec - curr_vec
-    delta_dot = float(np.dot(delta_minus, delta_plus))
-    minus_norm = float(np.linalg.norm(delta_minus))
-    secant = next_vec - prev_vec
-    return_ratio = float(np.linalg.norm(secant)) / max(minus_norm, 1.0e-15)
-    energy = float(np.dot(delta_minus, delta_minus) + np.dot(delta_plus, delta_plus))
-    exterior_curl = float(np.linalg.norm(delta_plus - delta_minus)) / np.sqrt(2.0 * energy) if energy > 1.0e-30 else 0.0
-
-    if not cfg.enabled or (nis is not None and float(nis) <= cfg.nis_threshold) or minus_norm <= 1.0e-15:
-        return MorseGlintGateDiagnostics(False, "nominal", delta_dot, exterior_curl, return_ratio, 1.0)
-    if delta_dot < 0.0 and exterior_curl >= cfg.min_exterior_curl and return_ratio <= cfg.max_return_ratio:
-        return MorseGlintGateDiagnostics(
-            True, "glint_rejected", delta_dot, exterior_curl, return_ratio, float(cfg.glint_weight)
-        )
-    return MorseGlintGateDiagnostics(True, "step_maneuver", delta_dot, exterior_curl, return_ratio, 1.0)
+    jump = float(np.linalg.norm(curr_vec - prev_vec))
+    return_ratio = float(np.linalg.norm(next_vec - prev_vec)) / max(jump, 1.0e-15)
+    if not cfg.enabled or (nis is not None and float(nis) <= cfg.nis_threshold) or jump <= 1.0e-15:
+        return InnovationSpikeGateDiagnostics(False, "nominal", return_ratio, 1.0)
+    if return_ratio <= cfg.max_return_ratio:
+        return InnovationSpikeGateDiagnostics(True, "glint_rejected", return_ratio, float(cfg.glint_weight))
+    return InnovationSpikeGateDiagnostics(True, "step_maneuver", return_ratio, 1.0)
 
 
 @dataclass(frozen=True)
@@ -112,7 +96,7 @@ class HCWRelativeEKFUpdateDiagnostics:
     nis: float = float("nan")
     predicted_cov_trace: float = float("nan")
     posterior_cov_trace: float = float("nan")
-    gate_diagnostics: MorseGlintGateDiagnostics | None = None
+    gate_diagnostics: InnovationSpikeGateDiagnostics | None = None
 
 
 @dataclass
@@ -121,6 +105,11 @@ class HCWRelativeEKFEstimator(Estimator):
 
     The native state is deputy relative to chief in the chief-centered RIC frame:
     [R, I, C, Rdot, Idot, Cdot], using km and km/s.
+
+    The optional ``innovation_spike_gate`` (``relative_state`` only) needs one sample of lookahead for
+    innovations whose NIS exceeds its threshold. Without ``next_measurement`` such a sample is deferred:
+    ``update`` returns the prediction with ``update_applied=False`` and classification ``"pending_impulse"``,
+    and the next measurement-bearing call resolves it, i.e. streaming use adds one sample of latency.
     """
 
     mean_motion_rad_s: float
@@ -131,7 +120,7 @@ class HCWRelativeEKFEstimator(Estimator):
     measurement_origin: str = "chief"
     meas_noise_covariance: np.ndarray | None = None
     numeric_backend: str = "rust"
-    morse_glint_gate: MorseGlintGateConfig | None = None
+    innovation_spike_gate: InnovationSpikeGateConfig | None = None
     last_update_diagnostics: HCWRelativeEKFUpdateDiagnostics | None = field(default=None, init=False, repr=False)
     _q: np.ndarray = field(default_factory=lambda: np.zeros((6, 6)), init=False, repr=False)
     _r: np.ndarray = field(default_factory=lambda: np.zeros((6, 6)), init=False, repr=False)
@@ -139,7 +128,9 @@ class HCWRelativeEKFEstimator(Estimator):
     _cached_transition_key: tuple[float, float] | None = field(default=None, init=False, repr=False)
     _cached_transition: np.ndarray | None = field(default=None, init=False, repr=False)
     _last_innovation: np.ndarray | None = field(default=None, init=False, repr=False)
-    _pending_impulse: tuple[StateBelief, Measurement, np.ndarray] | None = field(default=None, init=False, repr=False)
+    _pending_impulse: tuple[StateBelief, Measurement, np.ndarray, np.ndarray] | None = field(
+        default=None, init=False, repr=False
+    )
 
     def __post_init__(self) -> None:
         if not np.isfinite(self.mean_motion_rad_s) or self.mean_motion_rad_s <= 0.0:
@@ -167,14 +158,15 @@ class HCWRelativeEKFEstimator(Estimator):
             self.meas_noise_covariance = _measurement_covariance(
                 self.meas_noise_covariance, meas_dim
             )
-        if self.morse_glint_gate is not None and not isinstance(self.morse_glint_gate, MorseGlintGateConfig):
-            raise TypeError("morse_glint_gate must be MorseGlintGateConfig or None.")
-        if self.morse_glint_gate is not None and self.measurement_model != "relative_state":
+        gate = self.innovation_spike_gate
+        if gate is not None and not isinstance(gate, InnovationSpikeGateConfig):
+            raise TypeError("innovation_spike_gate must be InnovationSpikeGateConfig or None.")
+        if gate is not None and self.measurement_model != "relative_state":
             # The Phi^{-1} pull-back and the H^+ step update only recover a velocity step when H is full rank.
-            raise ValueError("morse_glint_gate requires measurement_model='relative_state'.")
+            raise ValueError("innovation_spike_gate requires measurement_model='relative_state'.")
 
     def reset_gate_state(self) -> None:
-        """Clear cached innovation history used by the 3-point Morse glint gate."""
+        """Clear the innovation history and any pending sample held by the innovation spike gate."""
 
         self._last_innovation = None
         self._pending_impulse = None
@@ -193,7 +185,7 @@ class HCWRelativeEKFEstimator(Estimator):
     def filter_measurements(
         self, initial_belief: StateBelief, measurements: Sequence[Measurement]
     ) -> list[StateBelief]:
-        """Filter a chronological measurement sequence using 3-point Morse lookahead."""
+        """Filter a chronological measurement sequence, giving the spike gate one sample of lookahead."""
 
         self.reset_gate_state()
         belief, items, beliefs = initial_belief, list(measurements), []
@@ -211,19 +203,20 @@ class HCWRelativeEKFEstimator(Estimator):
         *,
         next_measurement: Measurement | None = None,
     ) -> StateBelief:
-        resolved_gate: MorseGlintGateDiagnostics | None = None
-        if (
-            self.morse_glint_gate is not None
-            and self.morse_glint_gate.enabled
-            and measurement is not None
-            and self._pending_impulse is not None
-        ):
-            prior_belief, pending_meas, prev_innov = self._pending_impulse
+        resolved_gate: InnovationSpikeGateDiagnostics | None = None
+        gate_cfg = self.innovation_spike_gate
+        if gate_cfg is not None and gate_cfg.enabled and measurement is not None and self._pending_impulse is not None:
+            prior_belief, pending_meas, prev_innov, held_state = self._pending_impulse
             self._pending_impulse = None
-            if float(measurement.t_s) >= float(pending_meas.t_s) >= float(prior_belief.last_update_t_s):
+            pending_t_s, belief_t_s = float(pending_meas.t_s), float(belief.last_update_t_s)
+            # Replay only if the caller's belief is the held prediction (possibly propagated), not a replaced one.
+            if float(measurement.t_s) >= belief_t_s >= pending_t_s and np.allclose(
+                self._predict(held_state, belief.covariance, from_t_s=pending_t_s, to_t_s=belief_t_s)[0],
+                belief.state, rtol=1.0e-9, atol=1.0e-12,
+            ):
                 self._last_innovation = prev_innov
-                belief = self.update(prior_belief, pending_meas, float(pending_meas.t_s), next_measurement=measurement)
-                resolved_gate = self.last_update_diagnostics.gate_diagnostics if self.last_update_diagnostics else None
+                belief = self.update(prior_belief, pending_meas, pending_t_s, next_measurement=measurement)
+                resolved_gate = self.last_update_diagnostics.gate_diagnostics
 
         output_t_s, meas_t_s = _validated_update_epochs(belief, measurement, t_s)
 
@@ -287,10 +280,10 @@ class HCWRelativeEKFEstimator(Estimator):
         p_raw_upd = 0.5 * (p_raw_upd + p_raw_upd.T)
 
         x_upd, p_upd, update_applied, gate_diag = x_raw_upd, p_raw_upd, True, resolved_gate
-        if self.morse_glint_gate is not None and self.morse_glint_gate.enabled:
-            x_upd, p_upd, update_applied, gate_diag = self._apply_morse_glint_gate(
+        if gate_cfg is not None and gate_cfg.enabled:
+            x_upd, p_upd, update_applied, gate_diag = self._apply_innovation_spike_gate(
                 belief, measurement, meas_t_s, x_pred, p_pred, x_raw_upd, p_raw_upd,
-                h_jac, r, k_gain, innovation, nis, next_measurement, resolved_gate,
+                h_jac, r, innovation, nis, next_measurement, resolved_gate,
             )
 
         self.last_update_diagnostics = HCWRelativeEKFUpdateDiagnostics(
@@ -308,13 +301,13 @@ class HCWRelativeEKFEstimator(Estimator):
             x_upd, p_upd = self._predict(x_upd, p_upd, from_t_s=meas_t_s, to_t_s=output_t_s)
         return StateBelief(state=x_upd, covariance=p_upd, last_update_t_s=output_t_s)
 
-    def _apply_morse_glint_gate(
+    def _apply_innovation_spike_gate(
         self, belief: StateBelief, measurement: Measurement, meas_t_s: float, x_pred: np.ndarray, p_pred: np.ndarray,
-        x_raw_upd: np.ndarray, p_raw_upd: np.ndarray, h_jac: np.ndarray, r_mat: np.ndarray, k_gain: np.ndarray,
+        x_raw_upd: np.ndarray, p_raw_upd: np.ndarray, h_jac: np.ndarray, r_mat: np.ndarray,
         innovation: np.ndarray, nis: float, next_measurement: Measurement | None,
-        resolved_gate: MorseGlintGateDiagnostics | None,
-    ) -> tuple[np.ndarray, np.ndarray, bool, MorseGlintGateDiagnostics | None]:
-        cfg = self.morse_glint_gate
+        resolved_gate: InnovationSpikeGateDiagnostics | None,
+    ) -> tuple[np.ndarray, np.ndarray, bool, InnovationSpikeGateDiagnostics | None]:
+        cfg = self.innovation_spike_gate
         assert cfg is not None
         prev_innov = (
             np.zeros_like(innovation)
@@ -323,21 +316,20 @@ class HCWRelativeEKFEstimator(Estimator):
         )
         if nis <= cfg.nis_threshold:
             self._last_innovation = np.array(innovation, dtype=float)
-            return x_raw_upd, p_raw_upd, True, resolved_gate or MorseGlintGateDiagnostics(False, "nominal")
+            return x_raw_upd, p_raw_upd, True, resolved_gate or InnovationSpikeGateDiagnostics(False, "nominal")
 
-        if next_measurement is None:
-            if resolved_gate is not None and resolved_gate.classification == "step_maneuver":
-                self._last_innovation = np.zeros_like(innovation)
-                x_step, p_step = self._step_maneuver_update(
-                    x_pred, p_pred, h_jac, r_mat, k_gain, innovation, cfg.step_gain_floor
-                )
-                return x_step, p_step, True, resolved_gate
-            self._pending_impulse = (belief, measurement, prev_innov.copy())
-            pending_diag = MorseGlintGateDiagnostics(False, "pending_impulse", innovation_weight=0.0)
+        y_next = None if next_measurement is None else self._align_next_innovation(x_pred, meas_t_s, next_measurement)
+        if y_next is None:
+            # No usable lookahead: hold the prediction and let the next measurement resolve this sample.
+            self._pending_impulse = (belief, measurement, prev_innov.copy(), x_pred.copy())
+            pending_diag = InnovationSpikeGateDiagnostics(False, "pending_impulse", innovation_weight=0.0)
             return x_pred.copy(), p_pred.copy(), False, pending_diag
 
-        y_next_aligned = self._align_next_innovation(x_pred, p_pred, meas_t_s, innovation, next_measurement)
-        gate = morse_glint_gate(prev_innov, innovation, y_next_aligned, nis=nis, config=cfg)
+        # Compare the three innovations in measurement-noise units so km and km/s components weigh comparably.
+        noise_std = np.sqrt(np.maximum(np.diag(r_mat), 1.0e-30))
+        gate = innovation_spike_gate(
+            prev_innov / noise_std, innovation / noise_std, y_next / noise_std, nis=nis, config=cfg
+        )
         if gate.classification == "glint_rejected":
             # Hold the prediction (consistent with p_pred); glint_weight > 0 blends back toward the raw update.
             weight = float(cfg.glint_weight)
@@ -346,18 +338,25 @@ class HCWRelativeEKFEstimator(Estimator):
             self._last_innovation = prev_innov.copy()
             return x_glint, 0.5 * (p_glint + p_glint.T), bool(weight > 0.0), gate
 
+        # Impulsive step: the prior is stale, so re-initialize from the full-state measurement,
+        # x = x_pred + H^{-1} y and P = H^{-1} R H^{-T}.
         self._last_innovation = np.zeros_like(innovation)
-        x_step, p_step = self._step_maneuver_update(
-            x_pred, p_pred, h_jac, r_mat, k_gain, innovation, cfg.step_gain_floor
-        )
-        return x_step, p_step, True, gate
+        p_step = np.linalg.solve(h_jac, np.linalg.solve(h_jac, r_mat).T)
+        return x_pred + np.linalg.solve(h_jac, innovation), 0.5 * (p_step + p_step.T), True, gate
 
     def _align_next_innovation(
-        self, x_pred: np.ndarray, p_pred: np.ndarray, meas_t_s: float, innovation: np.ndarray,
-        next_measurement: Measurement,
-    ) -> np.ndarray:
-        next_t_s = max(float(next_measurement.t_s), float(meas_t_s))
-        x_next_pred, _ = self._predict(x_pred, p_pred, from_t_s=meas_t_s, to_t_s=next_t_s)
+        self, x_pred: np.ndarray, meas_t_s: float, next_measurement: Measurement
+    ) -> np.ndarray | None:
+        """Innovation of ``next_measurement`` against the prediction, pulled back to ``meas_t_s`` via Phi^{-1}."""
+
+        next_t_s = float(next_measurement.t_s)
+        if next_t_s < meas_t_s:
+            raise ValueError("next_measurement must not precede the current measurement epoch.")
+        z_next = np.asarray(next_measurement.vector, dtype=float).reshape(-1)
+        dim = hcw_measurement_dimension(self.measurement_model)
+        if z_next.size < dim or not np.all(np.isfinite(z_next[:dim])):
+            return None
+        x_next_pred, _ = self._predict(x_pred, self._i6, from_t_s=meas_t_s, to_t_s=next_t_s)
         # _predict leaves Phi(next_t_s - meas_t_s) in the cache; verify instead of trusting the side effect.
         phi_next = self._cached_transition
         if phi_next is None or self._cached_transition_key != (float(self.mean_motion_rad_s), next_t_s - meas_t_s):
@@ -365,24 +364,7 @@ class HCWRelativeEKFEstimator(Estimator):
         h_next_pred = hcw_measurement_vector(
             self.measurement_model, x_next_pred, measurement_origin=self.measurement_origin
         )
-        z_next = np.asarray(next_measurement.vector, dtype=float).reshape(-1)
-        if z_next.size < h_next_pred.size or not np.all(np.isfinite(z_next[: h_next_pred.size])):
-            return innovation.copy()
-        y_next_raw = _measurement_innovation(self.measurement_model, z_next[: h_next_pred.size], h_next_pred)
-        return np.linalg.solve(phi_next, y_next_raw)
-
-    def _step_maneuver_update(
-        self, x_pred: np.ndarray, p_pred: np.ndarray, h_jac: np.ndarray,
-        r_mat: np.ndarray, k_gain: np.ndarray, innovation: np.ndarray, step_gain_floor: float,
-    ) -> tuple[np.ndarray, np.ndarray]:
-        h_right_inv = _right_pseudoinverse(h_jac)
-        gamma = float(step_gain_floor)
-        k_eff = (1.0 - gamma) * k_gain + gamma * h_right_inv
-        delta_x = h_right_inv @ innovation
-        p_inflated = p_pred + np.outer(delta_x, delta_x) + h_right_inv @ r_mat @ h_right_inv.T
-        i_kh = self._i6 - k_eff @ h_jac
-        p_step = i_kh @ p_inflated @ i_kh.T + k_eff @ r_mat @ k_eff.T
-        return x_pred + k_eff @ innovation, 0.5 * (p_step + p_step.T)
+        return np.linalg.solve(phi_next, _measurement_innovation(self.measurement_model, z_next[:dim], h_next_pred))
 
     def _predict(
         self,
@@ -455,7 +437,7 @@ class SSJ2RelativeEKFEstimator(HCWRelativeEKFEstimator):
         earth_radius_km: float = EARTH_RADIUS_KM,
         maximum_supported_eccentricity: float = 0.01,
         numeric_backend: str = "rust",
-        morse_glint_gate: MorseGlintGateConfig | None = None,
+        innovation_spike_gate: InnovationSpikeGateConfig | None = None,
     ) -> SSJ2RelativeEKFEstimator:
         dynamics = RelativeLinearDynamics.ss_j2_from_chief_state(
             chief_state_eci_km_s,
@@ -478,7 +460,7 @@ class SSJ2RelativeEKFEstimator(HCWRelativeEKFEstimator):
             reference_eccentricity=dynamics.reference_eccentricity,
             maximum_supported_eccentricity=maximum_supported_eccentricity,
             numeric_backend=numeric_backend,
-            morse_glint_gate=morse_glint_gate,
+            innovation_spike_gate=innovation_spike_gate,
         )
 
     def _predict(
@@ -729,14 +711,3 @@ def _measurement_innovation(model: str, z: np.ndarray, h: np.ndarray) -> np.ndar
 
 def _wrap_angle_rad(value: float) -> float:
     return float((float(value) + np.pi) % (2.0 * np.pi) - np.pi)
-
-
-def _right_pseudoinverse(h_jac: np.ndarray) -> np.ndarray:
-    """Compute the minimum-norm right inverse H^T (H H^T)^{-1} via SPD linear solve."""
-
-    matrix = np.asarray(h_jac, dtype=float)
-    gram = matrix @ matrix.T
-    try:
-        return np.linalg.solve(gram, matrix).T
-    except np.linalg.LinAlgError:
-        return np.linalg.pinv(matrix)
