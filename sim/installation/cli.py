@@ -177,6 +177,8 @@ def _dispatch(command: str, arguments: list[str], *, paths: InstallationPaths, w
         argv = [str(python), "-m", "sim.spacecraft_twin", *arguments]
     elif command == "review":
         argv = [str(python), "-m", "sim.review", *arguments]
+    elif command == "io":
+        argv = [str(python), "-m", "sim.data_io", *arguments]
     elif command == "runs":
         argv = [str(python), "-m", "sim.execution.run_lifecycle", *arguments]
     elif command == "study":
@@ -277,7 +279,7 @@ def _fswdk_available() -> bool:
 
 
 def _dispatch_commands() -> tuple[str, ...]:
-    commands = ["sim", "review", "runs", "study", "power", "lifetime", "fsw", "hosted", "trainer"]
+    commands = ["sim", "review", "io", "runs", "study", "power", "lifetime", "fsw", "hosted", "trainer"]
     if _fswdk_available():
         commands.append("fswdk")
     if importlib.util.find_spec("sim.spacecraft_twin") is not None:

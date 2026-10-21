@@ -7,6 +7,7 @@ from typing import Any
 import numpy as np
 
 from sim.dynamics.orbit.environment import EARTH_MU_KM3_S2
+from sim.estimation.innovation_recovery import InnovationRecoveryConfig
 from sim.estimation.maneuver_detection import EKFManeuverDetectionConfig
 from sim.knowledge.object_tracking import (
     KnowledgeConditionConfig,
@@ -114,6 +115,10 @@ def _build_knowledge_base(
                         ekf_cfg.get("measurement_origin", estimation.get("measurement_origin", "deputy"))
                     ),
                     integration_substep_s=float(ekf_cfg.get("integration_substep_s", 10.0)),
+                    innovation_recovery=(
+                        None if ekf_cfg.get("innovation_recovery") is None
+                        else InnovationRecoveryConfig(**dict(ekf_cfg["innovation_recovery"]))
+                    ),
                 ),
                 maneuver_detection=_knowledge_maneuver_detection_config(maneuver_detection_cfg),
                 numeric_backend=numeric_backend,

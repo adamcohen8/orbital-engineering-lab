@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from functools import lru_cache
+from threading import RLock
 from typing import Callable
 
 import numpy as np
@@ -51,6 +52,7 @@ from sim.dynamics.orbit.epoch import (
 from sim.dynamics.orbit.frames import (
     FRAME_MODEL_IAU76_80_EOP,
     _interp_eop,
+    _interp_eop_nutation,
     _load_nut80_table,
     _validate_eop_elapsed_interval,
     eci_to_ecef_rotation,
@@ -86,6 +88,21 @@ _IDENTITY3 = np.eye(3, dtype=float)
 _DUMMY_MATRIX = np.zeros((1, 1), dtype=float)
 _DUMMY_VECTOR = np.zeros(1, dtype=float)
 rk4_zonal_step_state = None
+_RK4_ZONAL_KERNEL_LOCK = RLock()
+
+
+def _load_rk4_zonal_step_state():
+    global rk4_zonal_step_state
+    kernel = rk4_zonal_step_state
+    if kernel is None:
+        with _RK4_ZONAL_KERNEL_LOCK:
+            kernel = rk4_zonal_step_state
+            if kernel is None:
+                from sim.acceleration.kernels.orbit import rk4_zonal_step_state as accelerated_step
+
+                kernel = accelerated_step
+                rk4_zonal_step_state = kernel
+    return kernel
 
 
 @lru_cache(maxsize=1)
@@ -381,7 +398,8 @@ def lift_plugin(t_s: float, x_eci: np.ndarray, env: dict, ctx: OrbitContext) -> 
 
 def srp_plugin(t_s: float, x_eci: np.ndarray, env: dict, ctx: OrbitContext) -> np.ndarray:
     sun_position = env.get("sun_pos_eci_km")
-    if env.get("_rust_numeric_backend") == "rust" and sun_position is not None:
+    ellipsoid_shadow = str(env.get("srp_shadow_model", "")).lower() == "conical_ellipsoid"
+    if env.get("_rust_numeric_backend") == "rust" and sun_position is not None and not ellipsoid_shadow:
         shadow_name = str(env.get("srp_shadow_model", "conical")).lower()
         shadow_model = 0 if shadow_name in ("none", "off", "disabled") else 1 if shadow_name in ("cylindrical", "cylinder") else 2
         from sim.rust_environment_backend import try_srp_acceleration
@@ -394,7 +412,7 @@ def srp_plugin(t_s: float, x_eci: np.ndarray, env: dict, ctx: OrbitContext) -> n
         )
         if native is not None:
             return native
-    if acceleration_enabled_from_mode() and sun_position is not None:
+    if acceleration_enabled_from_mode() and sun_position is not None and not ellipsoid_shadow:
         shadow_name = str(env.get("srp_shadow_model", "conical")).lower()
         shadow_model = (
             0 if shadow_name in ("none", "off", "disabled") else 1 if shadow_name in ("cylindrical", "cylinder") else 2
@@ -723,6 +741,8 @@ class OrbitPropagator:
         else:
             times = np.asarray(step_times, dtype="<f8").reshape(-1)
         ends = [int(value) for value in sample_ends]
+        from sim.dynamics.orbit.rust_precision_force_plan import immutable_sampled_stages
+        stage_callback = immutable_sampled_stages(self, stage_callback, np.asarray(x_eci,dtype=float), times, widths, ends)
         density_callback = getattr(stage_callback, "_simple_drag_density_callback", None)
         if (callable(density_callback) and not getattr(stage_callback, "native_preparation", False)
                 and callable(getattr(force_context, "supports_simple_drag_stages", None))):
@@ -935,7 +955,7 @@ class OrbitPropagator:
         acceleration_enabled = self._acceleration_enabled()
         if acceleration_enabled and fast_flags is not None:
             include_j2, include_j3, include_j4 = fast_flags
-            return rk4_zonal_step_state(
+            return _load_rk4_zonal_step_state()(
                 np.asarray(x_eci, dtype=float).reshape(6),
                 float(dt_s),
                 np.asarray(command_accel_eci_km_s2, dtype=float).reshape(3),
@@ -1012,13 +1032,10 @@ class OrbitPropagator:
         return rk4_step_state(deriv_fn=deriv, t_s=t_s, x=x_eci, dt_s=dt_s)
 
     def _acceleration_enabled(self) -> bool:
-        global rk4_zonal_step_state
         if self._acceleration_enabled_cache is None:
             self._acceleration_enabled_cache = bool(acceleration_settings_from_mode(self.acceleration_mode).enabled)
-        if self._acceleration_enabled_cache and rk4_zonal_step_state is None:
-            from sim.acceleration.kernels.orbit import rk4_zonal_step_state as accelerated_step
-
-            rk4_zonal_step_state = accelerated_step
+        if self._acceleration_enabled_cache:
+            _load_rk4_zonal_step_state()
         return bool(self._acceleration_enabled_cache)
 
     def _zonal_rk4_fast_path_flags(self) -> tuple[bool, bool, bool] | None:
@@ -1117,11 +1134,16 @@ class OrbitPropagator:
                 or float(env.get("ddeps_rad", 0.0) or 0.0) != 0.0
             )
             if jd_utc_start is not None and (has_eop_path or has_manual_eop):
+                dp, de = 0.0, 0.0
                 if has_eop_path:
                     jd_utc = float(jd_utc_start) + float(t_s) / 86400.0
                     xp_arcsec, yp_arcsec, dut1_s, dat_s = _interp_eop(
                         jd_utc - 2400000.5,
                         str(eop_path),
+                        extrapolation=str(env.get("eop_extrapolation", "error") or "error"),
+                    )
+                    dp, de = _interp_eop_nutation(
+                        jd_utc - 2400000.5, str(eop_path),
                         extrapolation=str(env.get("eop_extrapolation", "error") or "error"),
                     )
                 else:
@@ -1143,8 +1165,8 @@ class OrbitPropagator:
                     float(yp_arcsec),
                     float(dut1_s),
                     float(dat_s),
-                    float(env.get("ddpsi_rad", 0.0) or 0.0),
-                    float(env.get("ddeps_rad", 0.0) or 0.0),
+                    float(env.get("ddpsi_rad", 0.0) or 0.0) + dp,
+                    float(env.get("ddeps_rad", 0.0) or 0.0) + de,
                     nutation_coefficients,
                     nutation_terms,
                 )
@@ -1309,6 +1331,8 @@ class OrbitPropagator:
         env: dict,
         ctx: OrbitContext,
     ) -> np.ndarray | None:
+        if str(env.get("srp_shadow_model", "")).lower() == "conical_ellipsoid":
+            return None  # This older fused kernel has spherical eclipse geometry.
         if not self._acceleration_enabled() or str(self.integrator).strip().lower() != "rk4":
             return None
         supported = {
@@ -1636,6 +1660,8 @@ class OrbitPropagator:
         env: dict,
         ctx: OrbitContext,
     ) -> np.ndarray | None:
+        if str(env.get("srp_shadow_model", "")).lower() == "conical_ellipsoid":
+            return None
         integrator_name = str(self.integrator).strip().lower()
         if not self._acceleration_enabled() or integrator_name not in {
             "rk4",

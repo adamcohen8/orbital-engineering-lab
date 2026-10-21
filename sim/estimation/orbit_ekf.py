@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from threading import RLock
 
 import numpy as np
 
@@ -8,11 +9,19 @@ from sim.acceleration.settings import acceleration_settings_from_mode
 from sim.core.interfaces import Estimator
 from sim.core.models import Measurement, StateBelief
 from sim.dynamics.orbit.two_body import propagate_two_body_rk4
+from sim.estimation.innovation_recovery import (
+    FullStateInnovationRecovery,
+    InnovationRecoveryConfig,
+    InnovationRecoveryDiagnostics,
+    validate_recovery_config,
+)
 from sim.numeric_backend import normalize_numeric_backend
 
 orbit_ekf_numerical_jacobian_kernel = None
 propagate_two_body_rk4_kernel = None
 rust_estimation_backend = None
+_ESTIMATION_KERNEL_LOCK = RLock()
+_RUST_ESTIMATION_BACKEND_LOCK = RLock()
 
 
 def _solve_innovation_gain_and_vector(
@@ -36,24 +45,32 @@ def _load_acceleration_kernels() -> None:
     global orbit_ekf_numerical_jacobian_kernel, propagate_two_body_rk4_kernel
     if propagate_two_body_rk4_kernel is not None:
         return
-    from sim.acceleration.kernels.estimation import (
-        orbit_ekf_numerical_jacobian_kernel as accelerated_jacobian,
-    )
-    from sim.acceleration.kernels.estimation import (
-        propagate_two_body_rk4_kernel as accelerated_propagate,
-    )
+    with _ESTIMATION_KERNEL_LOCK:
+        if propagate_two_body_rk4_kernel is not None:
+            return
+        from sim.acceleration.kernels.estimation import (
+            orbit_ekf_numerical_jacobian_kernel as accelerated_jacobian,
+        )
+        from sim.acceleration.kernels.estimation import (
+            propagate_two_body_rk4_kernel as accelerated_propagate,
+        )
 
-    orbit_ekf_numerical_jacobian_kernel = accelerated_jacobian
-    propagate_two_body_rk4_kernel = accelerated_propagate
+        orbit_ekf_numerical_jacobian_kernel = accelerated_jacobian
+        propagate_two_body_rk4_kernel = accelerated_propagate
 
 
 def _load_rust_estimation_backend():
     global rust_estimation_backend
-    if rust_estimation_backend is None:
-        from sim import rust_estimation_backend as backend
+    backend = rust_estimation_backend
+    if backend is None:
+        with _RUST_ESTIMATION_BACKEND_LOCK:
+            backend = rust_estimation_backend
+            if backend is None:
+                from sim import rust_estimation_backend as loaded_backend
 
-        rust_estimation_backend = backend
-    return rust_estimation_backend
+                backend = loaded_backend
+                rust_estimation_backend = backend
+    return backend
 
 
 @dataclass(frozen=True)
@@ -65,6 +82,7 @@ class OrbitEKFUpdateDiagnostics:
     nis: float = float("nan")
     predicted_cov_trace: float = float("nan")
     posterior_cov_trace: float = float("nan")
+    recovery_diagnostics: InnovationRecoveryDiagnostics | None = None
 
 
 @dataclass
@@ -74,6 +92,8 @@ class OrbitEKFEstimator(Estimator):
     process_noise_diag: np.ndarray
     meas_noise_diag: np.ndarray
     last_update_diagnostics: OrbitEKFUpdateDiagnostics | None = field(default=None, init=False, repr=False)
+    innovation_recovery: InnovationRecoveryConfig | None = field(default=None, kw_only=True)
+    _innovation_recovery: FullStateInnovationRecovery = field(default_factory=FullStateInnovationRecovery, init=False, repr=False)
     acceleration_mode: str = "off"
     numeric_backend: str = "rust"
     _q: np.ndarray = field(default_factory=lambda: np.zeros((6, 6)), init=False, repr=False)
@@ -101,7 +121,19 @@ class OrbitEKFEstimator(Estimator):
         if self._acceleration_enabled_value:
             _load_acceleration_kernels()
 
+        validate_recovery_config(self.innovation_recovery, "state")
+
+    def reset_innovation_recovery(self) -> None:
+        """Discard pending anomaly history after an external track/reference reset."""
+        self._innovation_recovery.reset()
+
     def update(self, belief: StateBelief, measurement: Measurement | None, t_s: float) -> StateBelief:
+        if self.innovation_recovery is not None and self.innovation_recovery.enabled:
+            return self._innovation_recovery.update(self, belief, measurement, t_s)
+        self._innovation_recovery.reset()
+        return self._update_standard(belief, measurement, t_s)
+
+    def _update_standard(self, belief: StateBelief, measurement: Measurement | None, t_s: float) -> StateBelief:
         output_t_s = float(t_s)
         belief_t_s = float(belief.last_update_t_s)
         if not np.isfinite(output_t_s) or not np.isfinite(belief_t_s) or output_t_s < belief_t_s:

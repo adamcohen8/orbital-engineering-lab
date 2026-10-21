@@ -8,6 +8,12 @@ from sim.core.interfaces import Estimator
 from sim.core.models import Measurement, StateBelief
 from sim.dynamics.orbit.environment import EARTH_J2, EARTH_RADIUS_KM
 from sim.dynamics.orbit.relative_linear import RelativeLinearDynamics
+from sim.estimation.innovation_recovery import (
+    FullStateInnovationRecovery,
+    InnovationRecoveryConfig,
+    InnovationRecoveryDiagnostics,
+    validate_recovery_config,
+)
 from sim.estimation.orbit_ekf import _solve_innovation_gain_and_vector
 from sim.numeric_backend import normalize_numeric_backend
 
@@ -31,6 +37,7 @@ class HCWRelativeEKFUpdateDiagnostics:
     nis: float = float("nan")
     predicted_cov_trace: float = float("nan")
     posterior_cov_trace: float = float("nan")
+    recovery_diagnostics: InnovationRecoveryDiagnostics | None = None
 
 
 @dataclass
@@ -50,6 +57,8 @@ class HCWRelativeEKFEstimator(Estimator):
     meas_noise_covariance: np.ndarray | None = None
     numeric_backend: str = "rust"
     last_update_diagnostics: HCWRelativeEKFUpdateDiagnostics | None = field(default=None, init=False, repr=False)
+    innovation_recovery: InnovationRecoveryConfig | None = field(default=None, kw_only=True)
+    _innovation_recovery: FullStateInnovationRecovery = field(default_factory=FullStateInnovationRecovery, init=False, repr=False)
     _q: np.ndarray = field(default_factory=lambda: np.zeros((6, 6)), init=False, repr=False)
     _r: np.ndarray = field(default_factory=lambda: np.zeros((6, 6)), init=False, repr=False)
     _i6: np.ndarray = field(default_factory=lambda: np.eye(6), init=False, repr=False)
@@ -63,6 +72,7 @@ class HCWRelativeEKFEstimator(Estimator):
             raise ValueError("dt_s must be positive.")
         self.process_noise_diag = _diag6(self.process_noise_diag, "process_noise_diag")
         self.measurement_model = normalize_hcw_measurement_model(self.measurement_model)
+        validate_recovery_config(self.innovation_recovery, self.measurement_model)
         self.measurement_origin = _normalize_measurement_origin(self.measurement_origin)
         self.numeric_backend = _normalize_numeric_backend(self.numeric_backend)
         meas_dim = hcw_measurement_dimension(self.measurement_model)
@@ -94,7 +104,17 @@ class HCWRelativeEKFEstimator(Estimator):
             )
         )
 
+    def reset_innovation_recovery(self) -> None:
+        """Discard pending anomaly history after an external track/reference reset."""
+        self._innovation_recovery.reset()
+
     def update(self, belief: StateBelief, measurement: Measurement | None, t_s: float) -> StateBelief:
+        if self.innovation_recovery is not None and self.innovation_recovery.enabled:
+            return self._innovation_recovery.update(self, belief, measurement, t_s)
+        self._innovation_recovery.reset()
+        return self._update_standard(belief, measurement, t_s)
+
+    def _update_standard(self, belief: StateBelief, measurement: Measurement | None, t_s: float) -> StateBelief:
         output_t_s, meas_t_s = _validated_update_epochs(belief, measurement, t_s)
 
         x_pred, p_pred = self._predict(belief.state, belief.covariance, from_t_s=belief.last_update_t_s, to_t_s=meas_t_s)
@@ -239,6 +259,7 @@ class SSJ2RelativeEKFEstimator(HCWRelativeEKFEstimator):
         earth_radius_km: float = EARTH_RADIUS_KM,
         maximum_supported_eccentricity: float = 0.01,
         numeric_backend: str = "rust",
+        innovation_recovery: InnovationRecoveryConfig | None = None,
     ) -> SSJ2RelativeEKFEstimator:
         dynamics = RelativeLinearDynamics.ss_j2_from_chief_state(
             chief_state_eci_km_s,
@@ -261,6 +282,7 @@ class SSJ2RelativeEKFEstimator(HCWRelativeEKFEstimator):
             reference_eccentricity=dynamics.reference_eccentricity,
             maximum_supported_eccentricity=maximum_supported_eccentricity,
             numeric_backend=numeric_backend,
+            innovation_recovery=innovation_recovery,
         )
 
     def _predict(

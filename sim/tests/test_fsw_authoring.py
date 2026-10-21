@@ -185,6 +185,8 @@ def test_public_scaffold_rejects_symlink_escape_before_writing(tmp_path, link_ki
         scaffold_candidate("safe_candidate", workspace_root=root)
     assert set(destination.rglob("*")) == before
     assert not list(outside.iterdir())
+    if link_kind == "file":
+        (destination / "candidate.yaml").unlink()
 
 
 def test_init_rejects_receipt_directory_symlink_escape(tmp_path):

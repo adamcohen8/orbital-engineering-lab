@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from threading import RLock
 
 import numpy as np
 
@@ -23,6 +24,21 @@ _FACET_MODE_NONE = 0
 _FACET_MODE_SCALAR = 1
 _FACET_MODE_FACETS = 2
 _PROPAGATE_ATTITUDE_BUILTIN_DISTURBANCES_KERNEL = None
+_DISTURBANCE_KERNEL_LOCK = RLock()
+
+
+def _load_builtin_disturbances_kernel():
+    global _PROPAGATE_ATTITUDE_BUILTIN_DISTURBANCES_KERNEL
+    kernel = _PROPAGATE_ATTITUDE_BUILTIN_DISTURBANCES_KERNEL
+    if kernel is None:
+        with _DISTURBANCE_KERNEL_LOCK:
+            kernel = _PROPAGATE_ATTITUDE_BUILTIN_DISTURBANCES_KERNEL
+            if kernel is None:
+                from sim.acceleration.kernels.attitude import propagate_attitude_builtin_disturbances_kernel
+
+                kernel = propagate_attitude_builtin_disturbances_kernel
+                _PROPAGATE_ATTITUDE_BUILTIN_DISTURBANCES_KERNEL = kernel
+    return kernel
 
 
 def _cross3(a: np.ndarray, b: np.ndarray) -> np.ndarray:
@@ -195,8 +211,6 @@ class DisturbanceTorqueModel:
     ) -> tuple[np.ndarray, np.ndarray] | None:
         """Use the numeric built-in torque plan, or return ``None`` for the Python fallback."""
 
-        global _PROPAGATE_ATTITUDE_BUILTIN_DISTURBANCES_KERNEL
-
         config = self.config
         selected_backend = normalize_numeric_backend(
             config.numeric_backend if numeric_backend is None else numeric_backend,
@@ -305,11 +319,8 @@ class DisturbanceTorqueModel:
             _add_guardrail_counts(rust_result[2])
             return rust_result[0], rust_result[1]
 
-        if _PROPAGATE_ATTITUDE_BUILTIN_DISTURBANCES_KERNEL is None:
-            from sim.acceleration.kernels.attitude import propagate_attitude_builtin_disturbances_kernel
-
-            _PROPAGATE_ATTITUDE_BUILTIN_DISTURBANCES_KERNEL = propagate_attitude_builtin_disturbances_kernel
-        q_next, omega_next, counts = _PROPAGATE_ATTITUDE_BUILTIN_DISTURBANCES_KERNEL(
+        kernel = _load_builtin_disturbances_kernel()
+        q_next, omega_next, counts = kernel(
             np.asarray(quat_bn, dtype=float).reshape(4),
             np.asarray(omega_body_rad_s, dtype=float).reshape(3),
             self._compiled_inertia,

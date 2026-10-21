@@ -7,7 +7,7 @@ security, legal, export-control, or mission-assurance process.
 ## Supported Versions
 
 - Public releases: security fixes target the current public release line,
-  `v0.34.0` once published. During release preparation, `v0.33.1` remains
+  `v0.35.0` once published. During release preparation, `v0.34.0` remains
   the published support target.
 - Private/Pro releases: security fixes target the active customer-supported
   release line or pilot branch named in the agreement.
@@ -22,6 +22,25 @@ Commands below use `python` after activating the environment. See
 [Installing OEL](../installation.md) for explicit Windows PowerShell and
 macOS/Linux paths and for selecting the constraints file matching the
 interpreter.
+
+## Pillow Security Baseline
+
+The unsuppressed v0.35.0 preparation audit found eight advisories in Pillow
+12.3.0: CVE-2026-112895, CVE-2026-112400, CVE-2026-112397,
+CVE-2026-112896, CVE-2026-112897, CVE-2026-112395, CVE-2026-112404,
+and CVE-2026-112899. Each reports Pillow 13.0.0 as the fix. Retain that failed
+audit; it does not qualify a release. The regenerated candidate must pass a
+fresh unsuppressed audit before signing.
+
+[Pillow 13 metadata](https://pypi.org/project/pillow/13.0.0/) requires Python
+3.11+, and the [upstream release notes](https://pillow.readthedocs.io/en/stable/releasenotes/13.0.0.html)
+record removal of Python 3.10 support. Python 3.11-3.14 constraints now pin
+Pillow 13.0.0. No fixed 12.x backport was available during this preparation.
+Python 3.10 retains Pillow 12.3.0 for legacy functional compatibility only:
+dependency security qualification (including core/media/full) is blocked.
+The doctor warns and recommends 3.11+, and no 3.10 managed bundle or clean-audit claim is provided. This is not
+an audit exception or suppression. Runtime/OS qualification still requires
+its own current evidence.
 
 ## SBOM
 
@@ -76,7 +95,7 @@ python tools/build_installable_release.py \
   --edition public --channel stable \
   --private-key <offline-release-private-key.json> \
   --public-keys <trusted-release-keys.json> \
-  --supply-chain-evidence outputs/supply_chain \
+  --supply-chain-evidence <passing-public-source-audit-evidence> \
   --wheelhouse <exact-platform-reviewed-wheelhouse> \
   --platform <Windows-Linux-or-Darwin> --architecture <machine> \
   --base-url https://github.com/adamcohen8/orbital-engineering-lab/releases/download/v0.30.1 \

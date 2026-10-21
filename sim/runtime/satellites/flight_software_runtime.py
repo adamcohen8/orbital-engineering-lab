@@ -426,6 +426,32 @@ class SatelliteFlightSoftwareRuntime:
             if sensor_due:
                 self._next_sensor_ns += (missed_sensor_releases + 1) * self.sensor_period_ns
 
+    def passive_prediction_boundaries_ns(self, *, start_time_ns: int, end_time_ns: int) -> list[int] | None:
+        """Read-only calendar for orbit prediction with the built-in non-actuating stack.
+
+        This does not execute or export FSW telemetry. Only the exact built-in
+        passive stack with no hardware, queued inputs, publishers, requested
+        releases or checkpoint clock offset has a state-independent calendar.
+        Every other runtime must execute the ordinary scheduler. The passive
+        stack's optional navigation reporting never commands physical devices.
+        """
+        from sim.flight_software.reference_stacks import PassiveFlightSoftwareStack
+
+        if (type(self) is not SatelliteFlightSoftwareRuntime or type(self.stack) is not PassiveFlightSoftwareStack
+                or self.hardware or self._clock_offset_ns or self._shutdown
+                or self.inputs.next_delivery_time_ns is not None or self._input_publishers
+                or self._requested_release_ns or self._publisher_poll_requested_ns is not None
+                or "_step" in vars(self.stack) or "next_hard_boundary_ns" in vars(self)):
+            return None
+        if start_time_ns < 0 or end_time_ns < start_time_ns:
+            raise ValueError("prediction calendar requires ordered nonnegative times")
+        boundaries = {int(end_time_ns)}
+        for next_release, period in ((self._next_task_ns, self.task_period_ns),
+                                     (self._next_sensor_ns, self.sensor_period_ns)):
+            first = next_release + max(0, (start_time_ns - next_release) // period + 1) * period
+            boundaries.update(range(first, end_time_ns + 1, period))
+        return sorted(boundaries)
+
     def next_hard_boundary_ns(self, *, after_time_ns: int, before_time_ns: int) -> int:
         """Return the next task, delivery, command start, or expiry boundary."""
 

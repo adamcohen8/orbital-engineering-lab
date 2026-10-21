@@ -30,6 +30,9 @@ The public core includes:
   trusted lifecycle validation, component tests, and one deterministic serial
   smoke run;
 - scenario YAML, CLI, Python API, review-store queries, and plotting;
+- bounded offline [modular data IO](data-io.md), native catalog scenario
+  materialization and completed-review exports; review-to-mean-element fitting
+  remains a separate Pro `tracking_od` operation;
 - opt-in custom ONP force-model plugins for trusted local modules, with
   module-path and runtime-output validation;
 - content-bound review slices for selected completed-run evidence;
@@ -106,6 +109,9 @@ review-ready packaging:
   force-configurable impulsive coast/burn studies and reference comparisons;
 - Monte Carlo, sensitivity, calibrated covariance analysis, and campaign
   orchestration;
+- opt-in bounded thread transports for supported object steps, campaigns,
+  controller studies, and Scale execution; existing Pro gates still apply,
+  process transport remains the default, and public scenarios remain serial;
 - controller benchmarks, comparison reports, optimization, and gain tuning;
 - OEL Scale catalog screening, refinement, operational stores, and synthetic
   data generation;

@@ -68,6 +68,7 @@ class SGP4BatchResult:
     position_teme_km: np.ndarray
     velocity_teme_km_s: np.ndarray
     errors: np.ndarray
+    execution_metadata: dict[str, object] = field(default_factory=dict)
 
     @property
     def success(self) -> np.ndarray:

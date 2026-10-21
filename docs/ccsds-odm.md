@@ -5,6 +5,10 @@ and Orbit Mean-Elements Message (OMM) 3.0 KVN profile. The contract identifier
 is `oel.ccsds-opm-omm-kvn.v0.1`. These are inspection and interchange surfaces;
 they do not execute a scenario.
 
+The separate [modular IO adapter](data-io.md) adds bounded ODM 2.0/3.0 XML/KVN
+conversion, GP catalogs, native OGP materialization and saved-result product
+exports. Existing `sim.ccsds` contracts remain unchanged.
+
 Supported OPM content includes one Cartesian state, optional Keplerian and
 spacecraft parameters, one complete Cartesian covariance, repeated maneuver
 blocks, comments, units, and `USER_DEFINED_*` fields. An Earth/EME2000/UTC OPM

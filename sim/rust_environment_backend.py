@@ -40,7 +40,13 @@ def try_create_environment_context(nutation_coefficients: Any, nutation_terms: A
     The arrays are copied once at this boundary.  Python remains responsible
     for selecting and validating the source tables and for interpolating EOP.
     """
-    native = getattr(_extension(), "ONPEnvironmentContext", None)
+    extension = _extension()
+    # Older contexts embed the legacy apparent sidereal-time calculation.
+    # Retain the authoritative Python preparation rather than silently mixing
+    # a corrected frame owner with an incompatible installed native wheel.
+    if getattr(extension, "ONP_IAU76_80_SIDEREAL_VERSION", 0) != 2:
+        return None
+    native = getattr(extension, "ONPEnvironmentContext", None)
     if not callable(native):
         return None
     coefficients = np.asarray(nutation_coefficients, dtype=np.float64).reshape(-1)

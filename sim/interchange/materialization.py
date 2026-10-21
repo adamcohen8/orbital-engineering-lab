@@ -41,6 +41,30 @@ class OGPMaterializationError(ValueError):
     """Raised when native mean elements cannot be safely materialized into OGP YAML."""
 
 
+def inspect_state_materialization(product: Mapping[str, Any], *, source_path: str | Path) -> dict[str, Any]:
+    """Read-only shared promotion/compatibility decision for state consumers."""
+    report = validate_product(product, source_path=source_path)
+    specs = None
+    blockers = [issue.to_dict() for issue in report.issues if issue.severity in {"error", "blocker"}]
+    if product.get("product_kind") not in {"oel.state_estimate", "oel.completed_run_state"}:
+        blockers.append(
+            {"code": "compatibility.product_kind", "message": "Use the dedicated adapter for this product kind."}
+        )
+    if report.valid:
+        blockers.extend(_onp_compatibility_errors(product))
+        try:
+            specs = _continued_object_specs(dict(product.get("payload", {}) or {}))
+        except ValueError as exc:
+            blockers.append({"code": "compatibility.resource_state", "message": str(exc)})
+    return {
+        "valid": report.valid,
+        "promotable": report.promotable and not blockers,
+        "blockers": blockers,
+        "object_specs": specs,
+    }
+
+
+
 def materialize_onp(
     state_product: str | Path,
     *,

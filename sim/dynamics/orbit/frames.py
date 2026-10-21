@@ -124,6 +124,16 @@ class FrameContext:
         data["nutation_corrections_applied"] = bool(
             sampled.eop_rotation_available and (float(sampled.ddpsi_rad) != 0.0 or float(sampled.ddeps_rad) != 0.0)
         )
+        if sampled.eop_rotation_available and sampled.eop_path:
+            dp, de = _interp_eop_nutation(
+                float(sampled.jd_utc_start) + float(sample_t_s) / _DAYSEC - _MJD0,
+                sampled.eop_path, extrapolation=sampled.eop_extrapolation,
+            )
+            data["effective_ddpsi_rad"] = sampled.ddpsi_rad + dp
+            data["effective_ddeps_rad"] = sampled.ddeps_rad + de
+            data["nutation_corrections_applied"] = bool(
+                data["effective_ddpsi_rad"] != 0.0 or data["effective_ddeps_rad"] != 0.0
+            )
         return data
 
 
@@ -138,7 +148,7 @@ def _eop_file_signature(path_value: str) -> tuple[int, int, int, int]:
 @lru_cache(maxsize=16)
 def _eop_table_sha256_cached(path_value: str, signature: tuple[int, int, int, int]) -> str:
     digest = hashlib.sha256()
-    for array in _load_eop_table(path_value):
+    for array in _load_eop_records_cached(path_value, signature):
         normalized = np.ascontiguousarray(np.asarray(array, dtype="<f8"))
         digest.update(normalized.dtype.str.encode("ascii"))
         digest.update(normalized.tobytes(order="C"))
@@ -285,15 +295,17 @@ def _rz(angle_rad: float) -> np.ndarray:
 
 
 @lru_cache(maxsize=4)
-def _load_eop_table_cached(
+def _load_eop_records_cached(
     eop_path: str,
     signature: tuple[int, int, int, int],
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, ...]:
     mjd = []
     xp_arcsec = []
     yp_arcsec = []
     dut1_s = []
     dat_s = []
+    ddpsi_rad = []
+    ddeps_rad = []
     with Path(eop_path).expanduser().resolve().open("r", encoding="utf-8", errors="ignore") as f:
         in_data = False
         for raw in f:
@@ -309,27 +321,64 @@ def _load_eop_table_cached(
             if len(parts) < 13:
                 continue
             try:
-                mjd.append(float(parts[3]))
-                xp_arcsec.append(float(parts[4]))
-                yp_arcsec.append(float(parts[5]))
-                dut1_s.append(float(parts[6]))
-                dat_s.append(float(parts[12]))
+                # EOP-All equinox corrections are in arcseconds (columns 8, 9
+                # after LOD), not the later celestial-pole dX/dY columns.
+                values = [float(parts[i]) for i in (3, 4, 5, 6, 12, 8, 9)]
             except ValueError:
                 continue
+            mjd.append(values[0])
+            xp_arcsec.append(values[1])
+            yp_arcsec.append(values[2])
+            dut1_s.append(values[3])
+            dat_s.append(values[4])
+            ddpsi_rad.append(values[5] * _ARCSEC_TO_RAD)
+            ddeps_rad.append(values[6] * _ARCSEC_TO_RAD)
     if not mjd:
         raise ValueError(f"No EOP records parsed from {eop_path}")
-    return (
+    arrays = (
         np.array(mjd, dtype=float),
         np.array(xp_arcsec, dtype=float),
         np.array(yp_arcsec, dtype=float),
         np.array(dut1_s, dtype=float),
         np.array(dat_s, dtype=float),
+        np.array(ddpsi_rad, dtype=float),
+        np.array(ddeps_rad, dtype=float),
     )
+    # Cached EOP records are shared by every object in a campaign.  Prevent a
+    # caller from accidentally mutating the process-wide cache while another
+    # object is interpolating the same table.
+    for array in arrays:
+        array.setflags(write=False)
+    return arrays
+
+
+@lru_cache(maxsize=4)
+def _load_eop_table_cached(eop_path: str, signature: tuple[int, int, int, int]):
+    """Keep the existing five-column interpolation contract."""
+    return _load_eop_records_cached(eop_path, signature)[:5]
+
+
+def _interp_eop_nutation(mjd_utc: float, eop_path: str, *, extrapolation: str = "error"):
+    path = _eop_cache_path(eop_path)
+    return _interp_eop_nutation_cached(mjd_utc, path, _eop_file_signature(path), extrapolation=extrapolation)
+
+
+@lru_cache(maxsize=8192)
+def _interp_eop_nutation_cached(mjd_utc, eop_path, signature, *, extrapolation="error"):
+    # Share coverage and leap-second guards with the established EOP path.
+    _interp_eop_cached(mjd_utc, eop_path, signature, extrapolation=extrapolation)
+    records = _load_eop_records_cached(eop_path, signature)
+    return tuple(float(np.interp(mjd_utc, records[0], column)) for column in records[5:])
 
 
 def _load_eop_table(eop_path: str) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     resolved = _eop_cache_path(eop_path)
     return _load_eop_table_cached(resolved, _eop_file_signature(resolved))
+
+
+def _load_eop_stage_table(eop_path: str) -> tuple[np.ndarray, ...]:
+    resolved = _eop_cache_path(eop_path)
+    return _load_eop_records_cached(resolved, _eop_file_signature(resolved))
 
 
 @lru_cache(maxsize=16)
@@ -629,6 +678,37 @@ def _precession_nutation_matrix_approx(
     )
 
 
+def _gmst_iau1982_split(jd_utc_start: float, elapsed_s: float, dut1_s: float) -> float:
+    """IAU 1982 GMST with UTC epoch and elapsed/UT1 seconds kept separate.
+
+    IERS 1996, p. 21: evaluate GMST-UT1 in centuries and add only the
+    fractional UT1 day. Adding DUT1 or a light-time interval to a large JD
+    first needlessly quantizes Earth rotation at the centimeter scale.
+    """
+    offset_days = (float(elapsed_s) + float(dut1_s)) / _DAYSEC
+    centuries = ((float(jd_utc_start) - _J2000) + offset_days) / _JULIAN_CENTURY_DAYS
+    fractional_seconds = _DAYSEC * (math.fmod(float(jd_utc_start), 1.0) + math.fmod(offset_days, 1.0))
+    gmst_seconds = (24110.54841 - _DAYSEC / 2.0
+                    + (8640184.812866 + (0.093104 - 6.2e-6 * centuries) * centuries) * centuries
+                    + fractional_seconds)
+    return float((gmst_seconds * (2.0 * math.pi / _DAYSEC)) % (2.0 * math.pi))
+
+
+def _equation_of_equinoxes_iau1994(jd_tt: float, dpsi_rad: float) -> float:
+    """IAU 1980 nutation with the IAU 1994 resolution C7 complementary terms.
+
+    The longitude term uses mean obliquity. The two complementary terms
+    become active at 1997-02-27 00:00 UTC (IERS 1996/Orekit convention).
+    """
+    centuries = (float(jd_tt) - _J2000) / _JULIAN_CENTURY_DAYS
+    mean_eps = (84381.448 + (-46.8150 + (-0.00059 + 0.001813 * centuries) * centuries) * centuries) * _ARCSEC_TO_RAD
+    complementary = 0.0
+    if float(jd_tt) >= 2450506.5 + 62.184 / _DAYSEC:
+        omega = _fundamental_args_iau1980(centuries)[4]
+        complementary = (0.00264 * math.sin(omega) + 0.000063 * math.sin(2.0 * omega)) * _ARCSEC_TO_RAD
+    return float(dpsi_rad) * math.cos(mean_eps) + complementary
+
+
 def apparent_sidereal_time_hpop_like(
     jd_utc: float,
     eop_path: str | None = None,
@@ -652,20 +732,23 @@ def apparent_sidereal_time_hpop_like(
             eop_path,
             extrapolation=eop_extrapolation,
         )
+        dp, de = _interp_eop_nutation(mjd_utc, eop_path, extrapolation=eop_extrapolation)
+        ddpsi_rad += dp
+        ddeps_rad += de
     else:
         dut1_s = 0.0 if dut1_s is None else float(dut1_s)
         if dat_s is None:
             dat_s = (float(tt_minus_utc_s) if tt_minus_utc_s is not None else _DEFAULT_TT_MINUS_UTC_S) - 32.184
         else:
             dat_s = float(dat_s)
-    jd_ut1 = float(jd_utc) + float(dut1_s) / _DAYSEC
     jd_tt = float(jd_utc) + (float(dat_s) + 32.184) / _DAYSEC
-    _rbpn, dpsi, true_obliquity = _precession_nutation_matrix_approx(
+    _rbpn, dpsi, _true_obliquity = _precession_nutation_matrix_approx(
         jd_tt,
         ddpsi_rad=ddpsi_rad,
         ddeps_rad=ddeps_rad,
     )
-    return float((gmst_angle_rad_from_jd(jd_ut1) + dpsi * math.cos(true_obliquity)) % (2.0 * math.pi))
+    return float((_gmst_iau1982_split(float(jd_utc), 0.0, float(dut1_s))
+                  + _equation_of_equinoxes_iau1994(jd_tt, dpsi)) % (2.0 * math.pi))
 
 
 def precession_nutation_rotation_hpop_like(
@@ -687,6 +770,9 @@ def precession_nutation_rotation_hpop_like(
         eop_path,
         extrapolation=eop_extrapolation,
     )
+    dp, de = _interp_eop_nutation(mjd_utc, eop_path, extrapolation=eop_extrapolation)
+    ddpsi_rad += dp
+    ddeps_rad += de
     jd_tt = jd_utc + (dat_s + 32.184) / _DAYSEC
     rbpn, _dpsi, _true_obliquity = _precession_nutation_matrix_approx(
         jd_tt,
@@ -733,6 +819,9 @@ def _eci_to_ecef_rotation_hpop_like_uncached(
             eop_path,
             extrapolation=eop_extrapolation,
         )
+        dp, de = _interp_eop_nutation(mjd_utc, eop_path, extrapolation=eop_extrapolation)
+        ddpsi_rad += dp
+        ddeps_rad += de
     else:
         xp_arcsec = 0.0 if xp_arcsec is None else float(xp_arcsec)
         yp_arcsec = 0.0 if yp_arcsec is None else float(yp_arcsec)
@@ -742,13 +831,13 @@ def _eci_to_ecef_rotation_hpop_like_uncached(
         else:
             dat_s = float(dat_s)
     jd_tt = jd_utc + (float(dat_s) + 32.184) / _DAYSEC
-    rbpn, dpsi, true_obliquity = _precession_nutation_matrix_approx(
+    rbpn, dpsi, _true_obliquity = _precession_nutation_matrix_approx(
         jd_tt,
         ddpsi_rad=ddpsi_rad,
         ddeps_rad=ddeps_rad,
     )
-    jd_ut1 = jd_utc + float(dut1_s) / _DAYSEC
-    gast = float((gmst_angle_rad_from_jd(jd_ut1) + dpsi * math.cos(true_obliquity)) % (2.0 * math.pi))
+    gast = float((_gmst_iau1982_split(float(jd_utc_start), float(t_s), float(dut1_s))
+                  + _equation_of_equinoxes_iau1994(jd_tt, dpsi)) % (2.0 * math.pi))
     sp = -47.0e-6 * ((jd_tt - _J2000) / _JULIAN_CENTURY_DAYS) * _ARCSEC_TO_RAD
     return _polar_motion_matrix(float(xp_arcsec) * _ARCSEC_TO_RAD, float(yp_arcsec) * _ARCSEC_TO_RAD, sp) @ _rz(gast) @ rbpn
 
@@ -912,9 +1001,26 @@ def transform_state(
 
 
 def _eci_to_ecef_rotation_derivative_context(t_s: float, context: FrameContext) -> np.ndarray:
+    if context.model == FRAME_MODEL_SIMPLE_GMST:
+        return _simple_rotation_derivative(t_s, context)
     return _rotation_derivative_from_evaluator(
         float(t_s), lambda sample_t: eci_to_ecef_rotation_context(sample_t, context)
     )
+
+
+def _simple_rotation_derivative(t_s: float, context: FrameContext) -> np.ndarray:
+    # Differentiate the selected rotation law directly. Finite differences of
+    # large Julian dates inject epoch quantization into station velocities.
+    rate = EARTH_ROT_RATE_RAD_S
+    if context.jd_utc_start is not None:
+        centuries = (float(context.jd_utc_start) + float(t_s) / _DAYSEC - _J2000) / _JULIAN_CENTURY_DAYS
+        rate = np.deg2rad(
+            360.98564736629
+            + (2.0 * 0.000387933 * centuries - 3.0 * centuries**2 / 38710000.0)
+            / _JULIAN_CENTURY_DAYS
+        ) / _DAYSEC
+    rotation = eci_to_ecef_rotation(float(t_s), context.jd_utc_start)
+    return rate * np.array([rotation[1], -rotation[0], np.zeros(3)])
 
 
 def _rotation_derivative_from_evaluator(t_s: float, rotation) -> np.ndarray:
@@ -1052,13 +1158,18 @@ class PreparedFrameEvaluator:
                     jd_start + t / _DAYSEC - _MJD0,
                     self.path, self.signature, extrapolation=ctx.eop_extrapolation,
                 )
+                dp, de = _interp_eop_nutation_cached(
+                    jd_start + t / _DAYSEC - _MJD0,
+                    self.path, self.signature, extrapolation=ctx.eop_extrapolation,
+                )
             else:
                 xp = 0.0 if ctx.xp_arcsec is None else float(ctx.xp_arcsec)
                 yp = 0.0 if ctx.yp_arcsec is None else float(ctx.yp_arcsec)
                 dut1 = 0.0 if ctx.dut1_s is None else float(ctx.dut1_s)
                 dat = ctx.tt_minus_utc_s - 32.184 if ctx.dat_s is None else float(ctx.dat_s)
+                dp, de = 0.0, 0.0
             rotation = np.asarray(
-                self.native_rotation(t, jd_start, xp, yp, dut1, dat, ctx.ddpsi_rad, ctx.ddeps_rad),
+                self.native_rotation(t, jd_start, xp, yp, dut1, dat, ctx.ddpsi_rad + dp, ctx.ddeps_rad + de),
                 dtype=float,
             ).reshape(3, 3)
         return self._remember(self.rotations, t, rotation)
@@ -1068,6 +1179,8 @@ class PreparedFrameEvaluator:
         cached = self.derivatives.get(t)
         if cached is not None:
             return cached
+        if self.context.model == FRAME_MODEL_SIMPLE_GMST:
+            return self._remember(self.derivatives, t, _simple_rotation_derivative(t, self.context))
         return self._remember(
             self.derivatives, t, _rotation_derivative_from_evaluator(t, self.rotation)
         )

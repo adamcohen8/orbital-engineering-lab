@@ -38,6 +38,8 @@ Public OEL Agents can:
 - help users understand and modify public code;
 - generate valid public scenario YAML from natural language;
 - author supported public standalone analysis problems and inspect typed products;
+- import local data, compose scenario objects, and export completed saved evidence
+  through the shared modular IO interface;
 - evaluate bounded explicit Walker/shell and ground-network design candidates;
 - validate configs before execution;
 - run public simulations through approved commands;
@@ -208,6 +210,19 @@ Example user requests:
   the run."
 - "Review the tracking and telemetry received through delayed ground contacts
   and outages."
+
+Route external-file interchange through [Modular Data IO](data-io.md). Discover
+profiles with `oel io formats` and inspect object preflight before composition.
+Keep source object/sample selection, epochs, frames, model context and receipts
+explicit. Conversion and export consume local inputs or completed evidence;
+new prediction, simulation and Pro review-to-OGP/TLE fitting are separate actions.
+
+For full-state knowledge tracks with discrepant observations, use the opt-in
+[innovation-recovery policy](innovation-recovery.md) only when requested. It is
+experimental and off by default, covers HCW, SS-J2, TH, YA and absolute ECI EKFs,
+and retains the existing model assumptions. Inspect holds and reinitializations
+separately from maneuver-detector evidence; recovery does not identify a maneuver
+or configure flight-software navigation.
 
 Route onboard resource histories through the optional ONP thermal/power models
 in [Spacecraft thermal and electrical resources](models/spacecraft-resources.md).

@@ -57,6 +57,10 @@ def run_mc_iteration_from_dict(task: dict[str, Any]) -> dict[str, Any]:
     def _on_step(step: int, total: int) -> None:
         nonlocal last_emit
         if cancel_event is not None and cancel_event.is_set():
+            if bool(task.get("_thread_campaign", False)):
+                from sim.execution.thread_campaign import ThreadCampaignCancelled
+
+                raise ThreadCampaignCancelled("Thread campaign worker cancelled.")
             raise RuntimeError("Parallel campaign worker cancelled.")
         if progress_queue is None:
             return

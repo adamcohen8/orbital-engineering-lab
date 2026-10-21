@@ -32,6 +32,8 @@ class BatchLeastSquaresResult:
     rejected_indices: tuple[int, ...] = ()
     decision_records: tuple[dict[str, Any], ...] = ()
     diagnostics: dict[str, Any] = field(default_factory=dict)
+    data_covariance_native: np.ndarray | None = None
+    covariance_evidence: dict[str, Any] = field(default_factory=dict)
 
     @property
     def rms_residual(self) -> float:
@@ -58,6 +60,8 @@ def solve_batch_least_squares(
     prior_covariance_native: np.ndarray | None = None,
     prior_parameter_names: Sequence[str] | None = None,
     jacobian_step_native: Sequence[float] | np.ndarray | None = None,
+    residual_batch_fn_native: Callable[[np.ndarray], np.ndarray] | None = None,
+    covariance_scale_policy: str = "conservative",
 ) -> BatchLeastSquaresResult:
     """Solve a scaled nonlinear least-squares problem with auditable weighting."""
 
@@ -74,6 +78,8 @@ def solve_batch_least_squares(
         jacobian_step_scaled = step_native / parameters.scales()
 
     loss_key = str(robust_loss or "linear").strip().lower()
+    if covariance_scale_policy not in {"absolute", "residual", "conservative"}:
+        raise ValueError("covariance_scale_policy must be absolute, residual, or conservative")
     robust_weights(np.zeros(1), loss=loss_key, f_scale=robust_f_scale)
     clip_threshold = None if sigma_clip_threshold is None else float(sigma_clip_threshold)
     if clip_threshold is not None and (not np.isfinite(clip_threshold) or clip_threshold <= 0.0):
@@ -141,6 +147,17 @@ def solve_batch_least_squares(
         )
         return np.concatenate((data, prior))
 
+    def residual_batch_scaled(trials: np.ndarray) -> np.ndarray:
+        native = np.asarray([parameters.to_native(x) for x in trials])
+        data = np.asarray(residual_batch_fn_native(native), dtype=float)
+        if data.ndim != 2 or data.shape[0] != len(trials) or not np.all(np.isfinite(data)):
+            raise ValueError("batched residuals must be finite (trials, residuals) values")
+        if prior_mean is None:
+            return data
+        priors = np.asarray([whiten_residual_with_factor(x[prior_indices] - prior_mean,
+            prior_factor, field_name="parameter prior covariance") for x in native])
+        return np.hstack((data, priors))
+
     initial_residual = residual_scaled(x0_scaled)
     initial_cost = 0.5 * float(np.dot(initial_residual, initial_residual))
     result = _run_least_squares(
@@ -155,6 +172,7 @@ def solve_batch_least_squares(
         robust_loss=loss_key,
         robust_f_scale=float(robust_f_scale),
         jacobian_step_scaled=jacobian_step_scaled,
+        residual_batch_fn=residual_batch_scaled if residual_batch_fn_native is not None else None,
     )
     raw_first = residual_scaled(np.asarray(result.x, dtype=float))
     data_count = int(raw_first.size - prior_count)
@@ -171,6 +189,11 @@ def solve_batch_least_squares(
             values[rejected] = 0.0
             return values
 
+        def clipped_batch(trials: np.ndarray) -> np.ndarray:
+            values = residual_batch_scaled(trials)
+            values[:, rejected] = 0.0
+            return values
+
         result = _run_least_squares(
             clipped_residual,
             x0_scaled=first_x,
@@ -183,6 +206,7 @@ def solve_batch_least_squares(
             robust_loss=loss_key,
             robust_f_scale=float(robust_f_scale),
             jacobian_step_scaled=jacobian_step_scaled,
+            residual_batch_fn=clipped_batch if residual_batch_fn_native is not None else None,
         )
     x_scaled = np.asarray(result.x, dtype=float)
     raw_residual = residual_scaled(x_scaled)
@@ -192,10 +216,28 @@ def solve_batch_least_squares(
     weights[rejected] = 0.0
     jac_scaled = None if getattr(result, "jac", None) is None else np.asarray(result.jac, dtype=float)
     cov_native = None
+    data_cov_native = None
     if jac_scaled is not None and residual.size >= x_scaled.size:
-        cov_scaled = covariance_from_jacobian(jac_scaled, residual)
         scale = parameters.scales()
-        cov_native = cov_scaled * np.outer(scale, scale)
+        active = ~rejected[:data_count]
+        data_jac = jac_scaled[:data_count][active]
+        data_residual = residual[:data_count][active]
+        # A common measurement variance multiplier never rescales prior information.
+        variance = float(data_residual @ data_residual / max(len(data_residual) - len(scale), 1))
+        variance = (1.0 if covariance_scale_policy == "absolute" else
+                    max(variance, 1.0) if covariance_scale_policy == "conservative" else variance)
+        effective_jac = np.vstack((data_jac / np.sqrt(max(variance, np.finfo(float).tiny)),
+                                   jac_scaled[data_count:]))
+        try:
+            cov_native = covariance_from_jacobian(effective_jac, np.zeros(len(effective_jac)),
+                                                  scale_policy="absolute") * np.outer(scale, scale)
+        except ValueError:
+            pass  # No finite covariance in an unobservable augmented direction.
+        try:
+            data_cov_native = covariance_from_jacobian(data_jac, data_residual,
+                scale_policy=covariance_scale_policy) * np.outer(scale, scale)
+        except ValueError:
+            pass
     diagnostics = _batch_diagnostics(
         jacobian=jac_scaled,
         covariance_native=cov_native,
@@ -213,6 +255,19 @@ def solve_batch_least_squares(
         robust_f_scale=float(robust_f_scale),
         solver_success=bool(getattr(result, "success", False)),
     )
+    covariance_evidence = {
+        "method": "whitened_jacobian_svd", "scale_policy": covariance_scale_policy,
+        "data_covariance_available": data_cov_native is not None,
+        "posterior_covariance_available": cov_native is not None,
+        "prior_information_included": prior_count > 0,
+        "prior_information_rescaled": False,
+        "status": ("unavailable_rank_deficient" if cov_native is None else
+                   "conditional_on_selected_data_or_bounds" if np.any(rejected) or diagnostics["bound_activity"] else
+                   "robust_local_approximation" if loss_key != "linear" else "formal_local_gaussian"),
+        "empirically_calibrated": False,
+        "nullspace_policy": "no_finite_full_covariance",
+    }
+    diagnostics["covariance"] = covariance_evidence
     decision_records = tuple(
         {
             "residual_index": int(index),
@@ -242,6 +297,8 @@ def solve_batch_least_squares(
         rejected_indices=tuple(int(index) for index in np.flatnonzero(rejected[:data_count])),
         decision_records=decision_records,
         diagnostics=diagnostics,
+        data_covariance_native=data_cov_native,
+        covariance_evidence=covariance_evidence,
     )
 
 
@@ -258,6 +315,7 @@ def _run_least_squares(
     robust_loss: str,
     robust_f_scale: float,
     jacobian_step_scaled: np.ndarray | None = None,
+    residual_batch_fn: Callable[[np.ndarray], np.ndarray] | None = None,
 ) -> Any:
     try:
         from scipy.optimize import least_squares  # type: ignore
@@ -284,17 +342,37 @@ def _run_least_squares(
         def absolute_step_jacobian(x_scaled: np.ndarray) -> np.ndarray:
             x = np.asarray(x_scaled, dtype=float).reshape(-1)
             baseline = np.asarray(residual_fn(x), dtype=float).reshape(-1)
-            columns = []
+            if residual_batch_fn is None:
+                columns = []
+                for index, step in enumerate(steps):
+                    direction = 1.0 if x[index] + step <= upper_scaled[index] else -1.0
+                    if direction < 0.0 and x[index] - step < lower_scaled[index]:
+                        raise ValueError("finite-difference step does not fit within parameter bounds")
+                    trial = x.copy()
+                    trial[index] += direction * step
+                    shifted = np.asarray(residual_fn(trial), dtype=float).reshape(-1)
+                    if shifted.shape != baseline.shape:
+                        raise ValueError("finite-difference residual dimension changed")
+                    columns.append((shifted - baseline) / (direction * step))
+                return np.column_stack(columns)
+            trials, widths = [], []
             for index, step in enumerate(steps):
                 direction = 1.0 if x[index] + step <= upper_scaled[index] else -1.0
                 if direction < 0.0 and x[index] - step < lower_scaled[index]:
                     raise ValueError("finite-difference step does not fit within parameter bounds")
                 trial = x.copy()
                 trial[index] += direction * step
-                shifted = np.asarray(residual_fn(trial), dtype=float).reshape(-1)
+                trials.append(trial)
+                widths.append(direction * step)
+            shifted_rows = np.asarray(residual_batch_fn(np.asarray(trials)), dtype=float)
+            if len(shifted_rows) != len(trials):
+                raise ValueError("batched finite-difference residual count changed")
+            columns = []
+            for shifted, width in zip(shifted_rows, widths, strict=True):
+                shifted = np.asarray(shifted, dtype=float).reshape(-1)
                 if shifted.shape != baseline.shape:
                     raise ValueError("finite-difference residual dimension changed")
-                columns.append((shifted - baseline) / (direction * step))
+                columns.append((shifted - baseline) / width)
             return np.column_stack(columns)
 
         jacobian = absolute_step_jacobian

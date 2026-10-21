@@ -6,26 +6,31 @@ import sys
 from importlib import import_module
 from importlib.machinery import EXTENSION_SUFFIXES, ExtensionFileLoader
 from pathlib import Path
+from threading import RLock
 from types import ModuleType
 
 import numpy as np
 
 _NATIVE_MODULE = None
 _NATIVE_IMPORTER = None
+_NATIVE_MODULE_LOCK = RLock()
 
 
 def _extension():
     global _NATIVE_MODULE, _NATIVE_IMPORTER
-    if _NATIVE_MODULE is not None and _NATIVE_IMPORTER is import_module:
-        return _NATIVE_MODULE
-    try:
-        module = import_module("oel_rust_orbit")
-    except ImportError as exc:
-        raise RuntimeError(
-            "Rust orbit backend requested but oel_rust_orbit is unavailable; "
-            "install the optional oel_rust_orbit wheel first"
-        ) from exc
-    _NATIVE_MODULE, _NATIVE_IMPORTER = module, import_module
+    module = _NATIVE_MODULE
+    if module is None or _NATIVE_IMPORTER is not import_module:
+        with _NATIVE_MODULE_LOCK:
+            module = _NATIVE_MODULE
+            if module is None or _NATIVE_IMPORTER is not import_module:
+                try:
+                    module = import_module("oel_rust_orbit")
+                except ImportError as exc:
+                    raise RuntimeError(
+                        "Rust orbit backend requested but oel_rust_orbit is unavailable; "
+                        "install the optional oel_rust_orbit wheel first"
+                    ) from exc
+                _NATIVE_MODULE, _NATIVE_IMPORTER = module, import_module
     return module
 
 

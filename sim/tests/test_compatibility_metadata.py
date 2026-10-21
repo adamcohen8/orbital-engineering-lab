@@ -63,8 +63,13 @@ def test_python_range_classifiers_and_os_classifiers_match_phase2_contract() -> 
 
 
 def test_doctor_core_dependency_ranges_match_package_metadata() -> None:
+    from packaging.requirements import Requirement
+
     project_requirements = {
-        str(requirement).replace(" ", "").lower() for requirement in _pyproject()["project"]["dependencies"]
+        str(item).split(";", 1)[0].replace(" ", "").lower()
+        for item in _pyproject()["project"]["dependencies"]
+        for requirement in [Requirement(item)]
+        if requirement.marker is None or requirement.marker.evaluate()
     }
     doctor_requirements = {f"{spec.distribution}{spec.requirement}".lower() for spec in CORE_SPECS}
 
@@ -438,3 +443,36 @@ def test_doctor_accepts_windows_server_2022_only_as_the_automation_baseline() ->
     with patch("sim.doctor.platform.version", return_value="10.0.17763"):
         supported, _ = _platform_is_supported("Windows", "AMD64")
     assert not supported
+
+
+@pytest.mark.parametrize("minor", SUPPORTED_MINORS)
+def test_pillow_requirement_preserves_legacy_function_and_patched_media_baseline(minor: str) -> None:
+    from packaging.requirements import Requirement
+
+    from sim.doctor import _core_specs, _game_specs, dependency_is_compatible
+
+    version = tuple(int(part) for part in minor.split("."))
+    for profile in ("core", "game", "cross-platform", "full"):
+        project = _pyproject()["project"]
+        requirements = project["dependencies"] if profile == "core" else project["optional-dependencies"][profile]
+        active = [
+            requirement for item in requirements
+            for requirement in [Requirement(item)]
+            if requirement.name.lower() == "pillow"
+            and (requirement.marker is None or requirement.marker.evaluate({"python_version": minor}))
+        ]
+        assert len(active) == 1
+        expected = "12.3.0" if version == (3, 10) else "13.0.0"
+        other = "13.0.0" if version == (3, 10) else "12.3.0"
+        assert expected in active[0].specifier
+        assert other not in active[0].specifier
+        specs = _core_specs(version) if profile == "core" else _game_specs(version)
+        spec = next(row for row in specs if row.distribution == "Pillow")
+        assert dependency_is_compatible(expected, spec)
+        assert not dependency_is_compatible(other, spec)
+        constraints = (ROOT / "constraints" / f"py{minor.replace('.', '')}.txt").read_text()
+        assert f"pillow=={expected}" in constraints
+    if version == (3, 10):
+        assert "security qualification (including core/media/full) is blocked" in " ".join(
+            (ROOT / "docs" / "compatibility.md").read_text().split()
+        )

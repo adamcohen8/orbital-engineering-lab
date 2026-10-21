@@ -126,6 +126,43 @@ def workflow_routes(tool_ids: Iterable[str]) -> dict:
             "route": "Documented scenario YAML or sim.api.ScenarioBuilder through authorized host file tools.",
             "arbitrary_file_write_tool": False,
         },
+        "local_workflows": {
+            "host_authorization_required": True,
+            "discovery_authorizes_effects": False,
+            "workflows": [
+                {
+                    "workflow_id": "modular_data_io",
+                    "interfaces": ["oel io", "python -m sim.data_io", "sim.data_io"],
+                    "documentation": "docs/data-io.md",
+                    "dedicated_mcp_tools": [],
+                    "purpose": (
+                        "Inspect or convert offline files, compose objects into a new validated scenario, "
+                        "or export completed evidence with receipts."
+                    ),
+                    "boundaries": [
+                        "Discover exact profiles and optional dependencies with oel io formats.",
+                        "Object import and materialization do not execute scenarios or replay source histories.",
+                        "Export uses saved review evidence; serializers do not propagate or fit an orbit.",
+                        "Review-to-OGP/TLE fitting is a separate Pro tracking_od operation.",
+                    ],
+                },
+                {
+                    "workflow_id": "full_state_innovation_recovery",
+                    "interfaces": ["scenario YAML", "sim.estimation"],
+                    "documentation": "docs/innovation-recovery.md",
+                    "dedicated_mcp_tools": [],
+                    "purpose": (
+                        "Opt into experimental full-state knowledge-estimator recovery "
+                        "through an existing scenario or estimator API."
+                    ),
+                    "boundaries": [
+                        "Disabled by default; requires full-state observations and positive-definite covariance.",
+                        "Use ordinary scenario validation/run and review-query routes when registered and authorized.",
+                        "This is separate from flight-software navigation and Pro sequential/continuous tracking OD.",
+                    ],
+                },
+            ],
+        },
         "rules": [
             "Registered tools may still require configured operator approvals and entitlements.",
             "Inspect describe_capabilities readiness; it never authorizes an exact input or run.",

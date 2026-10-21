@@ -315,6 +315,29 @@ mod python {
         ))
     }
 
+    #[pyfunction]
+    fn ogp_propagate_batch_parallel_bytes(
+        py: Python<'_>,
+        element_bytes: &[u8],
+        time_bytes: &[u8],
+        samples_per_object: usize,
+        workers: usize,
+    ) -> PyResult<(Py<PyBytes>, Py<PyBytes>, Vec<(usize, String)>, usize)> {
+        let elements = decode_f64_bytes(element_bytes)?;
+        let times = decode_f64_bytes(time_bytes)?;
+        let result = py
+            .detach(|| {
+                ogp::propagate_batch_with_workers(&elements, &times, samples_per_object, workers)
+            })
+            .map_err(PyValueError::new_err)?;
+        Ok((
+            output_bytes(py, &result.positions)?,
+            output_bytes(py, &result.velocities)?,
+            result.errors,
+            result.workers_used,
+        ))
+    }
+
     #[pyclass(name = "OGPObservationBatch")]
     struct OgpObservationBatch {
         batch: ogp::ObservationBatch,
@@ -1048,7 +1071,15 @@ mod python {
     #[pymodule]
     fn oel_rust_orbit(module: &Bound<'_, PyModule>) -> PyResult<()> {
         module.add("ONP_PRECISION_FORCE_PLAN_VERSION", 1)?;
+        module.add("ONP_EMPIRICAL_RIC_VERSION", 1)?;
+        module.add("ONP_EMPIRICAL_RIC_HARMONIC_VERSION", 1)?;
+        module.add("ONP_ECOM2_VERSION", u32::from(cfg!(feature = "pro")))?;
+        module.add("ONP_IMMUTABLE_STAGE_TABLE_MAX_EPOCHS", 262144)?;
+        module.add("ONP_IAU76_80_SIDEREAL_VERSION", 2)?;
         module.add("__version__", env!("CARGO_PKG_VERSION"))?;
+        // Registered callback-free object kernels release the Python GIL.
+        // This marker does not qualify arbitrary complete object steps.
+        module.add("NATIVE_OBJECT_KERNELS_GIL_RELEASED", true)?;
         module.add(
             "__source_sha256__",
             option_env!("OEL_NATIVE_SOURCE_SHA256").unwrap_or("unattested"),
@@ -1100,6 +1131,7 @@ mod python {
         module.add_class::<OgpObservationBatch>()?;
         module.add("MAX_HARMONIC_DEGREE", super::harmonics::MAX_DEGREE)?;
         module.add_function(wrap_pyfunction!(ogp_propagate_batch_bytes, module)?)?;
+        module.add_function(wrap_pyfunction!(ogp_propagate_batch_parallel_bytes, module)?)?;
         module.add_function(wrap_pyfunction!(rk4_step_eci, module)?)?;
         module.add_function(wrap_pyfunction!(propagate_history_eci, module)?)?;
         module.add_function(wrap_pyfunction!(propagate_history_eci_bytes, module)?)?;

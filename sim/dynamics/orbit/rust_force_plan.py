@@ -36,6 +36,7 @@ from sim.dynamics.orbit.frames import (
     FrameContext,
     PreparedFrameEvaluator,
     _load_nut80_table,
+    frame_context_from_environment,
     normalize_frame_model,
 )
 from sim.dynamics.orbit.propagator import (
@@ -74,6 +75,13 @@ def force_codes(propagator, env):
         if code is None or (code > 8 and (env.get("_rust_precision_force_plan_disabled") or not supports_precision_force_plan())):
             return None
         codes.append(code)
+    if 1 in codes and str(env.get("srp_shadow_model", "")).lower() == "conical_ellipsoid":
+        context = frame_context_from_environment(env)
+        if (context.model != normalize_frame_model(env.get("spherical_harmonics_frame_model", "simple"))
+                or context.eop_path != env.get("spherical_harmonics_eop_path")):
+            # The compact native stage has one shared Earth rotation. Distinct
+            # gravity/shadow frames remain on the authoritative plugin route.
+            return None
     return codes
 
 
@@ -261,7 +269,7 @@ def make_plan(propagator, state, t_s, env, ctx):
         )
     ]
     shadow_name = str(env.get("srp_shadow_model", "conical")).lower()
-    shadow = 0 if shadow_name in ("none", "off", "disabled") else 1 if shadow_name in ("cylindrical", "cylinder") else 2
+    shadow = 0 if shadow_name in ("none", "off", "disabled") else 1 if shadow_name in ("cylindrical", "cylinder") else 3 if shadow_name == "conical_ellipsoid" else 2
     omega_raw = env.get("drag_earth_rotation_rad_s")
     scalars = [
         float(ctx.mu_km3_s2),
@@ -309,7 +317,8 @@ def make_plan(propagator, state, t_s, env, ctx):
     harmonic_frame = _prepared_frame(
         propagator, env, "spherical_harmonics_frame_model", "spherical_harmonics_eop_path",
         native_environment_context,
-    ) if 1 in codes else None
+    ) if 1 in codes else (PreparedFrameEvaluator(frame_context_from_environment(env), native_environment_context)
+                         if shadow == 3 and 3 in codes else None)
     drag_frame = density_frame = None
     if 2 in codes:
         drag_frame = _prepared_frame(
@@ -329,7 +338,7 @@ def make_plan(propagator, state, t_s, env, ctx):
         de440_path = default_de440_coeff_path() if raw_path is None else _resolve_path(str(raw_path))
     de440_signature = _resource_signature(de440_path) if de440_path is not None else None
     eop_paths = tuple(sorted({str(env[key]) for key in (
-        "spherical_harmonics_eop_path", "drag_eop_path", "density_eop_path", "de440_eop_path",
+        "spherical_harmonics_eop_path", "drag_eop_path", "density_eop_path", "de440_eop_path", "eop_path",
     ) if env.get(key)}))
     eop_signature = tuple(_resource_signature(path) for path in eop_paths)
     force_context = _native_force_context(propagator, codes, scalars, shadow, dims, tables, ctx)
@@ -426,9 +435,6 @@ def make_plan(propagator, state, t_s, env, ctx):
     ) != FRAME_MODEL_IAU76_80_EOP:
         stage_inputs._simple_drag_density_callback = partial(stage_inputs, _density_only=True)
         stage_inputs._simple_drag_jd_utc_start = env.get("jd_utc_start")
-    if any(code > 8 for code in codes):
-        from sim.dynamics.orbit.rust_precision_force_plan import wrap_stages
-        return codes, scalars, shadow, dims, tables, wrap_stages(stage_inputs, propagator.plugins, env, ctx), force_context
     from sim.dynamics.orbit.rust_stage_context import try_native_stage_context
     try:
         native_stage = try_native_stage_context(
@@ -439,4 +445,11 @@ def make_plan(propagator, state, t_s, env, ctx):
         # Unsupported snapshot metadata retains the reference adapter and its
         # force-specific validation, including unused atmosphere fields.
         native_stage = None
+    if any(code > 8 for code in codes):
+        from sim.dynamics.orbit.rust_precision_force_plan import wrap_stages
+        return codes, scalars, shadow, dims, tables, wrap_stages(
+            native_stage if native_stage is not None else stage_inputs, propagator.plugins, env, ctx,
+            immutable_resources=(tuple(eop_paths)+((str(de440_path),) if de440_path else ())
+                                 if native_stage is not None and 2 not in codes
+                                 and env.get("_precision_immutable_sampled",False) else None)), force_context
     return codes, scalars, shadow, dims, tables, native_stage if native_stage is not None else stage_inputs, force_context

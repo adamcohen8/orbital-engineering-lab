@@ -105,6 +105,16 @@ def _validate_physics_runtime_settings(cfg: SimulationScenarioConfig) -> None:
         if "position_inertial_km" in obj.initial_state or "reference_axes" in obj.initial_state:
             raise ValueError(f"Earth objects.{object_id} must use existing Earth state fields; neutral states require non-Earth central_body.")
     dynamics = dict(cfg.simulator.dynamics or {})
+    execution = dict(cfg.simulator.execution or {})
+    parallelism = dict(execution.get("object_parallelism", {}) or {})
+    if (parallelism.get("enabled", False) and parallelism.get("backend") == "thread_pool"
+            and parallelism.get("thread_scope", "auto") == "native_history"):
+        path = "simulator.execution.object_parallelism.backend=thread_pool"
+        _require_rust_symbols(path, ("propagate_passive_sampled_eci_bytes",))
+        import oel_rust_orbit
+
+        if not getattr(oel_rust_orbit, "PASSIVE_HISTORY_GIL_RELEASED", False):
+            raise ValueError(f"{path} requires a Rust wheel with GIL-releasing sampled histories.")
     native_requirements = {
         "attitude": ("attitude_propagate_exponential_map", "attitude_builtin_disturbance_torque"),
         "rocket": ("rocket_aero_state", "rocket_propellant_step"),

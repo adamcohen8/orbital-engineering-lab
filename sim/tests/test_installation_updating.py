@@ -447,6 +447,7 @@ def test_managed_runtime_selection_preserves_virtualenv_python_symlink(tmp_path:
     assert f"--config-root '{paths.config_root}'" in posix_launcher
     assert f'--data-root "{paths.data_root}"' in windows_launcher
     assert f'--config-root "{paths.config_root}"' in windows_launcher
+    runtime_python.unlink()
 
 
 def test_managed_dispatch_disables_source_bytecode_writes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -857,13 +858,33 @@ def test_release_build_is_reproducible_signed_and_contains_evidence(
         archive.writestr("fixture-1.0.dist-info/METADATA", "Name: fixture\nVersion: 1.0\n")
         archive.writestr("fixture-1.0.dist-info/WHEEL", "Wheel-Version: 1.0\nTag: py3-none-any\n")
         archive.writestr("fixture-1.0.dist-info/RECORD", "")
+    from tools.build_installable_release import release_source_identity
+    from tools.native_source_identity import native_source_identity
+
+    native_receipts = []
+    native_inventory = []
+    for name, crate_name in (("oel-rust-orbit", "oel-orbit"), ("oel-rust-game", "oel-game")):
+        crate = source / "rust" / crate_name
+        (crate / "src").mkdir(parents=True)
+        for file in ("Cargo.toml", "Cargo.lock", "pyproject.toml", "src/lib.rs"):
+            (crate / file).write_text("# public native fixture\n", encoding="utf-8")
+        native_wheel = wheelhouse / f"{name.replace('-', '_')}-1.0-py3-none-any.whl"
+        with zipfile.ZipFile(native_wheel, "w") as archive:
+            archive.writestr(f"{name.replace('-', '_')}-1.0.dist-info/METADATA", f"Name: {name}\nVersion: 1.0\n")
+            archive.writestr(f"{name.replace('-', '_')}-1.0.dist-info/WHEEL", "Wheel-Version: 1.0\nTag: py3-none-any\n")
+            archive.writestr(f"{name.replace('-', '_')}-1.0.dist-info/RECORD", "")
+        native_receipts.append({
+            "package": name, "wheel": native_wheel.name, "sha256": sha256_file(native_wheel),
+            "source_identity_sha256": native_source_identity(crate)["sha256"],
+        })
+        native_inventory.append({"artifact": native_wheel.name, "artifact_type": "wheel", "sha256": sha256_file(native_wheel)})
     evidence_payloads = {
         "pip-install-report.json": '{"install": []}\n',
         "build-install-report.json": '{"install": []}\n',
         "pip-check.txt": "No broken requirements found.\n",
         "wheel-inventory.json": json.dumps(
             {
-                "packages": [
+                "packages": [*native_inventory,
                     {
                         "artifact": wheel.name,
                         "artifact_type": "wheel",
@@ -887,7 +908,10 @@ def test_release_build_is_reproducible_signed_and_contains_evidence(
     gate = {
         "schema_version": 1,
         "kind": "oel_supply_chain_gate",
-        "product": "oel-pro",
+        "product": "oel-public",
+        "isolated_environment": True,
+        "source_identity": release_source_identity(source),
+        "dependency_sources": {"qualified_native_wheels": native_receipts},
         "package_version": "0.25.0",
         "passed": True,
         "artifacts": evidence_artifacts,

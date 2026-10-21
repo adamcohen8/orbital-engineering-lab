@@ -843,7 +843,12 @@ impl BuiltinDisturbanceContext {
         values[16..22].copy_from_slice(&dynamic[7..13]);
         values[30..39].copy_from_slice(&dynamic[13..22]);
         values[45..49].copy_from_slice(&dynamic[22..26]);
-        self.run(py, &values, substep_bytes)
+        let substeps = crate::numeric_bytes::decode_f64_bytes(substep_bytes)?.into_owned();
+        let (output, counts) = py.detach(|| self.run_values(&values, &substeps));
+        Ok((
+            crate::numeric_bytes::output_bytes(py, &output)?.into_bound(py),
+            counts,
+        ))
     }
 }
 
@@ -892,13 +897,7 @@ impl BuiltinDisturbanceContext {
         )
     }
 
-    fn run<'py>(
-        &self,
-        py: Python<'py>,
-        values: &[f64; 54],
-        substep_bytes: &[u8],
-    ) -> PyResult<(Bound<'py, pyo3::types::PyBytes>, [i64; 6])> {
-        let substeps = crate::numeric_bytes::decode_f64_bytes(substep_bytes)?;
+    fn run_values(&self, values: &[f64; 54], substeps: &[f64]) -> ([f64; 7], [i64; 6]) {
         let quat = &values[0..4];
         let omega = &values[4..7];
         let inertia = &values[7..16];
@@ -931,7 +930,7 @@ impl BuiltinDisturbanceContext {
             omega.try_into().unwrap(),
             inertia,
             command_torque.try_into().unwrap(),
-            &substeps,
+            substeps,
             position.try_into().unwrap(),
             mu,
             std::array::from_fn(|i| enabled[i] as i64),
@@ -961,6 +960,17 @@ impl BuiltinDisturbanceContext {
         let output = [
             q_next[0], q_next[1], q_next[2], q_next[3], w_next[0], w_next[1], w_next[2],
         ];
+        (output, counts)
+    }
+
+    fn run<'py>(
+        &self,
+        py: Python<'py>,
+        values: &[f64; 54],
+        substep_bytes: &[u8],
+    ) -> PyResult<(Bound<'py, pyo3::types::PyBytes>, [i64; 6])> {
+        let substeps = crate::numeric_bytes::decode_f64_bytes(substep_bytes)?.into_owned();
+        let (output, counts) = py.detach(|| self.run_values(values, &substeps));
         Ok((
             crate::numeric_bytes::output_bytes(py, &output)?.into_bound(py),
             counts,
@@ -1028,10 +1038,10 @@ pub fn register(module: &pyo3::prelude::Bound<'_, pyo3::types::PyModule>) -> pyo
             values[13..16].try_into().unwrap(),
         ];
         let torque = values[16..19].try_into().unwrap();
-        let (q_next, w_next, counts) = match dt_s {
+        let (q_next, w_next, counts) = py.detach(|| match dt_s {
             Some(dt) => propagate_attitude_exponential_map(q, w, inertia, torque, dt),
             None => rigid_body_derivatives(q, w, inertia, torque),
-        };
+        });
         let mut bytes = [0_u8; 7 * 8];
         for (i, value) in q_next.iter().chain(w_next.iter()).enumerate() {
             bytes[i * 8..(i + 1) * 8].copy_from_slice(&value.to_le_bytes());
@@ -1041,22 +1051,24 @@ pub fn register(module: &pyo3::prelude::Bound<'_, pyo3::types::PyModule>) -> pyo
 
     #[pyfunction]
     fn attitude_rigid_body_derivatives(
+        py: Python<'_>,
         quat: Vec<f64>,
         omega: Vec<f64>,
         inertia: Vec<f64>,
         torque: Vec<f64>,
     ) -> PyResult<(Vec<f64>, Vec<f64>, Vec<i64>)> {
-        let (q_dot, omega_dot, stats) = rigid_body_derivatives(
-            fixed(quat, "quaternion")?,
-            fixed(omega, "body rate")?,
-            matrix3(inertia, "inertia")?,
-            fixed(torque, "torque")?,
-        );
+        let quat = fixed(quat, "quaternion")?;
+        let omega = fixed(omega, "body rate")?;
+        let inertia = matrix3(inertia, "inertia")?;
+        let torque = fixed(torque, "torque")?;
+        let (q_dot, omega_dot, stats) =
+            py.detach(|| rigid_body_derivatives(quat, omega, inertia, torque));
         Ok((q_dot.to_vec(), omega_dot.to_vec(), stats.to_vec()))
     }
 
     #[pyfunction]
     fn attitude_propagate_exponential_map(
+        py: Python<'_>,
         quat: Vec<f64>,
         omega: Vec<f64>,
         inertia: Vec<f64>,
@@ -1066,19 +1078,19 @@ pub fn register(module: &pyo3::prelude::Bound<'_, pyo3::types::PyModule>) -> pyo
         if !dt_s.is_finite() {
             return Err(PyValueError::new_err("dt_s must be finite"));
         }
-        let (q_next, omega_next, stats) = propagate_attitude_exponential_map(
-            fixed(quat, "quaternion")?,
-            fixed(omega, "body rate")?,
-            matrix3(inertia, "inertia")?,
-            fixed(torque, "torque")?,
-            dt_s,
-        );
+        let quat = fixed(quat, "quaternion")?;
+        let omega = fixed(omega, "body rate")?;
+        let inertia = matrix3(inertia, "inertia")?;
+        let torque = fixed(torque, "torque")?;
+        let (q_next, omega_next, stats) =
+            py.detach(|| propagate_attitude_exponential_map(quat, omega, inertia, torque, dt_s));
         Ok((q_next.to_vec(), omega_next.to_vec(), stats.to_vec()))
     }
 
     #[allow(clippy::too_many_arguments)]
     #[pyfunction]
     fn attitude_builtin_disturbance_torque(
+        py: Python<'_>,
         quat: Vec<f64>,
         position_eci_km: Vec<f64>,
         inertia: Vec<f64>,
@@ -1125,41 +1137,53 @@ pub fn register(module: &pyo3::prelude::Bound<'_, pyo3::types::PyModule>) -> pyo
                 "facet arrays must have matching lengths",
             ));
         }
-        let torque = builtin_disturbance_torque(
-            fixed(quat, "quaternion")?,
-            fixed(position_eci_km, "position")?,
-            matrix3(inertia, "inertia")?,
-            mu_km3_s2,
-            enabled.map(|value| value as i64),
-            fixed(magnetic_dipole_body, "magnetic dipole")?,
-            fixed(magnetic_field_eci, "magnetic field")?,
-            magnetic_field_provided,
-            density_kg_m3,
-            fixed(drag_v_rel_eci_m_s, "drag velocity")?,
-            drag_v_rel_norm_m_s,
-            drag_mode,
-            drag_area_m2,
-            drag_cd,
-            fixed(drag_cp_offset_body, "drag center of pressure")?,
-            &drag_normals,
-            &drag_facet_areas,
-            &drag_facet_cd,
-            &drag_offsets,
-            fixed(sun_dir_eci_unit, "sun direction")?,
-            srp_pressure_scaled_n_m2,
-            srp_mode,
-            srp_area_m2,
-            fixed(srp_cp_offset_body, "SRP center of pressure")?,
-            &srp_normals,
-            &srp_facet_areas,
-            &srp_offsets,
-        );
+        let quat = fixed(quat, "quaternion")?;
+        let position_eci_km = fixed(position_eci_km, "position")?;
+        let inertia = matrix3(inertia, "inertia")?;
+        let magnetic_dipole_body = fixed(magnetic_dipole_body, "magnetic dipole")?;
+        let magnetic_field_eci = fixed(magnetic_field_eci, "magnetic field")?;
+        let drag_v_rel_eci_m_s = fixed(drag_v_rel_eci_m_s, "drag velocity")?;
+        let drag_cp_offset_body = fixed(drag_cp_offset_body, "drag center of pressure")?;
+        let sun_dir_eci_unit = fixed(sun_dir_eci_unit, "sun direction")?;
+        let srp_cp_offset_body = fixed(srp_cp_offset_body, "SRP center of pressure")?;
+        let torque = py.detach(|| {
+            builtin_disturbance_torque(
+                quat,
+                position_eci_km,
+                inertia,
+                mu_km3_s2,
+                enabled.map(|value| value as i64),
+                magnetic_dipole_body,
+                magnetic_field_eci,
+                magnetic_field_provided,
+                density_kg_m3,
+                drag_v_rel_eci_m_s,
+                drag_v_rel_norm_m_s,
+                drag_mode,
+                drag_area_m2,
+                drag_cd,
+                drag_cp_offset_body,
+                &drag_normals,
+                &drag_facet_areas,
+                &drag_facet_cd,
+                &drag_offsets,
+                sun_dir_eci_unit,
+                srp_pressure_scaled_n_m2,
+                srp_mode,
+                srp_area_m2,
+                srp_cp_offset_body,
+                &srp_normals,
+                &srp_facet_areas,
+                &srp_offsets,
+            )
+        });
         Ok(torque.to_vec())
     }
 
     #[allow(clippy::too_many_arguments)]
     #[pyfunction]
     fn attitude_propagate_builtin_disturbances(
+        py: Python<'_>,
         quat: Vec<f64>,
         omega: Vec<f64>,
         inertia: Vec<f64>,
@@ -1210,38 +1234,51 @@ pub fn register(module: &pyo3::prelude::Bound<'_, pyo3::types::PyModule>) -> pyo
                 "facet arrays must have matching lengths",
             ));
         }
-        let (q_next, omega_next, stats) = propagate_builtin_disturbances(
-            fixed(quat, "quaternion")?,
-            fixed(omega, "body rate")?,
-            matrix3(inertia, "inertia")?,
-            fixed(command_torque, "command torque")?,
-            &substeps_s,
-            fixed(position_eci_km, "position")?,
-            mu_km3_s2,
-            enabled,
-            fixed(magnetic_dipole_body, "magnetic dipole")?,
-            fixed(magnetic_field_eci, "magnetic field")?,
-            magnetic_field_provided,
-            density_kg_m3,
-            fixed(drag_v_rel_eci_m_s, "drag velocity")?,
-            drag_v_rel_norm_m_s,
-            drag_mode,
-            drag_area_m2,
-            drag_cd,
-            fixed(drag_cp_offset_body, "drag center of pressure")?,
-            &drag_normals,
-            &drag_facet_areas,
-            &drag_facet_cd,
-            &drag_offsets,
-            fixed(sun_dir_eci_unit, "sun direction")?,
-            srp_pressure_scaled_n_m2,
-            srp_mode,
-            srp_area_m2,
-            fixed(srp_cp_offset_body, "SRP center of pressure")?,
-            &srp_normals,
-            &srp_facet_areas,
-            &srp_offsets,
-        );
+        let quat = fixed(quat, "quaternion")?;
+        let omega = fixed(omega, "body rate")?;
+        let inertia = matrix3(inertia, "inertia")?;
+        let command_torque = fixed(command_torque, "command torque")?;
+        let position_eci_km = fixed(position_eci_km, "position")?;
+        let magnetic_dipole_body = fixed(magnetic_dipole_body, "magnetic dipole")?;
+        let magnetic_field_eci = fixed(magnetic_field_eci, "magnetic field")?;
+        let drag_v_rel_eci_m_s = fixed(drag_v_rel_eci_m_s, "drag velocity")?;
+        let drag_cp_offset_body = fixed(drag_cp_offset_body, "drag center of pressure")?;
+        let sun_dir_eci_unit = fixed(sun_dir_eci_unit, "sun direction")?;
+        let srp_cp_offset_body = fixed(srp_cp_offset_body, "SRP center of pressure")?;
+        let (q_next, omega_next, stats) = py.detach(|| {
+            propagate_builtin_disturbances(
+                quat,
+                omega,
+                inertia,
+                command_torque,
+                &substeps_s,
+                position_eci_km,
+                mu_km3_s2,
+                enabled,
+                magnetic_dipole_body,
+                magnetic_field_eci,
+                magnetic_field_provided,
+                density_kg_m3,
+                drag_v_rel_eci_m_s,
+                drag_v_rel_norm_m_s,
+                drag_mode,
+                drag_area_m2,
+                drag_cd,
+                drag_cp_offset_body,
+                &drag_normals,
+                &drag_facet_areas,
+                &drag_facet_cd,
+                &drag_offsets,
+                sun_dir_eci_unit,
+                srp_pressure_scaled_n_m2,
+                srp_mode,
+                srp_area_m2,
+                srp_cp_offset_body,
+                &srp_normals,
+                &srp_facet_areas,
+                &srp_offsets,
+            )
+        });
         Ok((q_next.to_vec(), omega_next.to_vec(), stats.to_vec()))
     }
 

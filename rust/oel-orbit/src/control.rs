@@ -380,17 +380,20 @@ mod python {
     #[pyfunction]
     #[pyo3(signature = (controls, horizon, control_dim, max_norm))]
     fn control_project_sequence(
+        py: Python<'_>,
         controls: Vec<f64>,
         horizon: usize,
         control_dim: usize,
         max_norm: f64,
     ) -> PyResult<Vec<f64>> {
-        project_sequence(&controls, horizon, control_dim, max_norm).map_err(PyValueError::new_err)
+        py.detach(|| project_sequence(&controls, horizon, control_dim, max_norm))
+            .map_err(PyValueError::new_err)
     }
 
     #[pyfunction]
     #[pyo3(signature = (matrix, rows, columns, vector, lower, upper))]
     fn control_mat_vec_clip(
+        py: Python<'_>,
         matrix: Vec<f64>,
         rows: usize,
         columns: usize,
@@ -398,23 +401,27 @@ mod python {
         lower: Vec<f64>,
         upper: Vec<f64>,
     ) -> PyResult<Vec<f64>> {
-        mat_vec_clip(&matrix, rows, columns, &vector, &lower, &upper).map_err(PyValueError::new_err)
+        py.detach(|| mat_vec_clip(&matrix, rows, columns, &vector, &lower, &upper))
+            .map_err(PyValueError::new_err)
     }
 
     #[pyfunction]
     #[pyo3(signature = (matrix, rows, columns, vector))]
     fn control_mat_vec(
+        py: Python<'_>,
         matrix: Vec<f64>,
         rows: usize,
         columns: usize,
         vector: Vec<f64>,
     ) -> PyResult<Vec<f64>> {
-        mat_vec_native(&matrix, rows, columns, &vector).map_err(PyValueError::new_err)
+        py.detach(|| mat_vec_native(&matrix, rows, columns, &vector))
+            .map_err(PyValueError::new_err)
     }
 
     #[pyfunction]
     #[pyo3(signature = (x0, target, a, b, q, terminal, r, rd, previous_control, controls, state_dim, control_dim))]
     fn control_mpc_rollout_cost_gradient(
+        py: Python<'_>,
         x0: Vec<f64>,
         target: Vec<f64>,
         a: Vec<f64>,
@@ -428,20 +435,22 @@ mod python {
         state_dim: usize,
         control_dim: usize,
     ) -> PyResult<(Vec<f64>, f64, Vec<f64>)> {
-        mpc_rollout_cost_gradient(
-            &x0,
-            &target,
-            &a,
-            &b,
-            &q,
-            &terminal,
-            &r,
-            &rd,
-            &previous_control,
-            &controls,
-            state_dim,
-            control_dim,
-        )
+        py.detach(|| {
+            mpc_rollout_cost_gradient(
+                &x0,
+                &target,
+                &a,
+                &b,
+                &q,
+                &terminal,
+                &r,
+                &rd,
+                &previous_control,
+                &controls,
+                state_dim,
+                control_dim,
+            )
+        })
         .map_err(PyValueError::new_err)
     }
 
@@ -509,7 +518,7 @@ mod python {
         columns: usize,
         clip: bool,
     ) -> PyResult<Bound<'py, PyBytes>> {
-        let v = decode(data)?;
+        let v = decode(data)?.into_owned();
         let size = rows
             .checked_mul(columns)
             .ok_or_else(|| PyValueError::new_err("matrix dimensions overflow"))?;
@@ -528,19 +537,22 @@ mod python {
                 "matrix-vector dimensions or values are inconsistent",
             ));
         }
-        let output = if clip {
-            mat_vec_clip(
-                &v[..size],
-                rows,
-                columns,
-                &v[size..size + columns],
-                &v[size + columns..size + columns + rows],
-                &v[size + columns + rows..],
-            )
-        } else {
-            mat_vec_native(&v[..size], rows, columns, &v[size..])
-        }
-        .map_err(PyValueError::new_err)?;
+        let output = py
+            .detach(|| {
+                if clip {
+                    mat_vec_clip(
+                        &v[..size],
+                        rows,
+                        columns,
+                        &v[size..size + columns],
+                        &v[size + columns..size + columns + rows],
+                        &v[size + columns + rows..],
+                    )
+                } else {
+                    mat_vec_native(&v[..size], rows, columns, &v[size..])
+                }
+            })
+            .map_err(PyValueError::new_err)?;
         encode(py, &output)
     }
 
@@ -552,7 +564,7 @@ mod python {
         control_dim: usize,
         compute_gradient: bool,
     ) -> PyResult<(Bound<'py, PyBytes>, f64, Bound<'py, PyBytes>)> {
-        let v = decode(data)?;
+        let v = decode(data)?.into_owned();
         let sizes = [
             state_dim,
             state_dim,
@@ -576,30 +588,30 @@ mod python {
             return Err(PyValueError::new_err("MPC dimensions are inconsistent"));
         }
         let mut cursor = 0;
-        let parts: Vec<&[f64]> = sizes
-            .iter()
-            .map(|&n| {
-                let part = &v[cursor..cursor + n];
-                cursor += n;
-                part
+        let offsets = sizes.map(|size| {
+            let start = cursor;
+            cursor += size;
+            start
+        });
+        let (states, cost, gradient) = py
+            .detach(|| {
+                mpc_rollout(
+                    &v[offsets[0]..offsets[0] + sizes[0]],
+                    &v[offsets[1]..offsets[1] + sizes[1]],
+                    &v[offsets[2]..offsets[2] + sizes[2]],
+                    &v[offsets[3]..offsets[3] + sizes[3]],
+                    &v[offsets[4]..offsets[4] + sizes[4]],
+                    &v[offsets[5]..offsets[5] + sizes[5]],
+                    &v[offsets[6]..offsets[6] + sizes[6]],
+                    &v[offsets[7]..offsets[7] + sizes[7]],
+                    &v[offsets[8]..offsets[8] + sizes[8]],
+                    &v[cursor..],
+                    state_dim,
+                    control_dim,
+                    compute_gradient,
+                )
             })
-            .collect();
-        let (states, cost, gradient) = mpc_rollout(
-            parts[0],
-            parts[1],
-            parts[2],
-            parts[3],
-            parts[4],
-            parts[5],
-            parts[6],
-            parts[7],
-            parts[8],
-            &v[cursor..],
-            state_dim,
-            control_dim,
-            compute_gradient,
-        )
-        .map_err(PyValueError::new_err)?;
+            .map_err(PyValueError::new_err)?;
         // The cost-only caller does not need state-history serialization.
         Ok((
             encode(py, if compute_gradient { &states } else { &[] })?,
@@ -646,7 +658,7 @@ mod python {
         if wheels == 0 || data.len() != expected {
             return Err(PyValueError::new_err("wheel dimensions are inconsistent"));
         }
-        let v = decode(data)?;
+        let v = decode(data)?.into_owned();
         let g = &v[..3 * wheels];
         let mut cursor = 3 * wheels;
         let mut take = || {
@@ -678,73 +690,76 @@ mod python {
                 "wheel limits and timestep are invalid",
             ));
         }
-        let alpha = if dt_s <= 0.0 || torque_tau_s <= 0.0 {
-            1.0
-        } else {
-            (dt_s / torque_tau_s).clamp(0.0, 1.0)
-        };
-        let mut motor = vec![0.0; wheels];
-        let mut next_omega = vec![0.0; wheels];
-        let mut momentum = vec![0.0; wheels];
-        let mut realized = vec![0.0; wheels];
-        for i in 0..wheels {
-            let cmd = command[i].clamp(-maximum_torque[i], maximum_torque[i]);
-            let lagged = if dt_s <= 0.0 || torque_tau_s <= 0.0 {
-                cmd
-            } else {
-                old_motor[i] + alpha * (cmd - old_motor[i])
-            };
-            motor[i] = lagged.clamp(-maximum_torque[i], maximum_torque[i]);
-            let sign = if omega[i] > 0.0 {
+        let output = py.detach(|| {
+            let alpha = if dt_s <= 0.0 || torque_tau_s <= 0.0 {
                 1.0
-            } else if omega[i] < 0.0 {
-                -1.0
-            } else if omega[i].is_nan() {
-                f64::NAN
             } else {
-                0.0
+                (dt_s / torque_tau_s).clamp(0.0, 1.0)
             };
-            let friction = viscous[i] * omega[i] + coulomb[i] * sign;
-            let mut net = motor[i] - friction;
-            let old_momentum = inertia[i] * omega[i];
-            if (old_momentum >= maximum_momentum[i] - 1e-12 && net > 0.0)
-                || (old_momentum <= -maximum_momentum[i] + 1e-12 && net < 0.0)
-            {
-                net = 0.0;
-                motor[i] = friction;
+            let mut motor = vec![0.0; wheels];
+            let mut next_omega = vec![0.0; wheels];
+            let mut momentum = vec![0.0; wheels];
+            let mut realized = vec![0.0; wheels];
+            for i in 0..wheels {
+                let cmd = command[i].clamp(-maximum_torque[i], maximum_torque[i]);
+                let lagged = if dt_s <= 0.0 || torque_tau_s <= 0.0 {
+                    cmd
+                } else {
+                    old_motor[i] + alpha * (cmd - old_motor[i])
+                };
+                motor[i] = lagged.clamp(-maximum_torque[i], maximum_torque[i]);
+                let sign = if omega[i] > 0.0 {
+                    1.0
+                } else if omega[i] < 0.0 {
+                    -1.0
+                } else if omega[i].is_nan() {
+                    f64::NAN
+                } else {
+                    0.0
+                };
+                let friction = viscous[i] * omega[i] + coulomb[i] * sign;
+                let mut net = motor[i] - friction;
+                let old_momentum = inertia[i] * omega[i];
+                if (old_momentum >= maximum_momentum[i] - 1e-12 && net > 0.0)
+                    || (old_momentum <= -maximum_momentum[i] + 1e-12 && net < 0.0)
+                {
+                    net = 0.0;
+                    motor[i] = friction;
+                }
+                let proposed = omega[i] + dt_s * (net / inertia[i]);
+                if (proposed >= maximum_speed[i] && net > 0.0)
+                    || (proposed <= -maximum_speed[i] && net < 0.0)
+                {
+                    net = 0.0;
+                    motor[i] = friction;
+                }
+                next_omega[i] = (omega[i] + dt_s * (net / inertia[i]))
+                    .clamp(-maximum_speed[i], maximum_speed[i]);
+                momentum[i] =
+                    (inertia[i] * next_omega[i]).clamp(-maximum_momentum[i], maximum_momentum[i]);
+                next_omega[i] = momentum[i] / inertia[i];
+                realized[i] = if dt_s > 0.0 {
+                    (momentum[i] - old_momentum) / dt_s
+                } else {
+                    net
+                };
             }
-            let proposed = omega[i] + dt_s * (net / inertia[i]);
-            if (proposed >= maximum_speed[i] && net > 0.0)
-                || (proposed <= -maximum_speed[i] && net < 0.0)
-            {
-                net = 0.0;
-                motor[i] = friction;
-            }
-            next_omega[i] =
-                (omega[i] + dt_s * (net / inertia[i])).clamp(-maximum_speed[i], maximum_speed[i]);
-            momentum[i] =
-                (inertia[i] * next_omega[i]).clamp(-maximum_momentum[i], maximum_momentum[i]);
-            next_omega[i] = momentum[i] / inertia[i];
-            realized[i] = if dt_s > 0.0 {
-                (momentum[i] - old_momentum) / dt_s
-            } else {
-                net
-            };
-        }
-        let body_momentum = mat_vec(g, 3, wheels, &momentum);
-        let body_torque: Vec<f64> = mat_vec(g, 3, wheels, &realized)
-            .iter()
-            .map(|x| -*x)
-            .collect();
-        let output: Vec<f64> = motor
-            .iter()
-            .chain(&next_omega)
-            .chain(&momentum)
-            .chain(&realized)
-            .chain(&body_momentum)
-            .chain(&body_torque)
-            .copied()
-            .collect();
+            let body_momentum = mat_vec(g, 3, wheels, &momentum);
+            let body_torque: Vec<f64> = mat_vec(g, 3, wheels, &realized)
+                .iter()
+                .map(|x| -*x)
+                .collect();
+            let output: Vec<f64> = motor
+                .iter()
+                .chain(&next_omega)
+                .chain(&momentum)
+                .chain(&realized)
+                .chain(&body_momentum)
+                .chain(&body_torque)
+                .copied()
+                .collect();
+            output
+        });
         encode(py, &output)
     }
 

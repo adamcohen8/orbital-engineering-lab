@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+from numbers import Integral
+
 import numpy as np
 
 from sim.dynamics.orbit.tle import TLEElements
@@ -51,12 +54,88 @@ class RustOGPContext:
         )
 
 
-def propagate_batch(elements: list[TLEElements], time_grid: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def resolve_ogp_batch_workers(requested: int | None = None) -> int:
+    """Allocate native workers within the current campaign branch's budget."""
+    from sim.execution.worker_budget import (
+        CAMPAIGN_WORKER_COUNT_ENV,
+        OBJECT_WORKER_BUDGET_ENV,
+        TOTAL_PROCESS_BUDGET_ENV,
+        worker_budget_value,
+    )
+
+    if requested is not None and (isinstance(requested, bool) or not isinstance(requested, Integral) or requested < 0):
+        raise ValueError("Rust OGP workers must be a nonnegative integer or None.")
+    cpu_cap = max(1, int(os.cpu_count() or 1) - 1)
+    workers = min(int(requested or min(4, cpu_cap)), cpu_cap)
+    budgets = {}
+    for name in (OBJECT_WORKER_BUDGET_ENV, CAMPAIGN_WORKER_COUNT_ENV, TOTAL_PROCESS_BUDGET_ENV):
+        raw = worker_budget_value(name)
+        if raw in (None, ""):
+            continue
+        try:
+            value = int(raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{name} must be an integer when set.") from exc
+        minimum = 0 if name == OBJECT_WORKER_BUDGET_ENV else 1
+        if value < minimum:
+            raise ValueError(f"{name} must be at least {minimum} when set.")
+        budgets[name] = value
+    object_cap = budgets.get(OBJECT_WORKER_BUDGET_ENV)
+    campaigns = budgets.get(CAMPAIGN_WORKER_COUNT_ENV, 1)
+    if object_cap is not None:
+        workers = min(workers, max(1, object_cap))
+    elif campaigns > 1:
+        # No inner allocation: the outer campaign owns all parallel slots.
+        workers = 1
+    total = budgets.get(TOTAL_PROCESS_BUDGET_ENV)
+    if total is not None:
+        # Campaign owners retain their slots while native child threads run.
+        cap = max(1, total // campaigns - 1) if campaigns > 1 else total
+        workers = min(workers, cap)
+    return max(1, workers)
+
+
+def propagate_batch(
+    elements: list[TLEElements], time_grid: np.ndarray, *, workers: int | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """One binary batch boundary, with the older wheel's row API as fallback."""
 
+    positions, velocities, errors, _ = propagate_batch_with_telemetry(elements, time_grid, workers=workers)
+    return positions, velocities, errors
+
+
+def propagate_batch_with_telemetry(
+    elements: list[TLEElements], time_grid: np.ndarray, *, workers: int | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, object]]:
+    allocated = resolve_ogp_batch_workers(workers)
     native = _extension()
     shape = (*time_grid.shape, 3)
     errors = np.full(time_grid.shape, "", dtype=object)
+    telemetry: dict[str, object] = {
+        "workers_requested": int(workers or 0),
+        "workers_allocated": allocated,
+        "workers_used": 1,
+        "execution_backend": "serial",
+        "reason": "compatible wheel uses serial propagation",
+    }
+    if hasattr(native, "ogp_propagate_batch_parallel_bytes"):
+        numeric = np.asarray([_numeric_elements(element) for element in elements], dtype="<f8")
+        positions, velocities, sparse_errors, used = native.ogp_propagate_batch_parallel_bytes(
+            numeric.tobytes(), np.asarray(time_grid, dtype="<f8").tobytes(), time_grid.shape[1], allocated,
+        )
+        telemetry.update(
+            workers_used=used,
+            execution_backend="native_threads" if used > 1 else "serial",
+            reason=("bounded object workers" if used > 1 else
+                    "worker allocation is serial" if allocated == 1 else
+                    "small batch, one object, or native CPU limit"),
+        )
+        for index, error in sparse_errors:
+            errors.flat[index] = error
+        return (
+            np.frombuffer(positions, dtype="<f8").reshape(shape).copy(),
+            np.frombuffer(velocities, dtype="<f8").reshape(shape).copy(), errors, telemetry,
+        )
     if hasattr(native, "ogp_propagate_batch_bytes"):
         numeric = np.asarray([_numeric_elements(element) for element in elements], dtype="<f8")
         positions, velocities, sparse_errors = native.ogp_propagate_batch_bytes(
@@ -68,6 +147,7 @@ def propagate_batch(elements: list[TLEElements], time_grid: np.ndarray) -> tuple
             np.frombuffer(positions, dtype="<f8").reshape(shape).copy(),
             np.frombuffer(velocities, dtype="<f8").reshape(shape).copy(),
             errors,
+            telemetry,
         )
     positions = np.zeros(shape, dtype=float)
     velocities = np.zeros(shape, dtype=float)
@@ -78,7 +158,7 @@ def propagate_batch(elements: list[TLEElements], time_grid: np.ndarray) -> tuple
             errors[index, :] = str(exc)
             continue
         positions[index], velocities[index], errors[index] = row_pos, row_vel, row_errors
-    return positions, velocities, errors
+    return positions, velocities, errors, telemetry
 
 
 class RustOGPObservationBatch:

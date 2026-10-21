@@ -8,6 +8,7 @@ import urllib.request
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from threading import RLock
 
 import numpy as np
 
@@ -22,6 +23,23 @@ from sim.dynamics.orbit.frames import (
 )
 
 _NORMALIZED_SPHERICAL_HARMONIC_ACCEL_ECI_KERNEL = None
+_SPHERICAL_HARMONIC_KERNEL_LOCK = RLock()
+
+
+def _load_normalized_spherical_harmonic_kernel():
+    global _NORMALIZED_SPHERICAL_HARMONIC_ACCEL_ECI_KERNEL
+    kernel = _NORMALIZED_SPHERICAL_HARMONIC_ACCEL_ECI_KERNEL
+    if kernel is None:
+        with _SPHERICAL_HARMONIC_KERNEL_LOCK:
+            kernel = _NORMALIZED_SPHERICAL_HARMONIC_ACCEL_ECI_KERNEL
+            if kernel is None:
+                from sim.acceleration.kernels.spherical_harmonics import (
+                    normalized_spherical_harmonic_accel_eci_kernel,
+                )
+
+                kernel = normalized_spherical_harmonic_accel_eci_kernel
+                _NORMALIZED_SPHERICAL_HARMONIC_ACCEL_ECI_KERNEL = kernel
+    return kernel
 
 
 @dataclass(frozen=True)
@@ -401,13 +419,7 @@ def _accelerated_harmonic_accel_hpop_eci_km_s2(
 ) -> np.ndarray:
     """Run normalized harmonic mathematics through the optional backend."""
 
-    global _NORMALIZED_SPHERICAL_HARMONIC_ACCEL_ECI_KERNEL
-    if _NORMALIZED_SPHERICAL_HARMONIC_ACCEL_ECI_KERNEL is None:
-        from sim.acceleration.kernels.spherical_harmonics import (
-            normalized_spherical_harmonic_accel_eci_kernel,
-        )
-
-        _NORMALIZED_SPHERICAL_HARMONIC_ACCEL_ECI_KERNEL = normalized_spherical_harmonic_accel_eci_kernel
+    kernel = _load_normalized_spherical_harmonic_kernel()
 
     rotation = _harmonic_rotation_matrix(
         t_s=float(t_s),
@@ -423,7 +435,7 @@ def _accelerated_harmonic_accel_hpop_eci_km_s2(
         ddeps_rad=ddeps_rad,
         eop_extrapolation=eop_extrapolation,
     )
-    return _NORMALIZED_SPHERICAL_HARMONIC_ACCEL_ECI_KERNEL(
+    return kernel(
         np.asarray(r_eci_km, dtype=float).reshape(3),
         rotation,
         float(mu_km3_s2),

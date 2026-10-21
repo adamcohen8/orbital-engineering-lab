@@ -42,6 +42,15 @@ class _PreparedHistory:
     sample_ends: list[int] | None = None
 
 
+@dataclass
+class _SampledSchedule:
+    widths: list[float]
+    times: list[float]
+    ends: list[int]
+    intervals: list[tuple[float, float]]
+    truth_times: list[float]
+
+
 class PassiveHistoryCache:
     """Reuse numerical rows without advancing the scenario's event lifecycle."""
 
@@ -53,6 +62,9 @@ class PassiveHistoryCache:
         self.entries: dict[str, _PreparedHistory] = {}
         self.preparation_count = 0
         self.consumed_samples = 0
+
+
+
 
     def _environment(self, agent: Any) -> dict[str, Any]:
         dynamics = agent.dynamics
@@ -167,47 +179,11 @@ class PassiveHistoryCache:
         if propagate is None and model not in {"force_plan", "adaptive_zonal", "adaptive_force_plan"}:
             # Compatible older wheels retain the ordinary Rust stepper.
             return None
-        # Game speed controls can override the configured outer step. Prepare
-        # future rows at the observed cadence; existing guards handle changes.
-        dt = float(t_next) - float(t_s)
-        widths: list[float] = []
-        times: list[float] = []
-        ends: list[int] = []
-        intervals: list[tuple[float, float]] = []
-        truth_times = [float(initial.t_s)]
-        truth_clock = float(initial.t_s)
-        start, stop = float(t_s), float(t_next)
-        for _ in range(self.max_samples):
-            interval_widths: list[float] = []
-            interval_times: list[float] = []
-            current = start
-            next_truth_clock = truth_clock
-            while current < stop:
-                h = min(max(sim_substep, 1.0e-12), stop - current)
-                inner_h = OrbitalAttitudeDynamics._effective_substep(orbit_substep, h)
-                if len(widths) + len(interval_widths) + int(h / inner_h) + 1 > self.max_steps:
-                    break
-                local_clock = next_truth_clock
-                for inner_width in OrbitalAttitudeDynamics._substep_sequence(h, inner_h):
-                    interval_times.append(local_clock)
-                    interval_widths.append(inner_width)
-                    local_clock += float(inner_width)
-                current += h
-                next_truth_clock += h
-            if current < stop:
-                break
-            widths.extend(interval_widths)
-            times.extend(interval_times)
-            ends.append(len(widths))
-            intervals.append((start, stop))
-            truth_clock = next_truth_clock
-            truth_times.append(truth_clock)
-            start = stop
-            stop = float(start + min(dt, max(duration - start, 0.0)))
-            if stop <= start:
-                break
-        if not intervals:
+        schedule = self._schedule(definition, initial, t_s, t_next)
+        if schedule is None:
             return None
+        widths, times, ends = schedule.widths, schedule.times, schedule.ends
+        intervals, truth_times = schedule.intervals, schedule.truth_times
         initial_vector = np.concatenate((initial.position_eci_km, initial.velocity_eci_km_s))
         try:
             packed_widths = np.asarray(widths, dtype="<f8").tobytes()
@@ -274,6 +250,54 @@ class PassiveHistoryCache:
             sample_ends=ends if adaptive_infos is not None else None,
         )
 
+
+    def _schedule(
+        self, definition: tuple[Any, ...], initial: StateTruth, t_s: float, t_next: float,
+    ) -> _SampledSchedule | None:
+        sim_substep, orbit_substep, duration = definition[5:8]
+        # Game speed controls can override the configured outer step. Prepare
+        # future rows at the observed cadence; existing guards handle changes.
+        dt = float(t_next) - float(t_s)
+        widths: list[float] = []
+        times: list[float] = []
+        ends: list[int] = []
+        intervals: list[tuple[float, float]] = []
+        truth_times = [float(initial.t_s)]
+        truth_clock = float(initial.t_s)
+        start, stop = float(t_s), float(t_next)
+        for _ in range(self.max_samples):
+            interval_widths: list[float] = []
+            interval_times: list[float] = []
+            current = start
+            next_truth_clock = truth_clock
+            while current < stop:
+                h = min(max(sim_substep, 1.0e-12), stop - current)
+                inner_h = OrbitalAttitudeDynamics._effective_substep(orbit_substep, h)
+                if len(widths) + len(interval_widths) + int(h / inner_h) + 1 > self.max_steps:
+                    break
+                local_clock = next_truth_clock
+                for inner_width in OrbitalAttitudeDynamics._substep_sequence(h, inner_h):
+                    interval_times.append(local_clock)
+                    interval_widths.append(inner_width)
+                    local_clock += float(inner_width)
+                current += h
+                next_truth_clock += h
+            if current < stop:
+                break
+            widths.extend(interval_widths)
+            times.extend(interval_times)
+            ends.append(len(widths))
+            intervals.append((start, stop))
+            truth_clock = next_truth_clock
+            truth_times.append(truth_clock)
+            start = stop
+            stop = float(start + min(dt, max(duration - start, 0.0)))
+            if stop <= start:
+                break
+        if not intervals:
+            return None
+        return _SampledSchedule(widths, times, ends, intervals, truth_times)
+
     def _prepare_ogp(
         self, definition: tuple[Any, ...], initial: StateTruth, t_s: float, t_next: float,
     ) -> _PreparedHistory | None:
@@ -301,13 +325,9 @@ class PassiveHistoryCache:
         self.preparation_count += 1
         return _PreparedHistory(definition, intervals, truth_times, states)
 
-    def step(
-        self, *, aid: str, agent: Any, initial: StateTruth, t_s: float, t_next: float,
-    ) -> StateTruth | None:
-        definition = self._definition(agent, initial)
-        if definition is None:
-            self.entries.pop(aid, None)
-            return None
+    def _matching_entry(
+        self, aid: str, definition: tuple[Any, ...], initial: StateTruth, t_s: float, t_next: float,
+    ) -> _PreparedHistory | None:
         state = np.concatenate((initial.position_eci_km, initial.velocity_eci_km_s))
         prepared = self.entries.get(aid)
         if prepared is not None and (
@@ -319,6 +339,16 @@ class PassiveHistoryCache:
         ):
             prepared = None
             self.entries.pop(aid, None)
+        return prepared
+
+    def step(
+        self, *, aid: str, agent: Any, initial: StateTruth, t_s: float, t_next: float,
+    ) -> StateTruth | None:
+        definition = self._definition(agent, initial)
+        if definition is None:
+            self.entries.pop(aid, None)
+            return None
+        prepared = self._matching_entry(aid, definition, initial, t_s, t_next)
         if prepared is None:
             started = perf_counter()
             prepared = self._prepare(definition, initial, t_s, t_next, agent)

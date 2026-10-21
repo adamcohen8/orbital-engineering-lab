@@ -116,3 +116,22 @@ def test_doctor_bootstrap_precedes_heavy_runtime_imports() -> None:
         if import_line in source
     )
     assert doctor_guard < first_heavy_import
+
+
+def test_doctor_warns_legacy_pillow_security_without_removing_python310_function(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path,
+) -> None:
+    import sim.doctor as doctor
+
+    assert interpreter_is_supported((3, 10))
+    monkeypatch.setattr(doctor.sys, "version_info", (3, 10))
+    monkeypatch.setattr(doctor, "_installed_version", lambda _distribution: None)
+    monkeypatch.setattr(doctor, "_pip_check", lambda: (True, "fixture dependency graph"))
+    monkeypatch.setattr(doctor, "_write_check", lambda _root: (True, "fixture output directory"))
+    doctor.print_doctor_report(source_root=tmp_path)
+    output = capsys.readouterr().out
+    row = next(line for line in output.splitlines() if "Security baseline" in line)
+    assert "LEGACY" in row
+    assert "known advisories block dependency security qualification, including core/media/full" in row
+    assert "CPython 3.11+ with Pillow 13" in row
+    assert "Functional Python" in output

@@ -32,6 +32,7 @@ def _load_coefficients(path: str) -> dict[int, np.ndarray]:
         table = arr[arr[:, 0] == float(f107), 1:4]
         if table.shape[0] < 2:
             raise ValueError(f"Harris-Priester F10.7 table {f107} from {path} has too few rows.")
+        table.setflags(write=False)
         tables[f107] = table
     return tables
 
@@ -61,8 +62,12 @@ def _selected_f107_table(path: str, f107: float) -> tuple[int, np.ndarray]:
 @lru_cache(maxsize=4096)
 def _default_sun_position(jd_utc: float, sun_model: str) -> np.ndarray:
     if sun_model in {"hpop_simple", "hpop_validation_simple", "validation_simple", "simple"}:
-        return sun_position_eci_km_simple(jd_utc)
-    return sun_position_eci_km_enhanced(jd_utc)
+        position = sun_position_eci_km_simple(jd_utc)
+    else:
+        position = sun_position_eci_km_enhanced(jd_utc)
+    position = np.asarray(position, dtype=float).reshape(3)
+    position.setflags(write=False)
+    return position
 
 
 def clear_trajectory_epoch_caches() -> None:

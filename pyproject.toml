@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "orbital-engineering-lab"
-version = "0.34.0"
+version = "0.35.0"
 description = "Integrated spacecraft simulation and analysis platform for rendezvous, control, validation, and mission prototyping."
 readme = "README.md"
 requires-python = ">=3.10,<3.15"
@@ -28,9 +28,11 @@ classifiers = [
 ]
 dependencies = [
   "oel-rust-game>=0.5,<0.6",
-  "oel-rust-orbit>=0.18.2,<0.19",
+  "oel-rust-orbit>=0.18.3,<0.19",
   "numpy>=2.1,<2.5",
   "matplotlib>=3.8,<3.12",
+  "Pillow==12.3.0; python_version < '3.11'",
+  "Pillow>=13,<14; python_version >= '3.11'",
   "tqdm>=4.65,<5",
   "PyYAML>=6.0,<7",
   "scipy>=1.14.1,<1.18",
@@ -44,6 +46,11 @@ oel-mcp = "integrations.oel_mcp.public_server:main"
 oel-study-mcp = "integrations.oel_mcp.study_server:main"
 
 [project.optional-dependencies]
+io = [
+  "sgp4>=2.24,<3",
+  "spiceypy>=8,<9",
+  "pyarrow>=21,<27",
+]
 dev = [
   "pytest>=9,<10",
   "ruff==0.15.14",
@@ -52,10 +59,11 @@ dev = [
 ]
 game = [
   "oel-rust-game>=0.5,<0.6",
-  "oel-rust-orbit>=0.18.2,<0.19",
+  "oel-rust-orbit>=0.18.3,<0.19",
   "pygame>=2.5,<3; python_version < '3.14'",
   "pygame-ce>=2.5,<3; python_version >= '3.14'",
-  "Pillow>=12,<13",
+  "Pillow==12.3.0; python_version < '3.11'",
+  "Pillow>=13,<14; python_version >= '3.11'",
   "imageio>=2.34,<3",
   "imageio-ffmpeg>=0.4,<1",
 ]
@@ -76,10 +84,11 @@ cross-platform = [
   "setuptools>=83,<84",
   "tomli>=2,<3; python_version < '3.11'",
   "oel-rust-game>=0.5,<0.6",
-  "oel-rust-orbit>=0.18.2,<0.19",
+  "oel-rust-orbit>=0.18.3,<0.19",
   "pygame>=2.5,<3; python_version < '3.14'",
   "pygame-ce>=2.5,<3; python_version >= '3.14'",
-  "Pillow>=12,<13",
+  "Pillow==12.3.0; python_version < '3.11'",
+  "Pillow>=13,<14; python_version >= '3.11'",
   "imageio>=2.34,<3",
   "imageio-ffmpeg>=0.4,<1",
   "numba>=0.61,<0.67; platform_system != 'Darwin' or platform_machine != 'x86_64'",
@@ -94,10 +103,11 @@ full = [
   "setuptools>=83,<84",
   "tomli>=2,<3; python_version < '3.11'",
   "oel-rust-game>=0.5,<0.6",
-  "oel-rust-orbit>=0.18.2,<0.19",
+  "oel-rust-orbit>=0.18.3,<0.19",
   "pygame>=2.5,<3; python_version < '3.14'",
   "pygame-ce>=2.5,<3; python_version >= '3.14'",
-  "Pillow>=12,<13",
+  "Pillow==12.3.0; python_version < '3.11'",
+  "Pillow>=13,<14; python_version >= '3.11'",
   "imageio>=2.34,<3",
   "imageio-ffmpeg>=0.4,<1",
   "gymnasium>=0.29,<2",
@@ -146,6 +156,7 @@ sim = [
 ]
 
 "sim.pro_perturbations" = ["*.txt"]
+"sim.pro_slr_od" = ["NOTICE.txt", "data/*.txt"]
 
 [tool.setuptools.exclude-package-data]
 sim = [

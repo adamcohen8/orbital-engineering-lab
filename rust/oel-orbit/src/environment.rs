@@ -232,14 +232,29 @@ fn iau76_80_rotation_with_rows(
         &frame_rx(mean_epsilon),
     );
     let rbpn = mat_mul(&nutation, &precession);
-    let jd_ut1 = jd_utc + dut1_s / DAY_S;
-    let centuries_ut1 = (jd_ut1 - J2000) / JULIAN_CENTURY_DAYS;
-    let theta_degrees = 280.46061837
-        + 360.98564736629 * (jd_ut1 - J2000)
-        + 0.000387933 * centuries_ut1 * centuries_ut1
-        - centuries_ut1 * centuries_ut1 * centuries_ut1 / 38_710_000.0;
-    let gmst = theta_degrees.rem_euclid(360.0).to_radians();
-    let gast = (gmst + delta_psi * true_epsilon.cos()).rem_euclid(2.0 * std::f64::consts::PI);
+    // IERS 1996, p. 21 (IAU 1982 GMST-UT1). Preserve sub-JD elapsed
+    // seconds and DUT1 instead of rounding them into one large epoch.
+    let offset_days = (t_s + dut1_s) / DAY_S;
+    let centuries_ut1 = ((jd_utc_start - J2000) + offset_days) / JULIAN_CENTURY_DAYS;
+    let fractional_seconds = DAY_S * (jd_utc_start % 1.0 + offset_days % 1.0);
+    let gmst_seconds = 24110.54841 - DAY_S / 2.0
+        + (8640184.812866 + (0.093104 - 6.2e-6 * centuries_ut1) * centuries_ut1)
+            * centuries_ut1
+        + fractional_seconds;
+    let gmst = (gmst_seconds * (2.0 * std::f64::consts::PI / DAY_S))
+        .rem_euclid(2.0 * std::f64::consts::PI);
+    // IAU 1994 resolution C7, effective 1997-02-27 00:00 UTC (TAI-UTC=30s). The
+    // equation of equinoxes uses mean, not true, obliquity.
+    let complementary = if jd_tt >= 2450506.5 + 62.184 / DAY_S {
+        let omega = (((0.008 * centuries_tt + 7.455) * centuries_tt - 6_962_890.5390)
+            * centuries_tt / 3600.0 + 125.04452222)
+            .rem_euclid(360.0).to_radians();
+        (0.00264 * omega.sin() + 0.000063 * (2.0 * omega).sin()) * ARCSEC_TO_RAD
+    } else {
+        0.0
+    };
+    let gast = (gmst + delta_psi * mean_epsilon.cos() + complementary)
+        .rem_euclid(2.0 * std::f64::consts::PI);
     let sp = -47.0e-6 * ((jd_tt - J2000) / JULIAN_CENTURY_DAYS) * ARCSEC_TO_RAD;
     let polar_motion = mat_mul(
         &mat_mul(&frame_rz(sp), &frame_ry(-xp_arcsec * ARCSEC_TO_RAD)),

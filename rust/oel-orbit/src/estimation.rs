@@ -599,14 +599,22 @@ pub fn register(module: &pyo3::prelude::Bound<'_, pyo3::types::PyModule>) -> pyo
         measurement_matrix: &[u8],
         measurement_covariance: &[u8],
     ) -> PyResult<(Py<PyBytes>, Py<PyBytes>, Py<PyBytes>, Py<PyBytes>, f64)> {
-        let (state, covariance, innovation, innovation_covariance, nis) = ekf_update(
-            &decode_f64_bytes(state)?,
-            &decode_f64_bytes(covariance)?,
-            &decode_f64_bytes(measurement)?,
-            &decode_f64_bytes(measurement_matrix)?,
-            &decode_f64_bytes(measurement_covariance)?,
-        )
-        .map_err(PyValueError::new_err)?;
+        let state = decode_f64_bytes(state)?.into_owned();
+        let covariance = decode_f64_bytes(covariance)?.into_owned();
+        let measurement = decode_f64_bytes(measurement)?.into_owned();
+        let measurement_matrix = decode_f64_bytes(measurement_matrix)?.into_owned();
+        let measurement_covariance = decode_f64_bytes(measurement_covariance)?.into_owned();
+        let (state, covariance, innovation, innovation_covariance, nis) = py
+            .detach(|| {
+                ekf_update(
+                    &state,
+                    &covariance,
+                    &measurement,
+                    &measurement_matrix,
+                    &measurement_covariance,
+                )
+            })
+            .map_err(PyValueError::new_err)?;
         Ok((
             output_bytes(py, &state)?,
             output_bytes(py, &covariance)?,
@@ -650,14 +658,11 @@ pub fn register(module: &pyo3::prelude::Bound<'_, pyo3::types::PyModule>) -> pyo
         beta: f64,
         kappa: f64,
     ) -> PyResult<(Py<PyBytes>, Py<PyBytes>, Py<PyBytes>)> {
-        let (sigma, wm, wc) = ukf_sigma_points(
-            &decode_f64_bytes(state)?,
-            &decode_f64_bytes(covariance)?,
-            alpha,
-            beta,
-            kappa,
-        )
-        .map_err(PyValueError::new_err)?;
+        let state = decode_f64_bytes(state)?.into_owned();
+        let covariance = decode_f64_bytes(covariance)?.into_owned();
+        let (sigma, wm, wc) = py
+            .detach(|| ukf_sigma_points(&state, &covariance, alpha, beta, kappa))
+            .map_err(PyValueError::new_err)?;
         Ok((
             output_bytes(py, &sigma)?,
             output_bytes(py, &wm)?,
@@ -672,13 +677,20 @@ pub fn register(module: &pyo3::prelude::Bound<'_, pyo3::types::PyModule>) -> pyo
         covariance_weights: &[u8],
         process_covariance: &[u8],
     ) -> PyResult<(Py<PyBytes>, Py<PyBytes>)> {
-        let (mean, covariance) = ukf_recombine(
-            &decode_f64_bytes(sigma_points)?,
-            &decode_f64_bytes(mean_weights)?,
-            &decode_f64_bytes(covariance_weights)?,
-            &decode_f64_bytes(process_covariance)?,
-        )
-        .map_err(PyValueError::new_err)?;
+        let sigma_points = decode_f64_bytes(sigma_points)?.into_owned();
+        let mean_weights = decode_f64_bytes(mean_weights)?.into_owned();
+        let covariance_weights = decode_f64_bytes(covariance_weights)?.into_owned();
+        let process_covariance = decode_f64_bytes(process_covariance)?.into_owned();
+        let (mean, covariance) = py
+            .detach(|| {
+                ukf_recombine(
+                    &sigma_points,
+                    &mean_weights,
+                    &covariance_weights,
+                    &process_covariance,
+                )
+            })
+            .map_err(PyValueError::new_err)?;
         Ok((output_bytes(py, &mean)?, output_bytes(py, &covariance)?))
     }
     #[pyfunction]
@@ -689,9 +701,10 @@ pub fn register(module: &pyo3::prelude::Bound<'_, pyo3::types::PyModule>) -> pyo
         mu: f64,
         epsilon: f64,
     ) -> PyResult<(Py<PyBytes>, Py<PyBytes>)> {
-        let (state, phi) =
-            two_body_predict_and_jacobian(&decode_f64_bytes(state)?, dt_s, mu, epsilon)
-                .map_err(PyValueError::new_err)?;
+        let state = decode_f64_bytes(state)?.into_owned();
+        let (state, phi) = py
+            .detach(|| two_body_predict_and_jacobian(&state, dt_s, mu, epsilon))
+            .map_err(PyValueError::new_err)?;
         Ok((output_bytes(py, &state)?, output_bytes(py, &phi)?))
     }
     module.add_function(wrap_pyfunction!(

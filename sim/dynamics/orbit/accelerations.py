@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from threading import RLock
 
 import numpy as np
 
@@ -16,15 +17,21 @@ from sim.dynamics.orbit.environment import (
 )
 
 _ATMOSPHERE_RELATIVE_VELOCITY_ECI_KM_S = None
+_ATMOSPHERE_RELATIVE_VELOCITY_LOCK = RLock()
 
 
 def _atmosphere_relative_velocity_eci_km_s(*args, **kwargs) -> np.ndarray:
     global _ATMOSPHERE_RELATIVE_VELOCITY_ECI_KM_S
-    if _ATMOSPHERE_RELATIVE_VELOCITY_ECI_KM_S is None:
-        from sim.aero.core import atmosphere_relative_velocity_eci_km_s
+    resolver = _ATMOSPHERE_RELATIVE_VELOCITY_ECI_KM_S
+    if resolver is None:
+        with _ATMOSPHERE_RELATIVE_VELOCITY_LOCK:
+            resolver = _ATMOSPHERE_RELATIVE_VELOCITY_ECI_KM_S
+            if resolver is None:
+                from sim.aero.core import atmosphere_relative_velocity_eci_km_s
 
-        _ATMOSPHERE_RELATIVE_VELOCITY_ECI_KM_S = atmosphere_relative_velocity_eci_km_s
-    return _ATMOSPHERE_RELATIVE_VELOCITY_ECI_KM_S(*args, **kwargs)
+                resolver = atmosphere_relative_velocity_eci_km_s
+                _ATMOSPHERE_RELATIVE_VELOCITY_ECI_KM_S = resolver
+    return resolver(*args, **kwargs)
 
 
 @dataclass(frozen=True)

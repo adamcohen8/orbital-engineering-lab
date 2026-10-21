@@ -79,15 +79,34 @@ class EKFManeuverDetector:
     max_nis: float | None = field(default=None, init=False)
     _history: deque[tuple[float, bool, bool]] = field(init=False, repr=False)
     _cooldown_remaining: int = field(default=0, init=False, repr=False)
+    _recovery_seen: bool = field(default=False, init=False, repr=False)
+    recovery_hold_count: int = field(default=0, init=False)
+    recovery_reinitialization_count: int = field(default=0, init=False)
+    recovery_transient_count: int = field(default=0, init=False)
+    last_recovery_event_t_s: float | None = field(default=None, init=False)
+    last_recovery_decision_t_s: float | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         self.status = "nominal" if self.config.enabled else "disabled"
         self._history = deque(maxlen=int(self.config.window_size))
 
     def update(self, diagnostics: Any, *, t_s: float) -> EKFManeuverDetectionUpdate:
+        recovery = getattr(diagnostics, "recovery_diagnostics", None)
+        if recovery is not None:
+            self._recovery_seen = True
+            if recovery.action == "held":
+                self.recovery_hold_count += 1
+            if recovery.action == "reinitialized":
+                self.recovery_reinitialization_count += 1
+                self.last_recovery_event_t_s = float(recovery.event_time_s)
+                self.last_recovery_decision_t_s = float(recovery.decision_time_s)
+            if recovery.classification == "transient_discrepancy":
+                self.recovery_transient_count += 1
         if not self.config.enabled:
             return EKFManeuverDetectionUpdate(evaluated=False, status="disabled", reason="disabled")
-        if diagnostics is None or not bool(getattr(diagnostics, "update_applied", False)):
+        # Held measurements retain pre-recovery NIS evidence. Recovery events
+        # are reported separately from physical maneuver hypotheses.
+        if diagnostics is None or (not bool(getattr(diagnostics, "update_applied", False)) and recovery is None):
             return EKFManeuverDetectionUpdate(evaluated=False, status=self.status, reason="no_ekf_update")
 
         nis = float(getattr(diagnostics, "nis", float("nan")))
@@ -156,7 +175,7 @@ class EKFManeuverDetector:
         )
 
     def summary(self) -> dict[str, float | int | str | bool | None]:
-        return {
+        result = {
             "enabled": bool(self.config.enabled),
             "status": str(self.status),
             "sample_count": int(self.sample_count),
@@ -174,6 +193,16 @@ class EKFManeuverDetector:
             "warning_probability": float(self.config.warning_probability),
             "detection_probability": float(self.config.detection_probability),
         }
+
+        if self._recovery_seen:
+            result.update({
+                "recovery_hold_count": self.recovery_hold_count,
+                "recovery_reinitialization_count": self.recovery_reinitialization_count,
+                "recovery_transient_count": self.recovery_transient_count,
+                "last_recovery_event_t_s": self.last_recovery_event_t_s,
+                "last_recovery_decision_t_s": self.last_recovery_decision_t_s,
+            })
+        return result
 
 
 def chi_square_threshold(dof: int, probability: float) -> float:

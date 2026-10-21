@@ -28,6 +28,10 @@ Use the deterministic OEL engine; never substitute agent-written physics.
   evidence. If a route is unavailable, explain the limit before offering an
   alternative that changes the study.
 
+Public scenarios use deterministic serial object stepping. Scale, campaigns,
+controller studies, and their opt-in thread/process transports remain Pro; do
+not recreate those workflows in agent scripts or infer entitlement from code.
+
 ## Construct and check the study
 
 1. Identify the objects, initial states, duration, physical assumptions,
@@ -48,6 +52,25 @@ Use the deterministic OEL engine; never substitute agent-written physics.
    Unknown fields are intent failures: consult the schema instead of deleting
    settings to make validation pass. Check that the resolved configuration still
    answers the question; structural validity is not scientific adequacy.
+
+## Import, compose, or export local data
+
+Use `oel io formats` and the bounded offline profiles in `docs/data-io.md`.
+Preflight source requirements with `oel io object describe-import` and the
+required source/format arguments; inspect completed-output routes with
+`oel io object describe-export` and an explicit object selector. The
+source-checkout entry point is `python -m sim.data_io`. These are CLI/Python
+routes; do not invent corresponding MCP tools.
+
+Keep object/sample selection, frames, epochs, units, promotion gates and
+hash-bound receipts explicit. Imports and composition write a new scenario;
+validate the saved YAML before any separate execution. An imported trajectory
+sample seeds a study and does not replay its history or assimilate covariance.
+Native checkpoints/snapshots retain their separate continuation contracts.
+Export with `oel io object export`, `oel io export-review`, or
+`oel io export-table` from completed, identity-verified evidence. IO never executes a
+simulation, reruns OD, or replaces source inputs. Review-to-OGP/TLE fitting is
+a separate Pro action.
 
 ## Validate, execute, inspect
 
@@ -81,6 +104,13 @@ from the advertised schema; repair scenario errors against the documented
 contract and validate again. Policy, entitlement and source-trust denials need
 the indicated operator action, not repeated attempts with invented authority.
 Keep private inputs and evidence within their authorized handling boundary.
+
+For full-state EKF innovation recovery, use `docs/innovation-recovery.md`.
+The shared absolute and HCW/SS-J2/TH/YA relative policy is experimental and off
+by default. Enable it only when the study requires it and the measurement
+contract supplies full position/velocity; a recovery is not proof of a maneuver
+or calibrated covariance. Keep this estimation policy separate from workflow
+retries and flight-software navigation.
 
 Detailed source-checkout references: `docs/agent-capability-routing.md`,
 `docs/scenario-yaml.md`, `docs/agent-run-lifecycle.md`, and

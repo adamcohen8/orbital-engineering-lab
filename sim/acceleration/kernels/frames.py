@@ -111,6 +111,29 @@ def _iau80_nutation_angles_kernel(
 
 
 @njit_or_identity(cache=True, fastmath=False)
+def _gmst_iau1982_split_kernel(jd_utc_start: float, elapsed_s: float, dut1_s: float) -> float:
+    # IERS 1996 GMST-UT1; mirror the reference and Rust two-part time policy.
+    offset_days = (elapsed_s + dut1_s) / 86400.0
+    centuries = ((jd_utc_start - _J2000) + offset_days) / _JULIAN_CENTURY_DAYS
+    fractional_seconds = 86400.0 * (np.fmod(jd_utc_start, 1.0) + np.fmod(offset_days, 1.0))
+    seconds = (24110.54841 - 43200.0
+               + (8640184.812866 + (0.093104 - 6.2e-6 * centuries) * centuries) * centuries
+               + fractional_seconds)
+    return (seconds * (2.0 * math.pi / 86400.0)) % (2.0 * math.pi)
+
+
+@njit_or_identity(cache=True, fastmath=False)
+def _equation_of_equinoxes_iau1994_kernel(jd_tt: float, dpsi_rad: float, mean_epsilon: float) -> float:
+    centuries = (jd_tt - _J2000) / _JULIAN_CENTURY_DAYS
+    complementary = 0.0
+    if jd_tt >= 2450506.5 + 62.184 / 86400.0:
+        omega = math.radians(((((0.008 * centuries + 7.455) * centuries - 6962890.5390)
+                              * centuries) / 3600.0 + 125.04452222) % 360.0)
+        complementary = (0.00264 * math.sin(omega) + 0.000063 * math.sin(2.0 * omega)) * _ARCSEC_TO_RAD
+    return dpsi_rad * math.cos(mean_epsilon) + complementary
+
+
+@njit_or_identity(cache=True, fastmath=False)
 def apparent_sidereal_time_iau76_80_kernel(
     jd_utc: float,
     dut1_s: float,
@@ -123,23 +146,15 @@ def apparent_sidereal_time_iau76_80_kernel(
     """Evaluate HPOP-style apparent sidereal time at one UTC epoch."""
 
     jd_tt = jd_utc + (dat_s + 32.184) / 86400.0
-    _centuries_tt, delta_psi, true_epsilon, _mean_epsilon = _iau80_nutation_angles_kernel(
+    _centuries_tt, delta_psi, _true_epsilon, mean_epsilon = _iau80_nutation_angles_kernel(
         jd_tt,
         ddpsi_rad,
         ddeps_rad,
         nutation_coefficients,
         nutation_terms,
     )
-    jd_ut1 = jd_utc + dut1_s / 86400.0
-    centuries_ut1 = (jd_ut1 - _J2000) / _JULIAN_CENTURY_DAYS
-    theta_degrees = (
-        280.46061837
-        + 360.98564736629 * (jd_ut1 - _J2000)
-        + 0.000387933 * centuries_ut1 * centuries_ut1
-        - centuries_ut1 * centuries_ut1 * centuries_ut1 / 38710000.0
-    )
-    gmst = math.radians(theta_degrees % 360.0)
-    return (gmst + delta_psi * math.cos(true_epsilon)) % (2.0 * math.pi)
+    gmst = _gmst_iau1982_split_kernel(jd_utc, 0.0, dut1_s)
+    return (gmst + _equation_of_equinoxes_iau1994_kernel(jd_tt, delta_psi, mean_epsilon)) % (2.0 * math.pi)
 
 
 @njit_or_identity(cache=True, fastmath=False)
@@ -189,16 +204,8 @@ def eci_to_ecef_iau76_80_kernel(
     # with J2000 -> MOD precession for the J2000 -> TOD celestial factor.
     rbpn = nutation @ precession
 
-    jd_ut1 = jd_utc + dut1_s / 86400.0
-    centuries_ut1 = (jd_ut1 - _J2000) / _JULIAN_CENTURY_DAYS
-    theta_degrees = (
-        280.46061837
-        + 360.98564736629 * (jd_ut1 - _J2000)
-        + 0.000387933 * centuries_ut1 * centuries_ut1
-        - centuries_ut1 * centuries_ut1 * centuries_ut1 / 38710000.0
-    )
-    gmst = math.radians(theta_degrees % 360.0)
-    gast = (gmst + delta_psi * math.cos(true_epsilon)) % (2.0 * math.pi)
+    gmst = _gmst_iau1982_split_kernel(jd_utc_start, t_s, dut1_s)
+    gast = (gmst + _equation_of_equinoxes_iau1994_kernel(jd_tt, delta_psi, mean_epsilon)) % (2.0 * math.pi)
     sp = -47.0e-6 * ((jd_tt - _J2000) / _JULIAN_CENTURY_DAYS) * _ARCSEC_TO_RAD
     polar_motion = (
         _earth_frame_rz(sp)

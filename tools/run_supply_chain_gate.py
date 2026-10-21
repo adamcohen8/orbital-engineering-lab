@@ -6,6 +6,7 @@ import json
 import os
 import platform
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -23,6 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from tools.build_installable_release import _source_files, release_source_identity  # noqa: E402
 from tools.generate_python_sbom import write_sbom  # noqa: E402
 from tools.native_source_identity import native_source_identity  # noqa: E402
 
@@ -36,8 +38,8 @@ _NATIVE_WHEEL_PACKAGES = (
 )
 
 
-def _package_version() -> str:
-    text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+def _package_version(source_root: Path | None = None) -> str:
+    text = ((source_root or ROOT) / "pyproject.toml").read_text(encoding="utf-8")
     match = re.search(r'^version\s*=\s*"([^"]+)"', text, flags=re.MULTILINE)
     if match is None:
         raise RuntimeError("pyproject.toml does not declare a package version")
@@ -99,15 +101,20 @@ def _normalized_distribution_name(value: object) -> str:
     return re.sub(r"[-_.]+", "-", str(value or "").strip().lower())
 
 
-def _native_qualification_manifest() -> Path:
-    return ROOT / "rust" / f"qualification-v{_package_version()}.json"
+def _native_qualification_manifest(source_root: Path | None = None) -> Path:
+    version = _package_version() if source_root is None else _package_version(source_root)
+    return (source_root or ROOT) / "rust" / f"qualification-v{version}.json"
 
 
-def _qualified_native_wheel_receipts(*, python_minor: tuple[int, int] | None = None) -> dict[str, dict[str, Any]]:
+def _qualified_native_wheel_receipts(
+    *, python_minor: tuple[int, int] | None = None,
+    source_root: Path | None = None, qualification_manifest: Path | None = None,
+) -> dict[str, dict[str, Any]]:
     """Return the current-source native wheel receipts for this host/interpreter."""
-    manifest = _native_qualification_manifest()
+    manifest = qualification_manifest or _native_qualification_manifest(source_root)
     payload = json.loads(manifest.read_text(encoding="utf-8"))
-    if payload.get("release_version") != _package_version():
+    version = _package_version() if source_root is None else _package_version(source_root)
+    if payload.get("release_version") != version:
         raise ValueError("Native qualification release version does not match")
     major, minor = python_minor or (sys.version_info.major, sys.version_info.minor)
     prefix = f"{major}.{minor}."
@@ -125,7 +132,7 @@ def _qualified_native_wheel_receipts(*, python_minor: tuple[int, int] | None = N
         if len(matches) != 1:
             raise ValueError(f"Native wheel needs one passing host/interpreter qualification: {module_name}")
         row = matches[0]
-        crate = ROOT / "rust" / crate_name
+        crate = (source_root or ROOT) / "rust" / crate_name
         source_identity = native_source_identity(crate)
         if row.get("source_identity") != source_identity:
             raise ValueError(f"Native wheel qualification differs from candidate source: {module_name}")
@@ -171,6 +178,7 @@ def _full_install_command(
     install_report_path: Path,
     torch_cpu_index: bool,
     native_wheels: tuple[Path, ...] = (),
+    source_root: Path | None = None,
 ) -> list[str]:
     command = [
         python_executable,
@@ -186,12 +194,13 @@ def _full_install_command(
     ]
     if torch_cpu_index:
         command.extend(["--extra-index-url", PYTORCH_CPU_INDEX_URL])
-    command.extend([*(str(path) for path in native_wheels), ".[full]", "--report", str(install_report_path)])
+    project = ".[full]" if source_root is None else str(source_root) + "[full]"
+    command.extend([*(str(path) for path in native_wheels), project, "--report", str(install_report_path)])
     return command
 
 
-def _build_requirements() -> tuple[str, ...]:
-    payload = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+def _build_requirements(source_root: Path | None = None) -> tuple[str, ...]:
+    payload = tomllib.loads(((source_root or ROOT) / "pyproject.toml").read_text(encoding="utf-8"))
     requirements = tuple(str(item).strip() for item in payload.get("build-system", {}).get("requires", []))
     if not requirements or any(not item for item in requirements):
         raise RuntimeError("pyproject.toml must declare non-empty build-system requirements")
@@ -203,6 +212,7 @@ def _build_dependency_install_command(
     python_executable: str,
     constraints: Path,
     install_report_path: Path,
+    source_root: Path | None = None,
 ) -> list[str]:
     return [
         python_executable,
@@ -215,7 +225,7 @@ def _build_dependency_install_command(
         PYPI_INDEX_URL,
         "-c",
         str(constraints),
-        *_build_requirements(),
+        *_build_requirements(source_root),
         "--report",
         str(install_report_path),
     ]
@@ -244,6 +254,7 @@ def _validate_dependency_sources(
     torch_cpu_index: bool,
     native_wheels: tuple[Path, ...] = (),
     qualified_native_wheels: dict[str, dict[str, Any]] | None = None,
+    source_root: Path | None = None,
 ) -> str | None:
     payload = json.loads(path.read_text(encoding="utf-8"))
     allowed_hosts = {"files.pythonhosted.org", "pypi.org"}
@@ -265,7 +276,7 @@ def _validate_dependency_sources(
                 unexpected.append(f"duplicate-native:{distribution}")
         source_url = str(row.get("source_url", "") or "")
         if source_url == "<local-source>":
-            if row.get("name") == "orbital-engineering-lab" and row.get("version") == _package_version():
+            if row.get("name") == "orbital-engineering-lab" and row.get("version") == _package_version(source_root):
                 continue
             artifact = str(row.get("artifact", ""))
             if is_native and qualified_native_wheels is not None:
@@ -331,12 +342,23 @@ def _run_supply_chain_gate_in_environment(
     native_wheels: tuple[Path, ...] = (),
     qualified_native_wheels: dict[str, dict[str, Any]] | None = None,
     native_qualification_sha256: str | None = None,
+    source_root: Path | None = None,
+    qualification_manifest: Path | None = None,
+    install_source_root: Path | None = None,
 ) -> dict[str, Any]:
     command_results: list[dict[str, Any]] = []
     qualified_native_dependencies: list[dict[str, str]] = []
+    qualification_path = qualification_manifest or _native_qualification_manifest(source_root)
+    source_identity = release_source_identity(source_root) if source_root is not None else None
+    if source_root is not None and (
+        not install_full or isolated_environment_root is None or install_source_root is None
+        or release_source_identity(install_source_root) != source_identity
+    ):
+        raise ValueError("Public audits require an isolated installation of the exact exported source")
+    qualification_options = {"source_root": source_root, "qualification_manifest": qualification_path}
     if install_full:
-        current_qualification = _qualified_native_wheel_receipts()
-        current_qualification_sha256 = _sha256(_native_qualification_manifest())
+        current_qualification = _qualified_native_wheel_receipts(**qualification_options)
+        current_qualification_sha256 = _sha256(qualification_path)
         if qualified_native_wheels is not None and qualified_native_wheels != current_qualification:
             raise ValueError("Native qualification receipts differ from the current candidate source")
         if native_qualification_sha256 is not None and native_qualification_sha256 != current_qualification_sha256:
@@ -344,6 +366,10 @@ def _run_supply_chain_gate_in_environment(
         qualified_native_wheels = current_qualification
         native_qualification_sha256 = current_qualification_sha256
     package_environment = _package_environment()
+    if isolated_environment_root is not None:
+        # Preserve source/index sanitization and keep resolver downloads inside
+        # the audit's owned disposable storage, including failed resolutions.
+        package_environment["PIP_CACHE_DIR"] = str(isolated_environment_root / "pip-cache")
     audit_python = str(bootstrap_python)
     if isolated_environment_root is not None:
         create_environment = [bootstrap_python, "-m", "venv", str(isolated_environment_root)]
@@ -386,6 +412,7 @@ def _run_supply_chain_gate_in_environment(
                 python_executable=audit_python,
                 constraints=constraints,
                 install_report_path=build_install_report_path,
+                source_root=source_root,
             ),
             _full_install_command(
                 python_executable=audit_python,
@@ -393,6 +420,7 @@ def _run_supply_chain_gate_in_environment(
                 install_report_path=install_report_path,
                 torch_cpu_index=torch_cpu_index,
                 native_wheels=native_wheels,
+                source_root=install_source_root,
             ),
         ]
         for cmd in commands:
@@ -436,6 +464,7 @@ def _run_supply_chain_gate_in_environment(
                         torch_cpu_index=torch_cpu_index,
                         native_wheels=native_wheels,
                         qualified_native_wheels=qualified_native_wheels,
+                        source_root=source_root,
                     )
                     command_results.append(
                         {
@@ -523,19 +552,21 @@ def _run_supply_chain_gate_in_environment(
             qualified_receipts=qualified_native_wheels,
         )
     if qualified_native_wheels is not None:
-        qualification_path = _native_qualification_manifest()
         if (
             native_qualification_sha256 is None
             or _sha256(qualification_path) != native_qualification_sha256
-            or _qualified_native_wheel_receipts() != qualified_native_wheels
+            or _qualified_native_wheel_receipts(**qualification_options) != qualified_native_wheels
         ):
             raise ValueError("Native qualification changed while the disposable audit ran")
+    if source_root is not None and release_source_identity(source_root) != source_identity:
+        raise ValueError("Audited source export changed while the disposable audit ran")
     passed = bool(command_results) and all(row["return_code"] == 0 for row in command_results)
     manifest = {
         "schema_version": 1,
         "kind": "oel_supply_chain_gate",
-        "product": "oel-pro",
-        "package_version": _package_version(),
+        "product": "oel-public" if source_root is not None else "oel-pro",
+        "package_version": _package_version(source_root),
+        **({"source_identity": source_identity} if source_identity is not None else {}),
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "python": audit_python,
         "bootstrap_python": bootstrap_python,
@@ -567,12 +598,30 @@ def run_supply_chain_gate(
     constraints_file: str | Path | None = None,
     torch_cpu_index: bool = False,
     native_wheelhouse: str | Path | None = None,
+    source_root: str | Path | None = None,
+    native_qualification_manifest: str | Path | None = None,
 ) -> dict[str, Any]:
     if native_wheelhouse is not None and not install_full:
         raise ValueError("Native wheel inputs require full-profile installation")
-    native_qualification = _qualified_native_wheel_receipts() if install_full else None
+    public_root = Path(source_root).expanduser().resolve() if source_root is not None else None
+    qualification_path = (
+        Path(native_qualification_manifest).expanduser().resolve()
+        if native_qualification_manifest is not None else _native_qualification_manifest(public_root)
+    )
+    if public_root is not None:
+        if not install_full or native_wheelhouse is None or native_qualification_manifest is None:
+            raise ValueError("A public source audit requires full installation, native wheels, and their qualification manifest")
+        from tools.check_public_export import check_public_export
+
+        errors = check_public_export(public_root)
+        if errors:
+            raise ValueError("Public audit source boundary check failed:\n- " + "\n- ".join(errors))
+    native_qualification = (
+        _qualified_native_wheel_receipts(source_root=public_root, qualification_manifest=qualification_path)
+        if install_full else None
+    )
     native_qualification_sha256 = (
-        _sha256(_native_qualification_manifest()) if native_qualification is not None else None
+        _sha256(qualification_path) if native_qualification is not None else None
     )
     native_wheels = (
         ()
@@ -586,7 +635,7 @@ def run_supply_chain_gate(
     output.mkdir(parents=True, exist_ok=True)
 
     if constraints_file is None:
-        constraints = ROOT / "constraints" / f"py{sys.version_info.major}{sys.version_info.minor}.txt"
+        constraints = (public_root or ROOT) / "constraints" / f"py{sys.version_info.major}{sys.version_info.minor}.txt"
     else:
         constraints = Path(constraints_file).expanduser().resolve()
 
@@ -594,6 +643,17 @@ def run_supply_chain_gate(
         if not constraints.is_file():
             raise FileNotFoundError(f"No approved constraints file for this interpreter: {constraints}")
         with tempfile.TemporaryDirectory(prefix="oel-supply-chain-") as temporary_root:
+            install_source_root = None
+            if public_root is not None:
+                # pip may write build/egg-info into its input directory. Install
+                # a byte-identical copy while keeping the attested export immutable.
+                install_source_root = Path(temporary_root) / "public-source"
+                for source in _source_files(public_root):
+                    destination = install_source_root / source.relative_to(public_root)
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(source, destination)
+                if release_source_identity(install_source_root) != release_source_identity(public_root):
+                    raise ValueError("Public audit installation copy differs from the exported source")
             return _run_supply_chain_gate_in_environment(
                 output,
                 install_full=True,
@@ -604,6 +664,9 @@ def run_supply_chain_gate(
                 native_wheels=native_wheels,
                 qualified_native_wheels=native_qualification,
                 native_qualification_sha256=native_qualification_sha256,
+                source_root=public_root,
+                qualification_manifest=qualification_path,
+                install_source_root=install_source_root,
             )
     return _run_supply_chain_gate_in_environment(
         output,
@@ -638,6 +701,8 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument("--native-wheelhouse", help="Local orbit/game wheels matching this release's committed host/interpreter qualification")
+    parser.add_argument("--source-root", type=Path, help="Generated public source export to audit independently")
+    parser.add_argument("--native-qualification-manifest", type=Path, help="Native qualification receipt bound to the audited source")
     args = parser.parse_args(argv)
     manifest = run_supply_chain_gate(
         args.output_dir,
@@ -645,6 +710,8 @@ def main(argv: list[str] | None = None) -> int:
         constraints_file=args.constraints,
         torch_cpu_index=bool(args.torch_cpu_index),
         native_wheelhouse=args.native_wheelhouse,
+        source_root=args.source_root,
+        native_qualification_manifest=args.native_qualification_manifest,
     )
     print(f"Evidence manifest: {manifest['manifest']}")
     print(f"Supply-chain gate: {'PASS' if manifest['passed'] else 'FAIL'}")

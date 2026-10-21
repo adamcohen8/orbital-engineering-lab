@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import logging
 import os
+from contextlib import nullcontext
 from copy import copy
 from dataclasses import replace
 from pathlib import Path
+from threading import RLock
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -185,6 +187,12 @@ class _SingleRunEngine:
         initial_history_capacity: int = 4096,
         max_history_samples: int = 4096,
     ) -> None:
+        # The engine is the owner of live simulation state.  A threaded
+        # object-step backend may be running while a session-facing caller
+        # publishes an input or requests a snapshot, so keep those operations
+        # on one re-entrant owner boundary.  Worker snapshots clear this
+        # transient lock before transport/pickle; they never own live state.
+        self._owner_state_lock = RLock()
         self.cfg = cfg
         self.active_step_callback = step_callback
         self.history_mode = str(history_mode or "full").strip().lower()
@@ -753,6 +761,12 @@ class _SingleRunEngine:
             logger.warning("Disabling step callback after runtime error: %s", exc)
             self.active_step_callback = None
 
+    def _owner_state_context(self):
+        """Return the live-owner lock, or a no-op context for worker copies."""
+
+        lock = getattr(self, "_owner_state_lock", None)
+        return nullcontext(None) if lock is None else lock
+
     def _ensure_belief_hist_width(self, aid: str, width: int) -> None:
         self.history_store.ensure_belief_width(aid, width)
 
@@ -793,6 +807,21 @@ class _SingleRunEngine:
             )
 
     def snapshot(
+        self,
+        step_index: int | None = None,
+        *,
+        include_flight_software: bool = True,
+    ) -> dict[str, Any]:
+        # Snapshot reads are part of the same owner boundary as live writes;
+        # callbacks may call back into this method because the owner lock is
+        # re-entrant.
+        with self._owner_state_context():
+            return self._snapshot_owned(
+                step_index,
+                include_flight_software=include_flight_software,
+            )
+
+    def _snapshot_owned(
         self,
         step_index: int | None = None,
         *,
@@ -847,6 +876,10 @@ class _SingleRunEngine:
         }
 
     def publish_fsw_input(self, object_id: str, event: object) -> None:
+        with self._owner_state_context():
+            self._publish_fsw_input_owned(object_id, event)
+
+    def _publish_fsw_input_owned(self, object_id: str, event: object) -> None:
         agent = self.agents.get(str(object_id))
         runtime = None if agent is None else agent.flight_software_runtime
         if runtime is None:
@@ -854,6 +887,10 @@ class _SingleRunEngine:
         runtime.enqueue(event)
 
     def add_fsw_input_publisher(self, object_id: str, publisher: Callable[..., object]) -> None:
+        with self._owner_state_context():
+            self._add_fsw_input_publisher_owned(object_id, publisher)
+
+    def _add_fsw_input_publisher_owned(self, object_id: str, publisher: Callable[..., object]) -> None:
         agent = self.agents.get(str(object_id))
         runtime = None if agent is None else agent.flight_software_runtime
         if runtime is None:
@@ -861,6 +898,10 @@ class _SingleRunEngine:
         runtime.add_input_publisher(publisher)
 
     def request_fsw_input_publisher_poll(self, object_id: str) -> None:
+        with self._owner_state_context():
+            self._request_fsw_input_publisher_poll_owned(object_id)
+
+    def _request_fsw_input_publisher_poll_owned(self, object_id: str) -> None:
         agent = self.agents.get(str(object_id))
         runtime = None if agent is None else agent.flight_software_runtime
         if runtime is None:
@@ -1192,6 +1233,10 @@ class _SingleRunEngine:
     def _process_worker_engine_snapshot(self, item: ObjectStepInput) -> _SingleRunEngine:
         aid = item.object_id
         worker = copy(self)
+        # The owner lock protects live state but is process-local and must not
+        # cross the worker transport boundary.  Worker stepping is isolated to
+        # its copied object state and uses the no-op context above.
+        worker._owner_state_lock = None
         worker.active_step_callback = None
         worker._forecast_dynamics_by_object = {
             object_id: runtime.dynamics
@@ -1260,6 +1305,20 @@ class _SingleRunEngine:
         pre/post pair is retained separately because object_state has one row
         per object and sample, whose event-time row is the post-impulse state.
         """
+        with self._owner_state_context():
+            return self._apply_impulse_owned(
+                object_id,
+                delta_v_eci_m_s,
+                maneuver_id=maneuver_id,
+            )
+
+    def _apply_impulse_owned(
+        self,
+        object_id: str,
+        delta_v_eci_m_s: tuple[float, float, float] | np.ndarray,
+        *,
+        maneuver_id: str,
+    ) -> dict[str, Any]:
         if self.terminated_early or self.done:
             raise ValueError("Cannot apply an impulse after the run has ended")
         agent = self.agents.get(object_id)
@@ -1300,12 +1359,21 @@ class _SingleRunEngine:
     def _advance_step(
         self, *, dt_s: float | None = None, return_snapshot: bool = True,
     ) -> dict[str, Any]:
+        # Keep each owner step atomic with respect to session-facing live
+        # input/maneuver/publisher operations.  RLock is intentional: the
+        # owner callback and compatibility seams may call back into the engine.
+        with self._owner_state_context():
+            return self._advance_step_owned(dt_s=dt_s, return_snapshot=return_snapshot)
+
+    def _advance_step_owned(
+        self, *, dt_s: float | None = None, return_snapshot: bool = True,
+    ) -> dict[str, Any]:
         activate_attitude_guardrail_stats(self.attitude_guardrail_stats)
         if not bool(getattr(self, "_acceleration_context_active", False)):
             with acceleration_context_from_config(self.cfg):
                 self._acceleration_context_active = True
                 try:
-                    return self._advance_step(dt_s=dt_s, return_snapshot=return_snapshot)
+                    return self._advance_step_owned(dt_s=dt_s, return_snapshot=return_snapshot)
                 finally:
                     self._acceleration_context_active = False
         if self.done:
@@ -1626,8 +1694,29 @@ def _run_single_config(
     cfg: SimulationScenarioConfig,
     step_callback: Callable[[int, int], None] | None = None,
 ) -> dict[str, Any]:
+    # The public-safe budget helper owns the execution-local marker.  Import
+    # the private contract module only for an active thread campaign so public
+    # single-run imports do not cross the private campaign boundary.
+    from sim.execution.worker_budget import current_thread_campaign_runtime_scope
+
     with acceleration_context_from_config(cfg):
-        return _SingleRunEngine(cfg, step_callback=step_callback).run()
+        engine = _SingleRunEngine(cfg, step_callback=step_callback)
+        try:
+            runtime_scope = current_thread_campaign_runtime_scope()
+            if runtime_scope is not None:
+                from sim.execution.thread_campaign import preflight_thread_campaign_engine_if_active
+
+                preflight_thread_campaign_engine_if_active(engine)
+        except BaseException:
+            # Engine construction creates the selected object executor.  If a
+            # runtime contract catches an unsafe materialized hook, close that
+            # executor before the worker future reports the failure.
+            try:
+                engine.object_step_executor.shutdown()
+            except Exception:
+                pass
+            raise
+        return engine.run()
 
 
 def _is_truthy_env(name: str) -> bool:

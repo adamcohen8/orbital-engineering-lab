@@ -18,7 +18,7 @@ cargo test --locked --manifest-path rust/oel-orbit/Cargo.toml
 cargo test --locked --manifest-path rust/oel-game/Cargo.toml
 python -m maturin build --release --locked --manifest-path rust/oel-orbit/Cargo.toml --interpreter python --out dist/native
 python -m maturin build --release --locked --manifest-path rust/oel-game/Cargo.toml --interpreter python --out dist/native
-python -m pip install --no-index --find-links dist/native "oel-rust-orbit>=0.18.2,<0.19" "oel-rust-game>=0.5,<0.6"
+python -m pip install --no-index --find-links dist/native "oel-rust-orbit>=0.18.3,<0.19" "oel-rust-game>=0.5,<0.6"
 python -m pip install .
 python run_simulation.py --doctor
 python run_simulation.py --quickstart --validate-only

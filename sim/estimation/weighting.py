@@ -4,6 +4,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 import numpy as np
+from scipy.linalg import solve_triangular
 
 
 def validate_covariance_block(
@@ -84,7 +85,7 @@ def whiten_residual_with_factor(
     matrix = np.asarray(factor, dtype=float)
     if matrix.shape != (vector.size, vector.size):
         raise ValueError(f"{field_name} factor must have shape {(vector.size, vector.size)}.")
-    return np.linalg.solve(matrix, vector)
+    return solve_triangular(matrix, vector, lower=True, check_finite=True)
 
 
 def covariance_from_sigmas(sigmas: Sequence[float] | np.ndarray) -> np.ndarray:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from threading import RLock
 
 import numpy as np
 
@@ -11,21 +12,25 @@ from sim.utils.quaternion import normalize_quaternion, omega_matrix
 
 attitude_ekf_numerical_jacobian_kernel = None
 attitude_ekf_propagate_state_kernel = None
+_ESTIMATION_KERNEL_LOCK = RLock()
 
 
 def _load_acceleration_kernels() -> None:
     global attitude_ekf_numerical_jacobian_kernel, attitude_ekf_propagate_state_kernel
     if attitude_ekf_propagate_state_kernel is not None:
         return
-    from sim.acceleration.kernels.estimation import (
-        attitude_ekf_numerical_jacobian_kernel as accelerated_jacobian,
-    )
-    from sim.acceleration.kernels.estimation import (
-        attitude_ekf_propagate_state_kernel as accelerated_propagate,
-    )
+    with _ESTIMATION_KERNEL_LOCK:
+        if attitude_ekf_propagate_state_kernel is not None:
+            return
+        from sim.acceleration.kernels.estimation import (
+            attitude_ekf_numerical_jacobian_kernel as accelerated_jacobian,
+        )
+        from sim.acceleration.kernels.estimation import (
+            attitude_ekf_propagate_state_kernel as accelerated_propagate,
+        )
 
-    attitude_ekf_numerical_jacobian_kernel = accelerated_jacobian
-    attitude_ekf_propagate_state_kernel = accelerated_propagate
+        attitude_ekf_numerical_jacobian_kernel = accelerated_jacobian
+        attitude_ekf_propagate_state_kernel = accelerated_propagate
 
 
 @dataclass

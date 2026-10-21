@@ -83,6 +83,7 @@ def _load_de440_coeff_matrix_cached(path_str: str, signature: tuple) -> np.ndarr
     arr = np.asarray(coeff, dtype=float)
     if arr.ndim != 2:
         arr = np.atleast_2d(arr)
+    arr.setflags(write=False)
     return arr
 
 
@@ -135,6 +136,9 @@ def _load_de440_light_cached(path_str: str, signature: tuple) -> dict[str, objec
             )
         out["body_specs"] = body_specs
         out["body_records"] = body_records
+        for value in out.values():
+            if isinstance(value, np.ndarray):
+                value.setflags(write=False)
         return out
 
 
@@ -282,21 +286,11 @@ def _find_light_row(light: dict[str, object], jd_tdb: float) -> int:
     starts = np.asarray(light["row_start_jd_tdb"], dtype=float)
     ends = np.asarray(light["row_end_jd_tdb"], dtype=float)
     jd = float(jd_tdb)
-    row_cache = light.setdefault(_DE440_LIGHT_ROW_CACHE_KEY, {})
-    if isinstance(row_cache, dict):
-        cached = row_cache.get("")
-        if isinstance(cached, tuple) and len(cached) == 3:
-            cached_index, cached_start, cached_end = cached
-            if float(cached_start) < jd < float(cached_end):
-                return int(cached_index)
     mask = (starts <= jd) & (jd <= ends)
     idx = np.flatnonzero(mask)
     if idx.size == 0:
         raise ValueError(f"JD_TDB {jd_tdb} is outside OEL DE440 light coverage.")
-    row_index = int(idx[0])
-    if isinstance(row_cache, dict):
-        row_cache[""] = (row_index, float(starts[row_index]), float(ends[row_index]))
-    return row_index
+    return int(idx[0])
 
 
 def _find_light_body_row(light: dict[str, object], jd_tdb: float, body: str) -> int:
@@ -306,21 +300,11 @@ def _find_light_body_row(light: dict[str, object], jd_tdb: float, body: str) -> 
         starts = np.asarray(light[start_key], dtype=float)
         ends = np.asarray(light[end_key], dtype=float)
         jd = float(jd_tdb)
-        row_cache = light.setdefault(_DE440_LIGHT_ROW_CACHE_KEY, {})
-        if isinstance(row_cache, dict):
-            cached = row_cache.get(body)
-            if isinstance(cached, tuple) and len(cached) == 3:
-                cached_index, cached_start, cached_end = cached
-                if float(cached_start) < jd < float(cached_end):
-                    return int(cached_index)
         mask = (starts <= jd) & (jd <= ends)
         idx = np.flatnonzero(mask)
         if idx.size == 0:
             raise ValueError(f"JD_TDB {jd_tdb} is outside OEL DE440 light coverage for body '{body}'.")
-        row_index = int(idx[0])
-        if isinstance(row_cache, dict):
-            row_cache[body] = (row_index, float(starts[row_index]), float(ends[row_index]))
-        return row_index
+        return int(idx[0])
     return _find_light_row(light, jd_tdb)
 
 

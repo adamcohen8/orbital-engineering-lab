@@ -9,6 +9,7 @@ import types
 from dataclasses import Field, fields, is_dataclass
 from enum import Enum
 from math import isfinite
+from threading import RLock
 from typing import Any, Callable, Literal, Mapping, Union, get_args, get_origin, get_type_hints
 
 from .contracts import BOUNDARY_RECORD_TYPES
@@ -38,12 +39,14 @@ _TRUSTED_DATACLASS_ENCODERS: dict[
     type[object],
     Callable[[object], dict[str, object]],
 ] = {}
+_SCHEMA_CACHE_LOCK = RLock()
 
 
 def _type_guard_info(value_type: type[object]) -> tuple[str, bool, tuple[Field[Any], ...] | None]:
     """Cache the reflection needed by both boundary traversals."""
 
-    cached = _TYPE_GUARD_CACHE.get(value_type)
+    with _SCHEMA_CACHE_LOCK:
+        cached = _TYPE_GUARD_CACHE.get(value_type)
     if cached is not None:
         return cached
     qualified = f"{value_type.__module__}.{value_type.__qualname__}"
@@ -52,8 +55,8 @@ def _type_guard_info(value_type: type[object]) -> tuple[str, bool, tuple[Field[A
     )
     dataclass_fields = tuple(fields(value_type)) if is_dataclass(value_type) else None
     result = (qualified, forbidden, dataclass_fields)
-    _TYPE_GUARD_CACHE[value_type] = result
-    return result
+    with _SCHEMA_CACHE_LOCK:
+        return _TYPE_GUARD_CACHE.setdefault(value_type, result)
 
 
 def _path_text(path: list[str]) -> str:
@@ -67,16 +70,18 @@ def register_record_types(record_types: tuple[type[Any], ...]) -> None:
         schema = _literal_default(record_type, "schema")
         if schema is None:
             continue
-        previous = _SCHEMA_TYPES.get(schema)
-        if previous is not None and previous is not record_type:
-            raise ValueError(f"schema {schema!r} is already registered to {previous.__qualname__}")
-        _SCHEMA_TYPES[schema] = record_type
+        with _SCHEMA_CACHE_LOCK:
+            previous = _SCHEMA_TYPES.get(schema)
+            if previous is not None and previous is not record_type:
+                raise ValueError(f"schema {schema!r} is already registered to {previous.__qualname__}")
+            _SCHEMA_TYPES[schema] = record_type
 
 
 def registered_schemas() -> Mapping[str, type[Any]]:
     """Return a read-only copy of the active schema registry."""
 
-    return dict(_SCHEMA_TYPES)
+    with _SCHEMA_CACHE_LOCK:
+        return dict(_SCHEMA_TYPES)
 
 
 def assert_truth_free(value: object) -> None:
@@ -219,10 +224,12 @@ def _to_primitive_trusted(value: object) -> object:
     value_type = type(value)
     qualified, _forbidden, dataclass_fields = _type_guard_info(value_type)
     if dataclass_fields is not None and not isinstance(value, type):
-        encoder = _TRUSTED_DATACLASS_ENCODERS.get(value_type)
+        with _SCHEMA_CACHE_LOCK:
+            encoder = _TRUSTED_DATACLASS_ENCODERS.get(value_type)
         if encoder is None:
-            encoder = _compile_trusted_dataclass_encoder(value_type, dataclass_fields)
-            _TRUSTED_DATACLASS_ENCODERS[value_type] = encoder
+            compiled = _compile_trusted_dataclass_encoder(value_type, dataclass_fields)
+            with _SCHEMA_CACHE_LOCK:
+                encoder = _TRUSTED_DATACLASS_ENCODERS.setdefault(value_type, compiled)
         return encoder(value)
     if isinstance(value, Mapping):
         result: dict[str, object] = {}
@@ -427,10 +434,12 @@ def _assert_truth_free(value: object, *, path: list[str], seen: set[int]) -> Non
         raise TypeError(f"{_path_text(path)} contains forbidden simulator-owned value {qualified}")
     if dataclass_fields is not None and not isinstance(value, type):
         if value_type in _SPECIALIZED_BOUNDARY_TYPES:
-            validator = _TRUTH_DATACLASS_VALIDATORS.get(value_type)
+            with _SCHEMA_CACHE_LOCK:
+                validator = _TRUTH_DATACLASS_VALIDATORS.get(value_type)
             if validator is None:
-                validator = _compile_truth_dataclass_validator(value_type, dataclass_fields)
-                _TRUTH_DATACLASS_VALIDATORS[value_type] = validator
+                compiled = _compile_truth_dataclass_validator(value_type, dataclass_fields)
+                with _SCHEMA_CACHE_LOCK:
+                    validator = _TRUTH_DATACLASS_VALIDATORS.setdefault(value_type, compiled)
             validator(value, path, seen)
         else:
             # External dataclasses retain reflective traversal, including

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import stat
 from pathlib import Path
 
 import pytest
@@ -239,3 +240,37 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
             item.add_marker(pytest.mark.external)
         if (filename, _test_function_name(item)) in LOCAL_EVIDENCE_TESTS:
             item.add_marker(pytest.mark.local_evidence)
+
+
+_FROZEN_FIFO_TEST = (
+    "test_mendicant_adapter_runtime_v08.py",
+    "test_v08_checkpoint_reader_rejects_non_regular_checkpoint",
+)
+_FROZEN_FIFO_CALL_REPORT = pytest.StashKey[pytest.TestReport]()
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo):
+    outcome = yield
+    if call.when == "call" and (_test_filename(item), _test_function_name(item)) == _FROZEN_FIFO_TEST:
+        item.stash[_FROZEN_FIFO_CALL_REPORT] = outcome.get_result()
+
+
+@pytest.fixture(autouse=True)
+def _retire_passed_frozen_checkpoint_fifo(request: pytest.FixtureRequest):
+    """Leave the frozen evaluator unchanged; retire only its successful FIFO fixture."""
+    if (_test_filename(request.node), _test_function_name(request.node)) != _FROZEN_FIFO_TEST:
+        yield
+        return
+    checkpoint = request.getfixturevalue("tmp_path") / "checkpoint.json"
+    yield
+    report = request.node.stash.get(_FROZEN_FIFO_CALL_REPORT, None)
+    if report is None or not report.passed:
+        return
+    before = checkpoint.lstat()
+    if not stat.S_ISFIFO(before.st_mode):
+        raise RuntimeError("Successful frozen checkpoint fixture must remain a FIFO; unexpected leaf preserved")
+    after = checkpoint.lstat()
+    if (before.st_dev, before.st_ino, before.st_mode) != (after.st_dev, after.st_ino, after.st_mode):
+        raise RuntimeError("Frozen checkpoint FIFO changed before cleanup; leaf preserved")
+    checkpoint.unlink()

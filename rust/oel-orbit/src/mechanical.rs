@@ -154,6 +154,52 @@ impl MechanicalContext {
         result[10..13].copy_from_slice(&w);
         Ok((result, counts))
     }
+
+    /// Propagate an immutable sequence of mechanical widths and return the
+    /// packed state history plus aggregate guardrail counters.
+    ///
+    /// This helper intentionally accepts only Rust-owned values.  The Python
+    /// binding can therefore detach the GIL for the complete history rather
+    /// than reacquiring it once per width.
+    pub fn history(
+        &self,
+        mut current: [f64; 13],
+        widths: &[f64],
+        orbit_substep: Option<f64>,
+        attitude_substep: Option<f64>,
+        command: [f64; 3],
+        torque: [f64; 3],
+    ) -> Result<(Vec<u8>, [i64; 6]), &'static str> {
+        State::from_array(current[..6].try_into().unwrap())?;
+        let mut counts = [0_i64; 6];
+        let mut bytes = Vec::with_capacity((widths.len() + 1) * 13 * 8);
+        let mut record = |value: [f64; 13]| {
+            for item in value {
+                bytes.extend_from_slice(&item.to_le_bytes());
+            }
+        };
+        record(current);
+        for &width in widths {
+            let (next, stats) = self.step(
+                current,
+                width,
+                orbit_substep,
+                attitude_substep,
+                command,
+                torque,
+            )?;
+            current = next;
+            for i in 0..6 {
+                counts[i] += stats[i];
+            }
+            let mut sample = current;
+            sample[6..10].copy_from_slice(&attitude::normalize_quaternion(
+                current[6..10].try_into().unwrap(),
+            ));
+            record(sample);
+        }
+        Ok((bytes, counts))
+    }
 }
 
 #[cfg(test)]
@@ -493,6 +539,7 @@ pub fn register(module: &pyo3::prelude::Bound<'_, pyo3::types::PyModule>) -> pyo
         #[allow(clippy::too_many_arguments)]
         fn step(
             &self,
+            py: Python<'_>,
             state: Vec<f64>,
             dt: f64,
             orbit_substep: Option<f64>,
@@ -500,22 +547,21 @@ pub fn register(module: &pyo3::prelude::Bound<'_, pyo3::types::PyModule>) -> pyo
             command: Vec<f64>,
             torque: Vec<f64>,
         ) -> PyResult<(Vec<f64>, Vec<i64>)> {
-            let (next, counts) = self
-                .context
-                .step(
-                    fixed(state)?,
-                    dt,
-                    orbit_substep,
-                    attitude_substep,
-                    fixed(command)?,
-                    fixed(torque)?,
-                )
+            let state = fixed(state)?;
+            let command = fixed(command)?;
+            let torque = fixed(torque)?;
+            let (next, counts) = py
+                .detach(|| {
+                    self.context
+                        .step(state, dt, orbit_substep, attitude_substep, command, torque)
+                })
                 .map_err(PyValueError::new_err)?;
             Ok((next.to_vec(), counts.to_vec()))
         }
         #[allow(clippy::too_many_arguments)]
         fn coupled_step(
             &self,
+            py: Python<'_>,
             state: Vec<f64>,
             start_time_s: f64,
             dt_s: f64,
@@ -533,23 +579,30 @@ pub fn register(module: &pyo3::prelude::Bound<'_, pyo3::types::PyModule>) -> pyo
             let enabled: [i64; 4] = enabled
                 .try_into()
                 .map_err(|_| PyValueError::new_err("expected 4 disturbance flags"))?;
-            let (next, counts) = self
-                .context
-                .coupled_step(
-                    fixed(state)?,
-                    start_time_s,
-                    dt_s,
-                    maximum_step_s,
-                    fixed(force_eci)?,
-                    fixed(force_body)?,
-                    mass_flow,
-                    minimum_mass,
-                    fixed(command_torque)?,
-                    enabled,
-                    fixed(magnetic_dipole)?,
-                    fixed(magnetic_field)?,
-                    magnetic_field_provided,
-                )
+            let state = fixed(state)?;
+            let force_eci = fixed(force_eci)?;
+            let force_body = fixed(force_body)?;
+            let command_torque = fixed(command_torque)?;
+            let magnetic_dipole = fixed(magnetic_dipole)?;
+            let magnetic_field = fixed(magnetic_field)?;
+            let (next, counts) = py
+                .detach(|| {
+                    self.context.coupled_step(
+                        state,
+                        start_time_s,
+                        dt_s,
+                        maximum_step_s,
+                        force_eci,
+                        force_body,
+                        mass_flow,
+                        minimum_mass,
+                        command_torque,
+                        enabled,
+                        magnetic_dipole,
+                        magnetic_field,
+                        magnetic_field_provided,
+                    )
+                })
                 .map_err(PyValueError::new_err)?;
             Ok((next.to_vec(), counts.to_vec()))
         }
@@ -686,34 +739,25 @@ pub fn register(module: &pyo3::prelude::Bound<'_, pyo3::types::PyModule>) -> pyo
             if widths.len() % 8 != 0 || widths.len() / 8 > 1_000_000 {
                 return Err(PyValueError::new_err("invalid history widths"));
             }
-            let mut current: [f64; 13] = fixed(state)?;
+            let current: [f64; 13] = fixed(state)?;
+            let widths: Vec<f64> = widths
+                .chunks_exact(8)
+                .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
+                .collect();
             let command = fixed(command)?;
             let torque = fixed(torque)?;
-            State::from_array(current[..6].try_into().unwrap()).map_err(PyValueError::new_err)?;
-            let mut counts = [0_i64; 6];
-            let mut bytes = Vec::with_capacity((widths.len() / 8 + 1) * 13 * 8);
-            let mut record = |value: [f64; 13]| {
-                for item in value {
-                    bytes.extend_from_slice(&item.to_le_bytes());
-                }
-            };
-            record(current);
-            for chunk in widths.chunks_exact(8) {
-                let h = f64::from_le_bytes(chunk.try_into().unwrap());
-                let (next, stats) = self
-                    .context
-                    .step(current, h, orbit_substep, attitude_substep, command, torque)
-                    .map_err(PyValueError::new_err)?;
-                current = next;
-                for i in 0..6 {
-                    counts[i] += stats[i];
-                }
-                let mut sample = current;
-                sample[6..10].copy_from_slice(&attitude::normalize_quaternion(
-                    current[6..10].try_into().unwrap(),
-                ));
-                record(sample);
-            }
+            let (bytes, counts) = py
+                .detach(|| {
+                    self.context.history(
+                        current,
+                        &widths,
+                        orbit_substep,
+                        attitude_substep,
+                        command,
+                        torque,
+                    )
+                })
+                .map_err(PyValueError::new_err)?;
             Ok((PyBytes::new(py, &bytes), counts.to_vec()))
         }
     }

@@ -232,7 +232,14 @@ def _parse_mc_correlated_normal(value: Any) -> MonteCarloCorrelatedNormal:
 
 def _parse_analysis_execution_section(value: Any) -> AnalysisExecutionSection:
     d = _as_dict(value, "analysis.execution")
-    _reject_unknown_fields(d, "analysis.execution", {"parallel_enabled", "parallel_workers", "failure_policy"})
+    _reject_unknown_fields(
+        d,
+        "analysis.execution",
+        {"parallel_enabled", "parallel_workers", "failure_policy", "parallel_backend"},
+    )
+    parallel_backend = str(d.get("parallel_backend", "process_pool") or "process_pool").strip().lower()
+    if parallel_backend not in {"process_pool", "thread_pool"}:
+        raise ValueError("analysis.execution.parallel_backend must be 'process_pool' or 'thread_pool'.")
     out = AnalysisExecutionSection(
         parallel_enabled=_parse_bool(
             d.get("parallel_enabled", False),
@@ -240,6 +247,7 @@ def _parse_analysis_execution_section(value: Any) -> AnalysisExecutionSection:
         ),
         parallel_workers=_parse_int(d.get("parallel_workers", 0), "analysis.execution.parallel_workers"),
         failure_policy=str(d.get("failure_policy", "fail_fast") or "fail_fast").strip().lower(),
+        parallel_backend=parallel_backend,
     )
     if out.parallel_workers < 0:
         raise ValueError("analysis.execution.parallel_workers must be >= 0.")
@@ -1017,6 +1025,7 @@ def _monte_carlo_from_analysis(analysis: AnalysisSection) -> MonteCarloSection:
             base_seed=int(analysis.monte_carlo.base_seed),
             parallel_enabled=bool(analysis.execution.parallel_enabled),
             parallel_workers=int(analysis.execution.parallel_workers),
+            parallel_backend=str(analysis.execution.parallel_backend),
             variations=list(analysis.monte_carlo.variations),
             bundles=list(analysis.monte_carlo.bundles),
             comparison=analysis.monte_carlo.comparison,

@@ -39,6 +39,9 @@ reference/validation workflows.
 - Public single-scenario workflows use deterministic serial object stepping.
   Do not enable or recommend automatic/process-pool object parallelism in a
   public config.
+- Thread transports for object steps, campaigns, controller studies, and
+  Scale remain Pro workflows; an available transport does not change the
+  public execution boundary or supply a missing entitlement.
 - Automatic within-scenario object workers, hierarchical campaign/object
   planning, Monte Carlo, sensitivity, config queues, and controller benchmarks
   are outside the public core. Do not reproduce them with ad hoc public scripts.
@@ -89,6 +92,31 @@ authorize payment, or execute anything. A public-only package may run locally
 for free or receive an optional Hosted quote; a Pro package cannot run in the
 public installation. Hosted OEL must revalidate the exact sealed bytes before
 offering execution terms.
+
+For local external formats, shared object composition, and exports from
+completed evidence, use `docs/data-io.md` and `oel io` (`python -m sim.data_io`
+in a source checkout). Discover actual format directions and optional backends
+with `oel io formats`; use `object describe-import` or `object describe-export`
+to inspect requirements, retained fields, defaults, and promotion gates.
+These are bounded offline engineering profiles, not comprehensive standards
+implementation or operational qualification. Use explicitly supplied EOP or
+SPICE kernels when the selected frame/time conversion requires them.
+
+IO operations do not execute simulations, rerun OD, or replace source inputs.
+Select exact objects and samples; retain frames, absolute epochs, units and
+adjacent hash-bound receipts. An imported trajectory sample creates an orbital
+seed, while native checkpoints/snapshots retain their separate continuation
+contracts. Compose into a new scenario/output location and validate it before
+execution. Export a predicted trajectory only after a separate prediction run.
+Public conversion and export do not fit review trajectories to OGP/TLE products;
+that fitting remains a separate Pro workflow.
+
+For a study that needs full-state EKF anomaly recovery, consult
+`docs/innovation-recovery.md`. The shared absolute and HCW/SS-J2/TH/YA relative
+policy is experimental and off by default; enable it only for the study's
+explicit full position/velocity measurement contract. Recovery holds and
+reinitializations do not establish a maneuver, calibrated covariance, sensor
+accuracy, or onboard navigation qualification.
 
 For whole-Earth coverage or directed-link questions, start with
 `docs/coverage-link-scenario-analysis.md` and
@@ -268,6 +296,23 @@ python -m sim.agent_task list
 python -m sim.agent_task run quickstart_review --output-root outputs/agent_tasks
 python -m sim.agent_task inspect outputs/my_run --query run_metadata --json
 ```
+
+Inspect local IO requirements, create a new passive study, and export a
+selected completed state:
+
+```bash
+oel io formats
+oel io object describe-import initial.opm --format opm-kvn
+oel io object import initial.opm configs/imported.yaml --format opm-kvn --as target --scenario-name imported --run-output outputs/imported --duration-s 600 --step-s 10
+python run_simulation.py --config configs/imported.yaml --validate-only
+oel io object describe-export outputs/my_run --object-id target
+oel io object export outputs/my_run final.opm --format opm-kvn --object-id target --final
+```
+
+The export commands require a separately completed, provenance-verified run;
+they do not run the imported scenario. Use `oel io export-review` for saved
+trajectories/attitude histories and `oel io export-table` for a bounded read-only
+query against the source run's actual schema.
 
 To continue from one exact completed-run state, export a versioned product and
 then materialize a separate validated ONP scenario:
