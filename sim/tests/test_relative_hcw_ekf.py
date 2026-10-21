@@ -8,10 +8,13 @@ import pytest
 from sim.core.models import Measurement, StateBelief
 from sim.estimation.relative_hcw_ekf import (
     HCWRelativeEKFEstimator,
+    MorseGlintGateConfig,
     hcw_measurement_dimension,
     hcw_measurement_jacobian,
     hcw_measurement_vector,
     hcw_state_transition_matrix,
+    local_l1_medoid,
+    morse_glint_gate,
 )
 
 
@@ -217,3 +220,187 @@ def test_hcw_relative_ekf_uses_full_epoch_measurement_covariance() -> None:
         estimator.last_update_diagnostics.innovation_covariance,
         covariance,
     )
+
+
+def test_morse_glint_gate_rejects_single_sample_optical_glint_and_pins_l1_medoid() -> None:
+    n = 0.0011
+    dt_s = 10.0
+    phi = hcw_state_transition_matrix(n, dt_s)
+    truth0 = np.array([0.4, -0.8, 0.15, 0.0001, -0.0002, 0.00005], dtype=float)
+    truth_arc = [truth0]
+    for _ in range(6):
+        truth_arc.append(phi @ truth_arc[-1])
+
+    glint_spike = np.array([0.12, -0.08, 0.05, 0.004, -0.003, 0.002], dtype=float)
+    measurements: list[Measurement] = []
+    for idx in range(1, len(truth_arc)):
+        vec = truth_arc[idx].copy()
+        if idx == 3:
+            vec += glint_spike
+        measurements.append(Measurement(vector=vec, t_s=idx * dt_s))
+
+    initial_belief = StateBelief(
+        state=truth0.copy(),
+        covariance=np.diag([1.0e-6] * 3 + [1.0e-10] * 3),
+        last_update_t_s=0.0,
+    )
+    ungated = HCWRelativeEKFEstimator(
+        mean_motion_rad_s=n,
+        dt_s=dt_s,
+        process_noise_diag=np.array([1.0e-8] * 3 + [1.0e-12] * 3),
+        meas_noise_diag=np.array([1.0e-6] * 3 + [1.0e-10] * 3),
+    )
+    gated = HCWRelativeEKFEstimator(
+        mean_motion_rad_s=n,
+        dt_s=dt_s,
+        process_noise_diag=np.array([1.0e-8] * 3 + [1.0e-12] * 3),
+        meas_noise_diag=np.array([1.0e-6] * 3 + [1.0e-10] * 3),
+        morse_glint_gate=MorseGlintGateConfig(enabled=True, nis_threshold=9.21, glint_weight=0.0),
+    )
+
+    ungated_belief = initial_belief
+    gated_belief = initial_belief
+    for idx, meas in enumerate(measurements):
+        next_meas = measurements[idx + 1] if idx + 1 < len(measurements) else None
+        ungated_belief = ungated.update(ungated_belief, meas, meas.t_s)
+        gated_belief = gated.update(gated_belief, meas, meas.t_s, next_measurement=next_meas)
+        if idx == 2:
+            assert gated.last_update_diagnostics is not None
+            gate_diag = gated.last_update_diagnostics.gate_diagnostics
+            assert gate_diag is not None
+            assert gate_diag.evaluated is True
+            assert gate_diag.classification == "glint_rejected"
+            assert gate_diag.delta_dot < 0.0
+            assert gate_diag.exterior_curl == pytest.approx(1.0, abs=1.0e-12)
+            assert gate_diag.return_ratio == pytest.approx(0.0, abs=1.0e-12)
+            assert gate_diag.medoid_pinned is True
+
+            ungated_glint_err = float(np.linalg.norm(ungated_belief.state - truth_arc[3]))
+            gated_glint_err = float(np.linalg.norm(gated_belief.state - truth_arc[3]))
+            rejection_ratio = 1.0 - gated_glint_err / ungated_glint_err
+            assert rejection_ratio > 0.95
+            assert gated_glint_err == pytest.approx(0.0, abs=1.0e-12)
+
+    medoid = local_l1_medoid((truth_arc[3], truth_arc[3] + glint_spike, truth_arc[3] + 1.0e-15))
+    np.testing.assert_allclose(medoid, truth_arc[3], atol=1.0e-14)
+
+
+def test_morse_glint_gate_preserves_full_step_response_on_impulsive_target_delta_v() -> None:
+    n = 0.0011
+    dt_s = 10.0
+    phi = hcw_state_transition_matrix(n, dt_s)
+    truth0 = np.array([0.25, -0.5, 0.1, 0.0001, -0.0001, 0.0], dtype=float)
+    delta_v = np.array([0.0, 0.0, 0.0, 0.0015, -0.0025, 0.0010], dtype=float)
+
+    truth_arc = [truth0]
+    for step in range(1, 7):
+        propagated = phi @ truth_arc[-1]
+        if step == 3:
+            propagated = propagated + delta_v
+        truth_arc.append(propagated)
+
+    measurements = [Measurement(vector=truth_arc[idx], t_s=idx * dt_s) for idx in range(1, len(truth_arc))]
+    initial_belief = StateBelief(
+        state=truth0.copy(),
+        covariance=np.diag([1.0e-10] * 3 + [1.0e-14] * 3),
+        last_update_t_s=0.0,
+    )
+    ungated = HCWRelativeEKFEstimator(
+        mean_motion_rad_s=n,
+        dt_s=dt_s,
+        process_noise_diag=np.array([1.0e-12] * 3 + [1.0e-16] * 3),
+        meas_noise_diag=np.array([1.0e-6] * 3 + [1.0e-10] * 3),
+    )
+    gated = HCWRelativeEKFEstimator(
+        mean_motion_rad_s=n,
+        dt_s=dt_s,
+        process_noise_diag=np.array([1.0e-12] * 3 + [1.0e-16] * 3),
+        meas_noise_diag=np.array([1.0e-6] * 3 + [1.0e-10] * 3),
+        morse_glint_gate=MorseGlintGateConfig(enabled=True, nis_threshold=9.21, step_gain_floor=1.0),
+    )
+
+    ungated_belief = initial_belief
+    gated_belief = initial_belief
+    for idx, meas in enumerate(measurements):
+        next_meas = measurements[idx + 1] if idx + 1 < len(measurements) else None
+        ungated_belief = ungated.update(ungated_belief, meas, meas.t_s)
+        gated_belief = gated.update(gated_belief, meas, meas.t_s, next_measurement=next_meas)
+        if idx == 2:
+            assert gated.last_update_diagnostics is not None
+            gate_diag = gated.last_update_diagnostics.gate_diagnostics
+            assert gate_diag is not None
+            assert gate_diag.evaluated is True
+            assert gate_diag.classification == "step_maneuver"
+            assert gate_diag.delta_dot >= -1.0e-15
+            assert gate_diag.return_ratio == pytest.approx(1.0, abs=1.0e-12)
+            assert gate_diag.step_preserved is True
+
+            np.testing.assert_allclose(gated_belief.state[3:], truth_arc[3][3:], atol=1.0e-12)
+            ungated_vel_err = float(np.linalg.norm(ungated_belief.state[3:] - truth_arc[3][3:]))
+            assert ungated_vel_err > 0.95 * float(np.linalg.norm(delta_v[3:]))
+
+    np.testing.assert_allclose(gated_belief.state, truth_arc[-1], atol=1.0e-12)
+
+
+def test_hcw_relative_ekf_streaming_and_window_modes_handle_glint_and_delta_v_arc() -> None:
+    n = 0.0011
+    dt_s = 10.0
+    phi = hcw_state_transition_matrix(n, dt_s)
+    truth0 = np.array([0.3, -0.6, 0.2, 0.00015, -0.0001, 0.00005], dtype=float)
+    glint_spike = np.array([0.08, -0.05, 0.04, 0.003, -0.002, 0.001], dtype=float)
+    delta_v = np.array([0.0, 0.0, 0.0, -0.0012, 0.0020, -0.0008], dtype=float)
+
+    truth_arc = [truth0]
+    for step in range(1, 9):
+        propagated = phi @ truth_arc[-1]
+        if step == 5:
+            propagated = propagated + delta_v
+        truth_arc.append(propagated)
+
+    measurements: list[Measurement] = []
+    for step in range(1, len(truth_arc)):
+        vec = truth_arc[step].copy()
+        if step == 2:
+            vec = vec + glint_spike
+        measurements.append(Measurement(vector=vec, t_s=step * dt_s))
+
+    initial_belief = StateBelief(
+        state=truth0.copy(),
+        covariance=np.diag([1.0e-8] * 3 + [1.0e-12] * 3),
+        last_update_t_s=0.0,
+    )
+    estimator = HCWRelativeEKFEstimator(
+        mean_motion_rad_s=n,
+        dt_s=dt_s,
+        process_noise_diag=np.array([1.0e-10] * 3 + [1.0e-14] * 3),
+        meas_noise_diag=np.array([1.0e-6] * 3 + [1.0e-10] * 3),
+        morse_glint_gate=MorseGlintGateConfig(enabled=True, nis_threshold=9.21),
+    )
+
+    window_beliefs = estimator.filter_measurements(initial_belief, measurements)
+    np.testing.assert_allclose(window_beliefs[1].state, truth_arc[2], atol=1.0e-12)
+    np.testing.assert_allclose(window_beliefs[4].state, truth_arc[5], atol=1.0e-12)
+    np.testing.assert_allclose(window_beliefs[-1].state, truth_arc[-1], atol=1.0e-12)
+
+    estimator.reset_gate_state()
+    streaming_belief = initial_belief
+    streaming_states: list[np.ndarray] = []
+    for meas in measurements:
+        streaming_belief = estimator.update(streaming_belief, meas, meas.t_s)
+        streaming_states.append(streaming_belief.state.copy())
+
+    np.testing.assert_allclose(streaming_states[1], truth_arc[2], atol=1.0e-12)
+    np.testing.assert_allclose(streaming_states[2], truth_arc[3], atol=1.0e-12)
+    np.testing.assert_allclose(streaming_states[5], truth_arc[6], atol=1.0e-12)
+    np.testing.assert_allclose(streaming_states[-1], truth_arc[-1], atol=1.0e-12)
+
+    direct_glint = morse_glint_gate(np.zeros(3), np.array([1.0, -2.0, 0.5]), np.zeros(3), nis=50.0)
+    assert direct_glint.classification == "glint_rejected"
+    direct_step = morse_glint_gate(
+        np.zeros(3),
+        np.array([0.0, 2.0, 0.0]),
+        np.array([0.0, 2.0, 0.0]),
+        nis=50.0,
+    )
+    assert direct_step.classification == "step_maneuver"
+
