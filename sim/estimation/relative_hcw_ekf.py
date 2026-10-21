@@ -56,23 +56,6 @@ class MorseGlintGateDiagnostics:
     exterior_curl: float = float("nan")
     return_ratio: float = float("nan")
     innovation_weight: float = 1.0
-    medoid_pinned: bool = False
-    step_preserved: bool = False
-
-
-def local_l1_medoid(candidates: Sequence[np.ndarray]) -> np.ndarray:
-    """Return the discrete L1 geometric medoid of a local state or innovation window."""
-
-    if not candidates:
-        raise ValueError("candidates must contain at least one vector.")
-    vectors = [np.asarray(item, dtype=float).reshape(-1) for item in candidates]
-    dim = vectors[0].size
-    if any(vec.size != dim or not np.all(np.isfinite(vec)) for vec in vectors):
-        raise ValueError("all medoid candidates must be finite vectors of identical dimension.")
-    stacked = np.vstack(vectors)
-    pairwise_norms = np.linalg.norm(stacked[:, None, :] - stacked[None, :, :], axis=-1)
-    best_index = int(np.argmin(np.sum(pairwise_norms, axis=1)))
-    return vectors[best_index].copy()
 
 
 def morse_glint_gate(
@@ -86,8 +69,10 @@ def morse_glint_gate(
     """Discriminate 1-sample optical glint spikes from impulsive delta-v steps.
 
     Evaluates backward/forward finite differences ``Delta_- y_t = y_t - y_{t-1}``
-    and ``Delta_+ y_t = y_{t+1} - y_t``, the coarse-fine 2-step phase-space
-    exterior curl, and the pre-spike return ratio ``||y_{t+1} - y_{t-1}||_2 / ||Delta_- y_t||_2``.
+    and ``Delta_+ y_t = y_{t+1} - y_t``, ``delta_dot = <Delta_-, Delta_+>``, the
+    normalized second difference ``exterior_curl = ||Delta_+ - Delta_-||_2 /
+    sqrt(2 (||Delta_-||^2 + ||Delta_+||^2))`` in [0, 1] (>= 1/sqrt(2) iff
+    ``delta_dot <= 0``), and the return ratio ``||y_{t+1} - y_{t-1}||_2 / ||Delta_- y_t||_2``.
     """
 
     cfg = MorseGlintGateConfig() if config is None else config
@@ -105,26 +90,16 @@ def morse_glint_gate(
     minus_norm = float(np.linalg.norm(delta_minus))
     secant = next_vec - prev_vec
     return_ratio = float(np.linalg.norm(secant)) / max(minus_norm, 1.0e-15)
-
-    u_coarse = 0.5 * np.concatenate((secant, secant))
-    u_fine = np.concatenate((delta_minus, delta_plus))
-    coarse_norm = float(np.linalg.norm(u_coarse))
-    fine_norm = float(np.linalg.norm(u_fine))
-    if fine_norm <= 1.0e-15:
-        exterior_curl = 0.0
-    elif coarse_norm <= 1.0e-15:
-        exterior_curl = 1.0
-    else:
-        cos_sim = float(np.clip(np.dot(u_coarse / coarse_norm, u_fine / fine_norm), -1.0, 1.0))
-        exterior_curl = float(np.sqrt(max(0.0, 1.0 - cos_sim * cos_sim)))
+    energy = float(np.dot(delta_minus, delta_minus) + np.dot(delta_plus, delta_plus))
+    exterior_curl = float(np.linalg.norm(delta_plus - delta_minus)) / np.sqrt(2.0 * energy) if energy > 1.0e-30 else 0.0
 
     if not cfg.enabled or (nis is not None and float(nis) <= cfg.nis_threshold) or minus_norm <= 1.0e-15:
-        return MorseGlintGateDiagnostics(False, "nominal", delta_dot, exterior_curl, return_ratio, 1.0, False, False)
+        return MorseGlintGateDiagnostics(False, "nominal", delta_dot, exterior_curl, return_ratio, 1.0)
     if delta_dot < 0.0 and exterior_curl >= cfg.min_exterior_curl and return_ratio <= cfg.max_return_ratio:
         return MorseGlintGateDiagnostics(
-            True, "glint_rejected", delta_dot, exterior_curl, return_ratio, float(cfg.glint_weight), True, False
+            True, "glint_rejected", delta_dot, exterior_curl, return_ratio, float(cfg.glint_weight)
         )
-    return MorseGlintGateDiagnostics(True, "step_maneuver", delta_dot, exterior_curl, return_ratio, 1.0, False, True)
+    return MorseGlintGateDiagnostics(True, "step_maneuver", delta_dot, exterior_curl, return_ratio, 1.0)
 
 
 @dataclass(frozen=True)
@@ -194,6 +169,9 @@ class HCWRelativeEKFEstimator(Estimator):
             )
         if self.morse_glint_gate is not None and not isinstance(self.morse_glint_gate, MorseGlintGateConfig):
             raise TypeError("morse_glint_gate must be MorseGlintGateConfig or None.")
+        if self.morse_glint_gate is not None and self.measurement_model != "relative_state":
+            # The Phi^{-1} pull-back and the H^+ step update only recover a velocity step when H is full rank.
+            raise ValueError("morse_glint_gate requires measurement_model='relative_state'.")
 
     def reset_gate_state(self) -> None:
         """Clear cached innovation history used by the 3-point Morse glint gate."""
@@ -226,14 +204,18 @@ class HCWRelativeEKFEstimator(Estimator):
         return beliefs
 
     def update(
-        self, belief: StateBelief, measurement: Measurement | None, t_s: float, *, next_measurement: Measurement | None = None
+        self,
+        belief: StateBelief,
+        measurement: Measurement | None,
+        t_s: float,
+        *,
+        next_measurement: Measurement | None = None,
     ) -> StateBelief:
         resolved_gate: MorseGlintGateDiagnostics | None = None
         if (
             self.morse_glint_gate is not None
             and self.morse_glint_gate.enabled
             and measurement is not None
-            and next_measurement is None
             and self._pending_impulse is not None
         ):
             prior_belief, pending_meas, prev_innov = self._pending_impulse
@@ -329,7 +311,8 @@ class HCWRelativeEKFEstimator(Estimator):
     def _apply_morse_glint_gate(
         self, belief: StateBelief, measurement: Measurement, meas_t_s: float, x_pred: np.ndarray, p_pred: np.ndarray,
         x_raw_upd: np.ndarray, p_raw_upd: np.ndarray, h_jac: np.ndarray, r_mat: np.ndarray, k_gain: np.ndarray,
-        innovation: np.ndarray, nis: float, next_measurement: Measurement | None, resolved_gate: MorseGlintGateDiagnostics | None,
+        innovation: np.ndarray, nis: float, next_measurement: Measurement | None,
+        resolved_gate: MorseGlintGateDiagnostics | None,
     ) -> tuple[np.ndarray, np.ndarray, bool, MorseGlintGateDiagnostics | None]:
         cfg = self.morse_glint_gate
         assert cfg is not None
@@ -345,42 +328,48 @@ class HCWRelativeEKFEstimator(Estimator):
         if next_measurement is None:
             if resolved_gate is not None and resolved_gate.classification == "step_maneuver":
                 self._last_innovation = np.zeros_like(innovation)
-                return (*self._step_maneuver_update(x_pred, p_pred, h_jac, r_mat, k_gain, innovation, cfg.step_gain_floor), True, resolved_gate)
+                x_step, p_step = self._step_maneuver_update(
+                    x_pred, p_pred, h_jac, r_mat, k_gain, innovation, cfg.step_gain_floor
+                )
+                return x_step, p_step, True, resolved_gate
             self._pending_impulse = (belief, measurement, prev_innov.copy())
-            pending_diag = MorseGlintGateDiagnostics(
-                False, "pending_impulse", innovation_weight=0.0, medoid_pinned=True, step_preserved=False
-            )
+            pending_diag = MorseGlintGateDiagnostics(False, "pending_impulse", innovation_weight=0.0)
             return x_pred.copy(), p_pred.copy(), False, pending_diag
 
-        y_next_aligned, x_next_back = self._align_next_innovation(x_pred, p_pred, meas_t_s, innovation, next_measurement)
+        y_next_aligned = self._align_next_innovation(x_pred, p_pred, meas_t_s, innovation, next_measurement)
         gate = morse_glint_gate(prev_innov, innovation, y_next_aligned, nis=nis, config=cfg)
         if gate.classification == "glint_rejected":
-            medoid_state = local_l1_medoid((x_pred, x_raw_upd, x_next_back))
+            # Hold the prediction (consistent with p_pred); glint_weight > 0 blends back toward the raw update.
             weight = float(cfg.glint_weight)
-            x_glint = (1.0 - weight) * medoid_state + weight * x_raw_upd
+            x_glint = (1.0 - weight) * x_pred + weight * x_raw_upd
             p_glint = (1.0 - weight) * p_pred + weight * p_raw_upd
             self._last_innovation = prev_innov.copy()
             return x_glint, 0.5 * (p_glint + p_glint.T), bool(weight > 0.0), gate
 
         self._last_innovation = np.zeros_like(innovation)
-        return (*self._step_maneuver_update(x_pred, p_pred, h_jac, r_mat, k_gain, innovation, cfg.step_gain_floor), True, gate)
+        x_step, p_step = self._step_maneuver_update(
+            x_pred, p_pred, h_jac, r_mat, k_gain, innovation, cfg.step_gain_floor
+        )
+        return x_step, p_step, True, gate
 
     def _align_next_innovation(
-        self, x_pred: np.ndarray, p_pred: np.ndarray, meas_t_s: float, innovation: np.ndarray, next_measurement: Measurement
-    ) -> tuple[np.ndarray, np.ndarray]:
+        self, x_pred: np.ndarray, p_pred: np.ndarray, meas_t_s: float, innovation: np.ndarray,
+        next_measurement: Measurement,
+    ) -> np.ndarray:
         next_t_s = max(float(next_measurement.t_s), float(meas_t_s))
         x_next_pred, _ = self._predict(x_pred, p_pred, from_t_s=meas_t_s, to_t_s=next_t_s)
+        # _predict leaves Phi(next_t_s - meas_t_s) in the cache; verify instead of trusting the side effect.
         phi_next = self._cached_transition
-        assert phi_next is not None
-        h_next_pred = hcw_measurement_vector(self.measurement_model, x_next_pred, measurement_origin=self.measurement_origin)
+        if phi_next is None or self._cached_transition_key != (float(self.mean_motion_rad_s), next_t_s - meas_t_s):
+            raise RuntimeError("state transition cache is out of sync with the lookahead prediction.")
+        h_next_pred = hcw_measurement_vector(
+            self.measurement_model, x_next_pred, measurement_origin=self.measurement_origin
+        )
         z_next = np.asarray(next_measurement.vector, dtype=float).reshape(-1)
         if z_next.size < h_next_pred.size or not np.all(np.isfinite(z_next[: h_next_pred.size])):
-            return innovation.copy(), x_pred.copy()
+            return innovation.copy()
         y_next_raw = _measurement_innovation(self.measurement_model, z_next[: h_next_pred.size], h_next_pred)
-        h_next_jac = hcw_measurement_jacobian(self.measurement_model, x_next_pred, measurement_origin=self.measurement_origin)
-        delta_x_back = np.linalg.solve(phi_next, _right_pseudoinverse(h_next_jac) @ y_next_raw)
-        y_next_aligned = np.linalg.solve(phi_next, y_next_raw) if self.measurement_model == "relative_state" else y_next_raw
-        return y_next_aligned, x_pred + delta_x_back
+        return np.linalg.solve(phi_next, y_next_raw)
 
     def _step_maneuver_update(
         self, x_pred: np.ndarray, p_pred: np.ndarray, h_jac: np.ndarray,

@@ -9,11 +9,11 @@ from sim.core.models import Measurement, StateBelief
 from sim.estimation.relative_hcw_ekf import (
     HCWRelativeEKFEstimator,
     MorseGlintGateConfig,
+    SSJ2RelativeEKFEstimator,
     hcw_measurement_dimension,
     hcw_measurement_jacobian,
     hcw_measurement_vector,
     hcw_state_transition_matrix,
-    local_l1_medoid,
     morse_glint_gate,
 )
 
@@ -222,7 +222,7 @@ def test_hcw_relative_ekf_uses_full_epoch_measurement_covariance() -> None:
     )
 
 
-def test_morse_glint_gate_rejects_single_sample_optical_glint_and_pins_l1_medoid() -> None:
+def test_morse_glint_gate_rejects_single_sample_optical_glint_and_holds_prediction() -> None:
     n = 0.0011
     dt_s = 10.0
     phi = hcw_state_transition_matrix(n, dt_s)
@@ -273,7 +273,9 @@ def test_morse_glint_gate_rejects_single_sample_optical_glint_and_pins_l1_medoid
             assert gate_diag.delta_dot < 0.0
             assert gate_diag.exterior_curl == pytest.approx(1.0, abs=1.0e-12)
             assert gate_diag.return_ratio == pytest.approx(0.0, abs=1.0e-12)
-            assert gate_diag.medoid_pinned is True
+            # glint_weight=0 holds the prediction: state and covariance stay mutually consistent.
+            assert gated.last_update_diagnostics.update_applied is False
+            assert gated.last_update_diagnostics.posterior_cov_trace == gated.last_update_diagnostics.predicted_cov_trace
 
             ungated_glint_err = float(np.linalg.norm(ungated_belief.state - truth_arc[3]))
             gated_glint_err = float(np.linalg.norm(gated_belief.state - truth_arc[3]))
@@ -281,8 +283,6 @@ def test_morse_glint_gate_rejects_single_sample_optical_glint_and_pins_l1_medoid
             assert rejection_ratio > 0.95
             assert gated_glint_err == pytest.approx(0.0, abs=1.0e-12)
 
-    medoid = local_l1_medoid((truth_arc[3], truth_arc[3] + glint_spike, truth_arc[3] + 1.0e-15))
-    np.testing.assert_allclose(medoid, truth_arc[3], atol=1.0e-14)
 
 
 def test_morse_glint_gate_preserves_full_step_response_on_impulsive_target_delta_v() -> None:
@@ -333,7 +333,10 @@ def test_morse_glint_gate_preserves_full_step_response_on_impulsive_target_delta
             assert gate_diag.classification == "step_maneuver"
             assert gate_diag.delta_dot >= -1.0e-15
             assert gate_diag.return_ratio == pytest.approx(1.0, abs=1.0e-12)
-            assert gate_diag.step_preserved is True
+            # step_gain_floor=1 with H = I gives K_eff = I, so the Joseph-form posterior collapses to R exactly.
+            assert gated.last_update_diagnostics.posterior_cov_trace == pytest.approx(
+                3.0e-6 + 3.0e-10, rel=1.0e-9
+            )
 
             np.testing.assert_allclose(gated_belief.state[3:], truth_arc[3][3:], atol=1.0e-12)
             ungated_vel_err = float(np.linalg.norm(ungated_belief.state[3:] - truth_arc[3][3:]))
@@ -404,3 +407,114 @@ def test_hcw_relative_ekf_streaming_and_window_modes_handle_glint_and_delta_v_ar
     )
     assert direct_step.classification == "step_maneuver"
 
+
+
+def _glint_and_delta_v_arc(phi: np.ndarray, dt_s: float) -> tuple[list[np.ndarray], list[Measurement]]:
+    truth_arc = [np.array([0.3, -0.6, 0.2, 0.00015, -0.0001, 0.00005], dtype=float)]
+    for step in range(1, 9):
+        propagated = phi @ truth_arc[-1]
+        if step == 5:
+            propagated = propagated + np.array([0.0, 0.0, 0.0, -0.0012, 0.0020, -0.0008])
+        truth_arc.append(propagated)
+    glint_spike = np.array([0.08, -0.05, 0.04, 0.003, -0.002, 0.001], dtype=float)
+    measurements = [
+        Measurement(vector=truth_arc[step] + (glint_spike if step == 2 else 0.0), t_s=step * dt_s)
+        for step in range(1, len(truth_arc))
+    ]
+    return truth_arc, measurements
+
+
+def test_ss_j2_relative_ekf_gate_handles_glint_and_delta_v_in_window_and_streaming_modes() -> None:
+    dt_s = 10.0
+    estimator = SSJ2RelativeEKFEstimator(
+        mean_motion_rad_s=0.0011,
+        dt_s=dt_s,
+        process_noise_diag=np.array([1.0e-10] * 3 + [1.0e-14] * 3),
+        meas_noise_diag=np.array([1.0e-6] * 3 + [1.0e-10] * 3),
+        reference_radius_km=6900.0,
+        reference_inclination_rad=0.9,
+        numeric_backend="python",
+        morse_glint_gate=MorseGlintGateConfig(),
+    )
+    truth_arc, measurements = _glint_and_delta_v_arc(estimator._relative_dynamics.state_transition_matrix(dt_s), dt_s)
+    initial_belief = StateBelief(
+        state=truth_arc[0].copy(), covariance=np.diag([1.0e-8] * 3 + [1.0e-12] * 3), last_update_t_s=0.0
+    )
+
+    classifications = []
+    belief = initial_belief
+    estimator.reset_gate_state()
+    for idx, meas in enumerate(measurements):
+        next_meas = measurements[idx + 1] if idx + 1 < len(measurements) else None
+        belief = estimator.update(belief, meas, meas.t_s, next_measurement=next_meas)
+        gate_diag = estimator.last_update_diagnostics.gate_diagnostics
+        classifications.append(gate_diag.classification)
+        np.testing.assert_allclose(belief.state, truth_arc[idx + 1], atol=1.0e-12)
+    assert classifications[1] == "glint_rejected"
+    assert classifications[4] == "step_maneuver"
+
+    estimator.reset_gate_state()
+    belief = initial_belief
+    for idx, meas in enumerate(measurements):
+        belief = estimator.update(belief, meas, meas.t_s)
+        if idx in (1, 4):
+            # Streaming mode defers the outlier epoch by one sample and outputs the prediction meanwhile.
+            assert estimator.last_update_diagnostics.gate_diagnostics.classification == "pending_impulse"
+            continue
+        np.testing.assert_allclose(belief.state, truth_arc[idx + 1], atol=1.0e-12)
+
+
+def test_gate_resolves_pending_impulse_when_caller_switches_to_lookahead() -> None:
+    n = 0.0011
+    dt_s = 10.0
+    truth_arc, measurements = _glint_and_delta_v_arc(hcw_state_transition_matrix(n, dt_s), dt_s)
+    initial_belief = StateBelief(
+        state=truth_arc[0].copy(), covariance=np.diag([1.0e-8] * 3 + [1.0e-12] * 3), last_update_t_s=0.0
+    )
+
+    def make() -> HCWRelativeEKFEstimator:
+        return HCWRelativeEKFEstimator(
+            mean_motion_rad_s=n,
+            dt_s=dt_s,
+            process_noise_diag=np.array([1.0e-10] * 3 + [1.0e-14] * 3),
+            meas_noise_diag=np.array([1.0e-6] * 3 + [1.0e-10] * 3),
+            morse_glint_gate=MorseGlintGateConfig(),
+        )
+
+    reference = make().filter_measurements(initial_belief, measurements)
+    mixed = make()
+    belief = initial_belief
+    for idx, meas in enumerate(measurements):
+        # Streaming at the glint epoch, lookahead for the next few epochs, then streaming again.
+        use_lookahead = 2 <= idx < 6 and idx + 1 < len(measurements)
+        belief = mixed.update(belief, meas, meas.t_s, next_measurement=measurements[idx + 1] if use_lookahead else None)
+        if idx == 1:
+            assert mixed.last_update_diagnostics.gate_diagnostics.classification == "pending_impulse"
+            continue
+        # A stale pending impulse would rewind later streaming calls to the glint epoch.
+        assert belief.last_update_t_s == reference[idx].last_update_t_s
+        np.testing.assert_allclose(belief.state, reference[idx].state, atol=1.0e-12)
+        np.testing.assert_allclose(belief.covariance, reference[idx].covariance, rtol=1.0e-9, atol=1.0e-20)
+
+
+def test_gate_requires_full_state_measurement_model_and_matches_closed_forms() -> None:
+    with pytest.raises(ValueError, match="relative_state"):
+        HCWRelativeEKFEstimator(
+            mean_motion_rad_s=0.0011,
+            dt_s=10.0,
+            process_noise_diag=np.ones(6),
+            meas_noise_diag=np.array([1.0e-8, 1.0e-8]),
+            measurement_model="relative_angles",
+            morse_glint_gate=MorseGlintGateConfig(),
+        )
+
+    rng = np.random.default_rng(3)
+    for _ in range(50):
+        y_prev, y_curr, y_next = rng.normal(size=(3, 6))
+        diag = morse_glint_gate(y_prev, y_curr, y_next, nis=50.0)
+        d_minus, d_plus = y_curr - y_prev, y_next - y_curr
+        energy = d_minus @ d_minus + d_plus @ d_plus
+        assert diag.delta_dot == pytest.approx(d_minus @ d_plus)
+        assert diag.exterior_curl == pytest.approx(np.linalg.norm(d_plus - d_minus) / np.sqrt(2.0 * energy))
+        assert diag.exterior_curl**2 == pytest.approx(0.5 - diag.delta_dot / energy)
+        assert diag.return_ratio == pytest.approx(np.linalg.norm(y_next - y_prev) / np.linalg.norm(d_minus))
