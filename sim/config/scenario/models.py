@@ -225,6 +225,7 @@ class SimulatorExecutionSection(_TypedConfigDict):
             "max_workers": 0,
             "reserve_workers": 1,
             "min_objects": 3,
+            "thread_scope": "auto",
         },
         "runtime_profiler": {
             "enabled": True,
@@ -649,6 +650,7 @@ class MonteCarloSection:
     constraints: list[MonteCarloConstraint] = field(default_factory=list)
     correlated_normals: list[MonteCarloCorrelatedNormal] = field(default_factory=list)
     max_attempts: int = 1000
+    parallel_backend: str = "process_pool"
 
 
 @dataclass(frozen=True)
@@ -656,6 +658,7 @@ class AnalysisExecutionSection:
     parallel_enabled: bool = False
     parallel_workers: int = 0
     failure_policy: str = "fail_fast"
+    parallel_backend: str = "process_pool"
 
 
 @dataclass(frozen=True)

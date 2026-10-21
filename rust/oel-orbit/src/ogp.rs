@@ -110,25 +110,120 @@ pub struct BatchPrediction {
     pub positions: Vec<f64>,
     pub velocities: Vec<f64>,
     pub errors: Vec<(usize, String)>,
+    pub workers_used: usize,
 }
+
+/// Below this object/sample work count, thread startup costs dominate.
+pub const MIN_PARALLEL_BATCH_SAMPLES: usize = 4096;
 
 pub fn propagate_batch(
     numeric_elements: &[f64],
     times_min: &[f64],
     samples_per_object: usize,
 ) -> Result<BatchPrediction, String> {
+    propagate_batch_with_workers(numeric_elements, times_min, samples_per_object, 1)
+}
+
+/// Each worker owns complete object rows, including mutable resonance state.
+/// Python supplies an execution-local upper bound; no global pool is changed.
+pub fn propagate_batch_with_workers(
+    numeric_elements: &[f64],
+    times_min: &[f64],
+    samples_per_object: usize,
+    requested_workers: usize,
+) -> Result<BatchPrediction, String> {
+    if requested_workers == 0 {
+        return Err("OGP batch workers must be positive".into());
+    }
     if numeric_elements.is_empty() || numeric_elements.len() % 8 != 0 || samples_per_object == 0 {
         return Err("OGP batch requires element rows and time samples".into());
     }
     let objects = numeric_elements.len() / 8;
-    if times_min.len() != objects * samples_per_object {
+    if Some(times_min.len()) != objects.checked_mul(samples_per_object) {
         return Err("OGP batch time grid has an inconsistent shape".into());
     }
-    let mut result = BatchPrediction {
-        positions: vec![0.0; times_min.len() * 3],
-        velocities: vec![0.0; times_min.len() * 3],
-        errors: Vec::new(),
+    let output_len = times_min
+        .len()
+        .checked_mul(3)
+        .ok_or("OGP batch output size overflow")?;
+    let available = std::thread::available_parallelism().map_or(1, usize::from);
+    let workers = if times_min.len() < MIN_PARALLEL_BATCH_SAMPLES {
+        1
+    } else {
+        requested_workers.min(objects).min(available)
     };
+    let mut result = BatchPrediction {
+        positions: vec![0.0; output_len],
+        velocities: vec![0.0; output_len],
+        errors: Vec::new(),
+        workers_used: workers,
+    };
+    if workers == 1 {
+        result.errors = propagate_object_rows(
+            numeric_elements,
+            times_min,
+            samples_per_object,
+            0,
+            &mut result.positions,
+            &mut result.velocities,
+        );
+    } else {
+        result.errors = std::thread::scope(|scope| -> Result<_, String> {
+            let mut positions = result.positions.as_mut_slice();
+            let mut velocities = result.velocities.as_mut_slice();
+            let mut first_object = 0;
+            let mut handles = Vec::with_capacity(workers);
+            for worker in 0..workers {
+                let count = objects / workers + usize::from(worker < objects % workers);
+                let first_sample = first_object * samples_per_object;
+                let sample_count = count * samples_per_object;
+                let elements = &numeric_elements[first_object * 8..(first_object + count) * 8];
+                let times = &times_min[first_sample..first_sample + sample_count];
+                let (worker_positions, rest) = positions.split_at_mut(sample_count * 3);
+                positions = rest;
+                let (worker_velocities, rest) = velocities.split_at_mut(sample_count * 3);
+                velocities = rest;
+                let handle = std::thread::Builder::new()
+                    .name(format!("oel-ogp-{worker}"))
+                    .spawn_scoped(scope, move || {
+                        propagate_object_rows(
+                            elements,
+                            times,
+                            samples_per_object,
+                            first_sample,
+                            worker_positions,
+                            worker_velocities,
+                        )
+                    })
+                    .map_err(|error| format!("OGP worker creation failed: {error}"))?;
+                handles.push(handle);
+                first_object += count;
+            }
+            let mut errors = Vec::new();
+            // Join in object order, independent of completion order.
+            for handle in handles {
+                errors.extend(
+                    handle
+                        .join()
+                        .map_err(|_| "OGP worker panicked".to_owned())?,
+                );
+            }
+            Ok(errors)
+        })?;
+    }
+    Ok(result)
+}
+
+fn propagate_object_rows(
+    numeric_elements: &[f64],
+    times_min: &[f64],
+    samples_per_object: usize,
+    sample_offset: usize,
+    positions: &mut [f64],
+    velocities: &mut [f64],
+) -> Vec<(usize, String)> {
+    let objects = numeric_elements.len() / 8;
+    let mut errors = Vec::new();
     for object in 0..objects {
         let values: [f64; 8] = numeric_elements[object * 8..object * 8 + 8]
             .try_into()
@@ -137,9 +232,10 @@ pub fn propagate_batch(
             Ok(value) => value,
             Err(error) => {
                 for sample in 0..samples_per_object {
-                    result
-                        .errors
-                        .push((object * samples_per_object + sample, error.clone()));
+                    errors.push((
+                        sample_offset + object * samples_per_object + sample,
+                        error.clone(),
+                    ));
                 }
                 continue;
             }
@@ -148,14 +244,14 @@ pub fn propagate_batch(
             let index = object * samples_per_object + sample;
             match propagator.propagate(times_min[index]) {
                 Ok((position, velocity)) => {
-                    result.positions[index * 3..index * 3 + 3].copy_from_slice(&position);
-                    result.velocities[index * 3..index * 3 + 3].copy_from_slice(&velocity);
+                    positions[index * 3..index * 3 + 3].copy_from_slice(&position);
+                    velocities[index * 3..index * 3 + 3].copy_from_slice(&velocity);
                 }
-                Err(error) => result.errors.push((index, error)),
+                Err(error) => errors.push((sample_offset + index, error)),
             }
         }
     }
-    Ok(result)
+    errors
 }
 
 /// Immutable observations and validated lower Cholesky factors, prepared once
@@ -239,7 +335,7 @@ impl ObservationBatch {
 
 #[cfg(test)]
 mod tests {
-    use super::{propagate_batch, Elements, Propagator};
+    use super::{propagate_batch, propagate_batch_with_workers, Elements, Propagator};
 
     fn high_eccentric_resonant_elements() -> Elements {
         Elements::from_array([
@@ -253,6 +349,54 @@ mod tests {
             0.00011873,
         ])
         .unwrap()
+    }
+
+    #[test]
+    fn parallel_batch_preserves_bits_resonance_queries_and_error_order() {
+        let mut elements = Vec::new();
+        let mut times = Vec::new();
+        let queries = [2880.0, 60.0, -1440.0, -720.0, 0.0, 720.0, f64::NAN];
+        for object in 0..16 {
+            let mut row = [
+                2_460_310.5,
+                if object % 2 == 0 { 15.5 } else { 1.0027 },
+                0.0001,
+                0.05,
+                80.0,
+                10.0,
+                20.0,
+                0.0,
+            ];
+            if object == 3 || object == 11 {
+                row[2] = 1.1;
+            }
+            elements.extend_from_slice(&row);
+            times.extend((0..513).map(|sample| queries[sample % queries.len()]));
+        }
+        let serial = propagate_batch(&elements, &times, 513).unwrap();
+        for workers in [1, 2, 4, usize::MAX] {
+            let parallel = propagate_batch_with_workers(&elements, &times, 513, workers).unwrap();
+            assert_eq!(parallel.positions, serial.positions);
+            assert_eq!(parallel.velocities, serial.velocities);
+            assert_eq!(parallel.errors, serial.errors);
+            assert!(parallel.errors.windows(2).all(|pair| pair[0].0 < pair[1].0));
+            assert!(parallel.workers_used <= workers.min(16));
+            if workers > 1 && std::thread::available_parallelism().unwrap().get() > 1 {
+                assert!(parallel.workers_used > 1);
+            }
+        }
+    }
+
+    #[test]
+    fn parallel_batch_keeps_small_or_single_object_work_serial_and_checks_inputs() {
+        let row = [2_460_310.5, 15.5, 0.0001, 51.0, 80.0, 10.0, 20.0, 0.0];
+        let small = propagate_batch_with_workers(&row.repeat(8), &[0.0; 8], 1, 4).unwrap();
+        assert_eq!(small.workers_used, 1);
+        let long = propagate_batch_with_workers(&row, &vec![0.0; 4096], 4096, 4).unwrap();
+        assert_eq!(long.workers_used, 1);
+        assert!(propagate_batch_with_workers(&row, &[0.0], 1, 0).is_err());
+        assert!(propagate_batch_with_workers(&row, &[0.0], 2, 4).is_err());
+        assert!(propagate_batch_with_workers(&[], &[], 0, 4).is_err());
     }
 
     #[test]

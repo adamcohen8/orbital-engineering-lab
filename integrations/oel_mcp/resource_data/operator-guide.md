@@ -129,6 +129,25 @@ resources use the generic scenario/review path; MCP has no dedicated typed
 authoring route for them. Use local fallbacks only within the host-authorized
 workflow and paths.
 
+For offline format conversion, shared object import/composition, or export of
+completed evidence, use the host-authorized `oel io` / `python -m sim.data_io`
+workflow in `docs/data-io.md`; discover profiles with `oel io formats`. The
+`local_workflows` metadata in `oel://agent/workflows/v1` identifies this fallback
+without advertising new tools. Object materialization writes a new validated
+scenario and never runs it. Exports select saved evidence and retain receipts;
+serializers do not propagate or fit an orbit. Review-to-OGP/TLE fitting remains
+a separate Pro `tracking_od` operation. The existing CCSDS, frame/time and
+handoff tools keep their advertised input and output contracts.
+
+Experimental full-state innovation recovery is an opt-in knowledge-estimator
+setting; see `docs/innovation-recovery.md`. It is disabled by default and
+requires full-state observations and positive-definite measurement covariance.
+Use an existing scenario through the ordinary validation/run tools and inspect
+saved recovery metrics through `oel.query_review.v1`. It has no dedicated MCP
+tool and does not configure flight-software navigation or Pro sequential/
+continuous tracking OD. Advanced OD, calibration, SLR and continuous tracking
+remain Pro workflows; v0.35.0 adds no MCP contracts for them.
+
 Remote transport, arbitrary filesystem resources, prompts, sampling,
 unrestricted scenario generation, private campaigns, and frontier release
 brokering are not part of the supported local surface.

@@ -9,6 +9,7 @@ import numpy as np
 
 from sim.core.models import Measurement, StateBelief, StateTruth
 from sim.dynamics.orbit.environment import EARTH_MU_KM3_S2, EARTH_RADIUS_KM
+from sim.estimation.innovation_recovery import InnovationRecoveryConfig, validate_recovery_config
 from sim.estimation.maneuver_detection import EKFManeuverDetectionConfig, EKFManeuverDetector
 from sim.estimation.orbit_ekf import OrbitEKFEstimator, OrbitEKFUpdateDiagnostics
 from sim.estimation.relative_hcw_ekf import (
@@ -152,6 +153,7 @@ class KnowledgeEKFConfig:
     mean_motion_rad_s: float | None = None
     measurement_origin: str = "deputy"
     integration_substep_s: float = 10.0
+    innovation_recovery: InnovationRecoveryConfig | None = None
 
     def __post_init__(self) -> None:
         for name in ("process_noise_diag", "meas_noise_diag", "init_cov_diag"):
@@ -333,6 +335,7 @@ class _Track:
     hcw_mean_motion_rad_s: float | None = None
     hcw_measurement_origin: str = "deputy"
     th_integration_substep_s: float = 10.0
+    innovation_recovery: InnovationRecoveryConfig | None = None
     maneuver_detector: EKFManeuverDetector = field(default_factory=EKFManeuverDetector)
     belief: StateBelief | None = None
     relative_belief: StateBelief | None = None
@@ -493,6 +496,7 @@ class _Track:
                 measurement_model=self.measurement_model,
                 measurement_origin=self.hcw_measurement_origin,
                 numeric_backend=self.sensor.numeric_backend,
+                innovation_recovery=self.innovation_recovery,
                 integration_substep_s=float(self.th_integration_substep_s),
             )
         elif self.estimator_type == "relative_th_ekf":
@@ -505,6 +509,7 @@ class _Track:
                 measurement_model=self.measurement_model,
                 measurement_origin=self.hcw_measurement_origin,
                 numeric_backend=self.sensor.numeric_backend,
+                innovation_recovery=self.innovation_recovery,
                 integration_substep_s=float(self.th_integration_substep_s),
             )
         elif self.estimator_type == "relative_ss_j2_ekf":
@@ -516,6 +521,7 @@ class _Track:
                 measurement_model=self.measurement_model,
                 measurement_origin=self.hcw_measurement_origin,
                 numeric_backend=self.sensor.numeric_backend,
+                innovation_recovery=self.innovation_recovery,
             )
         else:
             self.estimator = HCWRelativeEKFEstimator(
@@ -526,6 +532,7 @@ class _Track:
                 measurement_model=self.measurement_model,
                 measurement_origin=self.hcw_measurement_origin,
                 numeric_backend=self.sensor.numeric_backend,
+                innovation_recovery=self.innovation_recovery,
             )
 
     def _measure_hcw(
@@ -768,7 +775,18 @@ class _Track:
             "track_age_s_mean": _safe_stat_mean(self.track_age_s_values),
             "track_age_s_p95": _safe_stat_percentile(self.track_age_s_values, 95.0),
         }
+        if self.estimator is not None:
+            recovery = getattr(self.estimator.last_update_diagnostics, "recovery_diagnostics", None)
+            if recovery is not None:
+                summary["innovation_recovery_classification"] = recovery.classification
+                summary["innovation_recovery_action"] = recovery.action
         maneuver = self.maneuver_detector.summary()
+        for key in (
+            "recovery_hold_count", "recovery_reinitialization_count", "recovery_transient_count",
+            "last_recovery_event_t_s", "last_recovery_decision_t_s",
+        ):
+            if key in maneuver:
+                summary[key] = maneuver[key]
         summary.update(
             {
                 "maneuver_detection_enabled": bool(maneuver.get("enabled", False)),
@@ -844,6 +862,9 @@ class ObjectKnowledgeBase:
                     f"tracked target {cfg.target_id!r} uses estimator='measured_state'; "
                     "measured_state requires measurement_model='state'."
                 )
+            validate_recovery_config(cfg.ekf.innovation_recovery, measurement_model)
+            if cfg.ekf.innovation_recovery is not None and cfg.ekf.innovation_recovery.enabled and estimator_type == "measured_state":
+                raise ValueError("innovation recovery requires an EKF estimator.")
             trng = np.random.default_rng(int(self._rng.integers(0, 2**31 - 1)) + i)
             sensor = _OtherObjectStateSensor(
                 cfg.conditions,
@@ -858,6 +879,7 @@ class ObjectKnowledgeBase:
                     process_noise_diag=np.array(cfg.ekf.process_noise_diag, dtype=float),
                     meas_noise_diag=np.array(cfg.ekf.meas_noise_diag, dtype=float),
                     numeric_backend=cfg.numeric_backend,
+                    innovation_recovery=cfg.ekf.innovation_recovery,
                 )
                 if estimator_type == "ekf"
                 else None
@@ -884,6 +906,7 @@ class ObjectKnowledgeBase:
                 hcw_mean_motion_rad_s=cfg.ekf.mean_motion_rad_s,
                 hcw_measurement_origin=str(cfg.ekf.measurement_origin),
                 th_integration_substep_s=float(cfg.ekf.integration_substep_s),
+                innovation_recovery=cfg.ekf.innovation_recovery,
                 maneuver_detector=EKFManeuverDetector(cfg.maneuver_detection),
             )
 

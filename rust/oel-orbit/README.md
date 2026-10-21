@@ -58,3 +58,11 @@ existing `ONPForceContext` and native stage preparation. An external Earth
 field can also consume the existing native EOP frame context. No additional
 source branch enters the ordinary Earth force evaluator or integration loops.
 See [extended third-body gravity](../../docs/additional-gravity.md).
+
+## Bounded OGP batch workers
+
+The native batch adapter can allocate bounded object-row workers and reports
+requested, allocated, and used workers. Queries within each object remain
+ordered; small batches and single-object batches stay serial. Scale worker
+selection remains a Pro workflow. This does not change public single-scenario
+serial stepping or establish a universal throughput improvement.

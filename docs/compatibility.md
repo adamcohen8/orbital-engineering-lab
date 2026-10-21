@@ -27,6 +27,13 @@ security-supported procurement baseline. Python lifecycle status is governed by
 the [CPython version table](https://devguide.python.org/versions/), not by OEL
 package metadata alone.
 
+Pillow 13.0.0 requires Python 3.11 or newer. Python 3.11-3.14 core and media
+profiles use Pillow 13; Python 3.10 retains Pillow 12.3.0 for functional compatibility.
+That legacy pin has known advisories with no upstream 3.10 backport, so 3.10
+dependency security qualification (including core/media/full) is blocked.
+The doctor warns and recommends Python 3.11+; there is no 3.10 managed bundle or clean dependency-audit claim.
+See the [supply-chain security findings](security/supply-chain.md#pillow-security-baseline).
+
 The doctor records the following upstream security-maintenance end months for
 the currently admitted minors:
 
@@ -55,7 +62,7 @@ external integrations.
 | --- | --- | --- | --- | --- |
 | Core CLI/YAML/API/review | 3.10-3.14 | Supported matrix target | Supported matrix target | Supported matrix target |
 | Dev/test | 3.10-3.14 | Supported matrix target | Supported matrix target | Supported matrix target |
-| Trainer | 3.10-3.14 | Supported matrix target | Supported matrix target | Supported matrix target |
+| Trainer | 3.10 functional only; 3.11-3.14 patched dependency baseline | Supported matrix target | Supported matrix target | Supported matrix target |
 | Numba acceleration | 3.10-3.14 | Where approved constraints resolve | Where approved constraints resolve | Where approved constraints resolve |
 | OEL-native validation | 3.10-3.14 | Supported matrix target | Supported matrix target | Supported matrix target |
 | ML | Qualified combinations only | No universal claim | Qualified lanes only | Qualified lanes only |

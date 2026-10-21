@@ -765,8 +765,13 @@ def _parse_simulator_execution_section(value: Any) -> dict[str, Any]:
     runtime_profiler = _as_dict(d.get("runtime_profiler"), "simulator.execution.runtime_profiler")
     controller = _as_dict(d.get("controller"), "simulator.execution.controller")
     backend = str(object_parallelism.get("backend", "serial") or "serial").strip().lower()
-    if backend not in {"serial", "process_pool"}:
-        raise ValueError("simulator.execution.object_parallelism.backend must be one of: serial, process_pool.")
+    if backend not in {"serial", "process_pool", "thread_pool"}:
+        raise ValueError("simulator.execution.object_parallelism.backend must be one of: serial, process_pool, thread_pool.")
+    thread_scope = str(object_parallelism.get("thread_scope", "auto") or "auto").strip().lower()
+    if thread_scope not in {"auto", "object_step", "native_history"}:
+        raise ValueError(
+            "simulator.execution.object_parallelism.thread_scope must be one of: auto, object_step, native_history."
+        )
     raw_workers = object_parallelism.get("workers", 0)
     raw_max_workers = object_parallelism.get("max_workers", 0)
     raw_reserve_workers = object_parallelism.get("reserve_workers", 1)
@@ -814,12 +819,15 @@ def _parse_simulator_execution_section(value: Any) -> dict[str, Any]:
         raise ValueError(
             "simulator.execution.policy must be one of: auto, configured, parallel, serial."
         )
+    if backend == "thread_pool" and policy == "auto":
+        raise ValueError("simulator.execution.object_parallelism.backend=thread_pool requires policy=configured or parallel.")
     if policy == "serial":
         enabled = False
         backend = "serial"
     elif policy in {"parallel", "auto"}:
         enabled = True
-        backend = "process_pool"
+        if backend != "thread_pool":
+            backend = "process_pool"
     orbit_budget_ms = _parse_float(
         controller.get("orbit_budget_ms", 2.0),
         "simulator.execution.controller.orbit_budget_ms",
@@ -846,6 +854,7 @@ def _parse_simulator_execution_section(value: Any) -> dict[str, Any]:
             "max_workers": max_workers,
             "reserve_workers": reserve_workers,
             "min_objects": min_objects,
+            "thread_scope": thread_scope,
         },
         "runtime_profiler": {
             **runtime_profiler,

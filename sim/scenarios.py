@@ -604,6 +604,12 @@ class ScenarioBuilder:
         self._root.setdefault("objects", {})[oid] = entry
         return self
 
+    def import_object(self, imported: Any, *, object_id: str | None = None, replace: bool = False, allow_model_change: bool = False) -> ScenarioBuilder:
+        """Attach a selected external state through the modular object IO owner."""
+        from sim.data_io.objects.composition import compose_object
+        self._root = compose_object(self._root, imported, object_id=object_id, replace=replace, allow_model_change=allow_model_change)
+        return self
+
     def target_satellite(self, **kwargs: Any) -> ScenarioBuilder:
         return self.satellite("target", role="target", **kwargs)
 

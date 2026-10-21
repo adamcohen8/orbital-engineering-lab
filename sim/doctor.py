@@ -95,11 +95,16 @@ class DependencyStatus:
         return f"{self.version} is incompatible (requires {self.spec.requirement})"
 
 
+def _pillow_spec(version: tuple[int, int]) -> DependencySpec:
+    return DependencySpec("Pillow", exact="12.3.0") if version < (3, 11) else DependencySpec("Pillow", "13", "14")
+
+
 CORE_SPECS = (
     DependencySpec("oel-rust-game", "0.5", "0.6"),
-    DependencySpec("oel-rust-orbit", "0.18.2", "0.19"),
+    DependencySpec("oel-rust-orbit", "0.18.3", "0.19"),
     DependencySpec("numpy", "2.1", "2.5"),
     DependencySpec("matplotlib", "3.8", "3.12"),
+    _pillow_spec(tuple(sys.version_info[:2])),
     DependencySpec("tqdm", "4.65", "5"),
     DependencySpec("PyYAML", "6.0", "7"),
     DependencySpec("scipy", "1.14.1", "1.18"),
@@ -111,7 +116,7 @@ DEV_SPECS_BASE = (
     DependencySpec("setuptools", "83", "84"),
 )
 GAME_MEDIA_SPECS = (
-    DependencySpec("Pillow", "12", "13"),
+    _pillow_spec(tuple(sys.version_info[:2])),
     DependencySpec("imageio", "2.34", "3"),
     DependencySpec("imageio-ffmpeg", "0.4", "1"),
 )
@@ -216,6 +221,10 @@ def evaluate_dependencies(
     return tuple(statuses)
 
 
+def _core_specs(version: tuple[int, int]) -> tuple[DependencySpec, ...]:
+    return tuple(_pillow_spec(version) if spec.distribution == "Pillow" else spec for spec in CORE_SPECS)
+
+
 def _dev_specs(version: tuple[int, int]) -> tuple[DependencySpec, ...]:
     if version < (3, 11):
         return DEV_SPECS_BASE + (DependencySpec("tomli", "2", "3"),)
@@ -228,7 +237,8 @@ def _game_specs(version: tuple[int, int]) -> tuple[DependencySpec, ...]:
         if version >= (3, 14)
         else DependencySpec("pygame", "2.5", "3")
     )
-    return (pygame_spec,) + GAME_MEDIA_SPECS
+    media_specs = (_pillow_spec(version),) + GAME_MEDIA_SPECS[1:]
+    return (pygame_spec,) + media_specs
 
 
 def _all_compatible(statuses: Iterable[DependencyStatus]) -> bool:
@@ -455,6 +465,13 @@ def print_doctor_report(*, source_root: str | Path | None = None) -> bool:
     version = tuple(sys.version_info[:2])
     python_ok = interpreter_is_supported(version)
     security_ok, security_detail = security_support_detail(version)
+    if version == (3, 10):
+        security_ok = False
+        security_detail += (
+            " Pillow 12.3.0 is retained for functional compatibility only; known advisories block "
+            "dependency security qualification, including core/media/full; no upstream 3.10 backport is available. "
+            "Use CPython 3.11+ with Pillow 13."
+        )
     system = platform.system() or "unknown"
     machine = platform.machine() or "unknown"
     platform_ok, platform_expected = _platform_is_supported(system, machine)
@@ -500,16 +517,17 @@ def print_doctor_report(*, source_root: str | Path | None = None) -> bool:
     )
     sys.stdout.flush()
 
+    core_specs = _core_specs(version)
     dev_specs = _dev_specs(version)
     game_specs = _game_specs(version)
-    all_specs = tuple(dict.fromkeys(CORE_SPECS + dev_specs + game_specs + ACCEL_SPECS + VALIDATION_SPECS + ML_SPECS))
+    all_specs = tuple(dict.fromkeys(core_specs + dev_specs + game_specs + ACCEL_SPECS + VALIDATION_SPECS + ML_SPECS))
     all_statuses = evaluate_dependencies(all_specs)
     status_by_name = {item.spec.distribution: item for item in all_statuses}
 
     def selected(specs: Iterable[DependencySpec]) -> tuple[DependencyStatus, ...]:
         return tuple(status_by_name[item.distribution] for item in specs)
 
-    core_statuses = selected(CORE_SPECS)
+    core_statuses = selected(core_specs)
     dev_statuses = selected(dev_specs)
     game_statuses = selected(game_specs)
     accel_statuses = selected(ACCEL_SPECS)
@@ -531,7 +549,7 @@ def print_doctor_report(*, source_root: str | Path | None = None) -> bool:
         "all required versions resolve" if core_ok else _failed_dependency_detail(core_statuses),
     )
     for item in all_statuses:
-        required = item.spec in CORE_SPECS
+        required = item.spec in core_specs
         if required or item.version is not None:
             _print_row(
                 f"Package {item.spec.distribution}",

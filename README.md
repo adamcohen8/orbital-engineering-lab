@@ -85,7 +85,7 @@ py -3.14 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install "maturin>=1.10,<2"
 .\.venv\Scripts\python.exe -m maturin build --release --locked --manifest-path rust/oel-orbit/Cargo.toml --interpreter .\.venv\Scripts\python.exe --out dist/native
 .\.venv\Scripts\python.exe -m maturin build --release --locked --manifest-path rust/oel-game/Cargo.toml --interpreter .\.venv\Scripts\python.exe --out dist/native
-.\.venv\Scripts\python.exe -m pip install --no-index --find-links dist/native "oel-rust-orbit>=0.17.2,<0.18" "oel-rust-game>=0.5,<0.6"
+.\.venv\Scripts\python.exe -m pip install --no-index --find-links dist/native "oel-rust-orbit>=0.18.3,<0.19" "oel-rust-game>=0.5,<0.6"
 .\.venv\Scripts\python.exe -m pip install ".[dev]"
 .\.venv\Scripts\python.exe run_simulation.py --doctor
 .\.venv\Scripts\python.exe run_simulation.py --quickstart
@@ -101,7 +101,7 @@ python3.14 -m venv .venv
 .venv/bin/python -m pip install "maturin>=1.10,<2"
 .venv/bin/python -m maturin build --release --locked --manifest-path rust/oel-orbit/Cargo.toml --interpreter .venv/bin/python --out dist/native
 .venv/bin/python -m maturin build --release --locked --manifest-path rust/oel-game/Cargo.toml --interpreter .venv/bin/python --out dist/native
-.venv/bin/python -m pip install --no-index --find-links dist/native "oel-rust-orbit>=0.17.2,<0.18" "oel-rust-game>=0.5,<0.6"
+.venv/bin/python -m pip install --no-index --find-links dist/native "oel-rust-orbit>=0.18.3,<0.19" "oel-rust-game>=0.5,<0.6"
 .venv/bin/python -m pip install ".[dev]"
 .venv/bin/python run_simulation.py --doctor
 .venv/bin/python run_simulation.py --quickstart
@@ -168,6 +168,10 @@ For the guided first-run walkthrough, see [Quickstart](docs/quickstart.md).
   ONP, completed-review, or ECI OGP histories.
 - Explore perturbation models, atmosphere, SRP, third bodies, spherical
   harmonics, re-entry diagnostics, and threshold termination criteria.
+- Import, inspect and convert local orbital data, compose scenario objects, and
+  export completed review evidence through [Modular Data IO](docs/data-io.md).
+- Opt into experimental [full-state EKF innovation recovery](docs/innovation-recovery.md)
+  for HCW, SS-J2, TH, YA, or absolute ECI knowledge estimation.
 - Generate single-run dashboards, plots, summaries, review stores, and artifact
   indexes.
 - Use a Python API or scenario YAML as the durable scenario interface.
@@ -176,7 +180,8 @@ For the guided first-run walkthrough, see [Quickstart](docs/quickstart.md).
   assistants.
 
 The primary public surfaces are the CLI, scenario YAML, Python API, review
-query CLI/API, custom review plotting API, and the RPO trainer.
+query CLI/API, modular data IO, custom review plotting API, and the RPO trainer.
+Public single-scenario runs step objects deterministically and serially.
 
 ## Choose A Workflow
 
@@ -195,6 +200,8 @@ query CLI/API, custom review plotting API, and the RPO trainer.
 | Mission-reconstitution trade space | `python run_simulation.py --config agents/examples/public_agent_mission_reconstitution_trade_space.yaml` |
 | Event-driven impulsive trajectory target | `python -m sim.trajectory_design solve examples/trajectory_targeting/hohmann_apoapsis.json --output outputs/trajectory_targeting/hohmann_evidence.json` |
 | Attitude hold with disturbance torque | `python run_simulation.py --config examples/configs/public_attitude_hold_disturbance.yaml` |
+| Import local files, compose objects, or export saved evidence | `oel io formats` then [Modular Data IO](docs/data-io.md) |
+| Configure opt-in full-state EKF recovery | [Full-state innovation recovery](docs/innovation-recovery.md) |
 | Author a public FSW stack | `oel fsw init my_adcs --template adcs` then [Public FSW Authoring](docs/fsw-authoring.md) |
 | Re-entry diagnostics | `python run_simulation.py --config configs/reentry_smoke.yaml` |
 | RPO trainer game | `python -m pip install ".[game]"` then `python run_game.py` |
@@ -350,6 +357,8 @@ keys.
 - [Quickstart](docs/quickstart.md)
 - [Scenario YAML](docs/scenario-yaml.md)
 - [CCSDS OPM And OMM Interoperability](docs/ccsds-odm.md)
+- [Modular Data IO And Review Exports](docs/data-io.md)
+- [Full-State EKF Innovation Recovery](docs/innovation-recovery.md)
 - [Event-Driven Trajectory Targeting](docs/trajectory-targeting.md)
 - [Coverage And Link Scenario Analysis](docs/coverage-link-scenario-analysis.md)
 - [Python API](docs/python-api.md)

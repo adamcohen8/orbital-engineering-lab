@@ -98,6 +98,7 @@ def ogp_propagate_teme_batch_accelerated(
     tsince_min: np.ndarray | list[float] | tuple[float, ...],
     *,
     backend: str = "auto",
+    workers: int | None = None,
 ) -> SGP4BatchResult:
     """Propagate a mixed OGP batch with safe available acceleration.
 
@@ -108,7 +109,9 @@ def ogp_propagate_teme_batch_accelerated(
     """
 
     if backend == "rust":
-        return ogp_propagate_teme_batch_rust(elements, tsince_min)
+        return ogp_propagate_teme_batch_rust(elements, tsince_min, workers=workers)
+    if workers not in (None, 0):
+        raise ValueError("OGP batch workers apply only to the rust backend.")
     if backend != "auto":
         raise ValueError("Accelerated OGP backend must be auto or rust.")
     element_list = list(elements)
@@ -168,22 +171,25 @@ def ogp_propagate_teme_batch_accelerated(
 def ogp_propagate_teme_batch_rust(
     elements: list[TLEElements] | tuple[TLEElements, ...],
     tsince_min: np.ndarray | list[float] | tuple[float, ...],
+    *,
+    workers: int | None = None,
 ) -> SGP4BatchResult:
     """Propagate mixed OGP regimes with one Rust initialization per object."""
 
-    from sim.rust_ogp_backend import propagate_batch
+    from sim.rust_ogp_backend import propagate_batch_with_telemetry
 
     element_list = list(elements)
     if not element_list:
         raise ValueError("Batched OGP propagation requires at least one element set.")
     time_grid = _coerce_ogp_batch_times(tsince_min, object_count=len(element_list))
-    positions, velocities, errors = propagate_batch(element_list, time_grid)
+    positions, velocities, errors, execution = propagate_batch_with_telemetry(element_list, time_grid, workers=workers)
     return SGP4BatchResult(
         backend="ogp_rust",
         tsince_min=time_grid,
         position_teme_km=positions,
         velocity_teme_km_s=velocities,
         errors=errors,
+        execution_metadata=execution,
     )
 
 

@@ -6,6 +6,63 @@ This project uses semantic versioning while it is pre-1.0: minor versions may
 still introduce API or workflow changes, and release notes should call out
 migration-sensitive behavior explicitly.
 
+## 0.35.0 - 2026-10-21
+
+- Require Pillow 13 for Python 3.11-3.14 core and media profiles to address eight
+  preparation-audit advisories; preserve Python 3.10 legacy functional
+  compatibility with a dependency security qualification warning, including
+  core, media and full profiles.
+
+- Advance the required native orbit runtime to 0.18.3 with matching source and
+  qualified native wheels.
+
+- Add opt-in Pro thread transports for supported object steps, independent
+  campaigns, controller studies and Scale queues, with execution-local worker
+  budgets, cancellation, owner-state fencing and shared-cache protection.
+  Keep process defaults and public serial stepping. Add bounded native OGP
+  batch workers with deterministic per-object ordering and scheduling evidence.
+- Add private workspace-storage preflight and owned job scratch with retention
+  receipts; integrate storage checks into local tests and release preparation.
+- Add public experimental full-state innovation recovery for HCW, SS-J2, TH,
+  YA and absolute orbit EKFs, disabled by default. Share causal consistency
+  and simpler persistence strategies, validate configuration, and retain
+  recovery evidence separately from maneuver hypotheses in review metrics.
+  Document measurement requirements and burn/bias/uncertainty limits in
+  [Full-state innovation recovery](docs/innovation-recovery.md).
+- Credit [@sneed-and-feed](https://github.com/sneed-and-feed) for the innovation
+  spike-gate proposal and implementation in
+  [PR #97](https://github.com/adamcohen8/orbital-engineering-lab/pull/97), which
+  inspired broader estimator recovery work. The new shared implementation and
+  tests were independently written; the original patch was not incorporated.
+- Clarify public contribution integration, attribution, copyright retention,
+  and Apache-2.0 commercial reuse; add a prospective DCO sign-off policy and
+  pull request checklist.
+- Extend Pro OD with rank-aware covariance, joint state/force uncertainty,
+  calibration workflows, and augmented continuous EKF/RTS tracking with
+  correlated measurements, append/restart equivalence and explicit corrections.
+- Add native SLR prediction and sensitivity batches, station coordinate and
+  optical media models, and frozen independent-validation workflows. Retain
+  failed correlation gates and the experimental real-data qualification status.
+- Correct Earth-orientation nutation inputs, configurable eclipse geometry and
+  geocentric lunar ephemeris provenance; reject stale assets in new SLR freezes.
+- Add shared modular object import/export through `oel io object`,
+  `sim.data_io.objects` and `ScenarioBuilder.import_object`. Compose orbital or
+  attitude inputs into new or existing studies with explicit epoch, body,
+  replacement and model compatibility checks; route complete checkpoint/snapshot
+  continuations and power histories to their existing owners.
+- Enforce state-product promotion gates across IO materialization and converted
+  provenance, retain physical fields and saved current mass, support planetary
+  seeds, and export completed tracking-OD estimates without rerunning estimation.
+  Add actionable import/export preflight and preserve source evidence identities.
+- Add modular offline `oel io` format discovery, inspection, conversion,
+  validated ONP/OGP scenario materialization and completed-review exports.
+  Add bounded CCSDS XML/legacy ODM profiles, modern GP catalogs, attitude,
+  STK, SP3/Sentinel, RINEX, optional SPICE, tabular and visualization adapters.
+- Derive state, conjunction, tracking and historical maneuver products from
+  saved evidence. Keep Pro review-to-OGP/TLE fitting separate from serialization,
+  with exact source selection, fit/holdout and encoded-product residual checks.
+  Retain the deterministic engine and existing public/Pro boundaries.
+
 ## 0.34.0 - 2026-10-14
 
 - Add public Rust planetary ONP for passive body-centered trajectories, keeping

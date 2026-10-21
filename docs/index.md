@@ -18,7 +18,8 @@ public simulation core.
 6. [Examples Matrix](examples-matrix.md)
 7. [Scenario YAML](scenario-yaml.md)
 8. [Python API](python-api.md)
-9. [Known Limitations](known-limitations.md)
+9. [Modular Data IO And Review Exports](data-io.md)
+10. [Known Limitations](known-limitations.md)
 
 ## Evaluator Or Buyer
 
@@ -65,6 +66,7 @@ Start here when you already know the kind of work you want to run.
 | Update a managed engine safely | [Updating OEL](updating.md) |
 | Migrate a scenario config explicitly | [Scenario Config Migrations](config-migrations.md) |
 | Install in an air-gapped environment | [Offline Installation](offline-installation.md) |
+| Import local data, compose scenario objects, or export saved evidence | [Modular Data IO](data-io.md) |
 | Inspect completed outputs | [Review Store Contract](review-store.md) |
 | Analyze whole-Earth coverage or directed links | [Coverage And Link Scenario Analysis](coverage-link-scenario-analysis.md) |
 | Make custom tables or plots from a run | [Custom Analysis](custom-analysis.md) |
@@ -74,6 +76,7 @@ Start here when you already know the kind of work you want to run.
 | Understand physics model assumptions | [Physics Model Reference](physics-models.md) |
 | Explore actuator models | [Actuators](actuators.md) |
 | Select built-in controllers and command modules | [Built-In Reference GNC Library](reference-gnc.md) |
+| Configure experimental full-state EKF recovery | [Full-state innovation recovery](innovation-recovery.md) |
 | Author and smoke-test a custom public FSW stack | [Public Flight Software Authoring](fsw-authoring.md) |
 | Use the orbital calculator | [Orbital Calculator](orbital-calculator.md) |
 | Use game/training mode | [RPO Trainer](rpo-trainer.md) |

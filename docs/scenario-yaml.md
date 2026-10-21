@@ -658,6 +658,20 @@ Manual `dut1_s`, `xp_arcsec`, `yp_arcsec`, `dat_s`, `ddpsi_rad`, and
 fixtures; any EOP-backed or manual EOP frame setting requires
 `simulator.initial_jd_utc`.
 
+EOP-All files also supply the equinox nutation corrections dPsi and dEps
+(arcseconds, columns following LOD). These are interpolated with the other
+EOP values and applied by both Python and Rust frame paths. Explicit
+`ddpsi_rad` and `ddeps_rad` are additive offsets when a file is supplied.
+Frame metadata records the effective corrections at its sample epoch.
+
+For SRP studies requiring an oblate Earth limb, set
+`simulator.environment.srp_shadow_model: conical_ellipsoid`. This uses the
+WGS84 flattening and the configured Earth frame to find the limb in the
+observer/centre/Sun plane, followed by the finite-disc overlap approximation.
+The existing `conical` option retains its spherical Earth geometry. The Rust
+force plan supports the ellipsoid option; older fused kernels use the Python
+plugin fallback rather than approximating it with a sphere.
+
 EOP requests must fall within the configured table coverage. The default
 `eop_extrapolation: error` rejects stale or future requests; endpoint holding
 requires an explicit `eop_extrapolation: hold`. The `iau76_80_eop` path uses

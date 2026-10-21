@@ -205,6 +205,7 @@ impl NativeForcePlanContext {
 
     fn acceleration(
         &self,
+        py: Python<'_>,
         state: Vec<f64>,
         stage_inputs: Vec<f64>,
         command: Vec<f64>,
@@ -219,11 +220,8 @@ impl NativeForcePlanContext {
                 "command acceleration must be finite",
             ));
         }
-        Ok(self
-            .plan
-            .acceleration(state.as_array(), &stage, command)
-            .map_err(pyo3::exceptions::PyValueError::new_err)?
-            .to_vec())
+        let acceleration = py.detach(|| self.plan.acceleration(state.as_array(), &stage, command));
+        Ok(acceleration.map_err(pyo3::exceptions::PyValueError::new_err)?.to_vec())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -588,6 +586,20 @@ impl NativeForcePlanContext {
         command: [f64; 3],
         stage_callback: &Py<PyAny>,
     ) -> PyResult<[f64; 6]> {
+        if !dt_s.is_finite() || dt_s < 0.0 {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "t_s and non-negative dt_s must be finite",
+            ));
+        }
+        self.rk4_signed_state(py, state, t_s, dt_s, command, stage_callback)
+    }
+
+    /// The SLR light-time owner may query either side of a reference epoch.
+    /// Ordinary forward-history admission remains in `rk4_state`.
+    pub(crate) fn rk4_signed_state(
+        &self, py: Python<'_>, state: [f64; 6], t_s: f64, dt_s: f64,
+        command: [f64; 3], stage_callback: &Py<PyAny>,
+    ) -> PyResult<[f64; 6]> {
         self.rk4_state_with_stage(state, t_s, dt_s, command, |time, stage_state| {
             crate::stage_context::prepare(py, stage_callback, time, stage_state)
         })
@@ -625,7 +637,7 @@ impl NativeForcePlanContext {
         })
     }
 
-    fn rk4_state_with_stage<F>(
+    pub(crate) fn rk4_state_with_stage<F>(
         &self,
         state: [f64; 6],
         t_s: f64,
@@ -638,7 +650,7 @@ impl NativeForcePlanContext {
     {
         let state =
             crate::State::from_array(state).map_err(pyo3::exceptions::PyValueError::new_err)?;
-        if !t_s.is_finite() || !dt_s.is_finite() || dt_s < 0.0 {
+        if !t_s.is_finite() || !dt_s.is_finite() {
             return Err(pyo3::exceptions::PyValueError::new_err(
                 "t_s and non-negative dt_s must be finite",
             ));

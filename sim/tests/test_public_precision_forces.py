@@ -1,5 +1,7 @@
 """Public precision force construction and synthetic-data smoke contracts."""
 
+import builtins
+import importlib.util
 import sys
 from pathlib import Path
 
@@ -70,3 +72,44 @@ def test_public_demo_builds_all_four_forces_and_preserves_disabled_path():
         orbit[key]["enabled"] = False
     disabled = _build_orbit_propagator(scenario_config_from_dict(raw))
     assert disabled.plugins == []
+
+
+def _load_precision_adapter():
+    path = ROOT / "sim/dynamics/orbit/rust_precision_force_plan.py"
+    spec = importlib.util.spec_from_file_location("_precision_adapter_boundary_test", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_precision_adapter_preserves_public_forces_when_private_ecom_is_absent(monkeypatch):
+    original_import = builtins.__import__
+
+    def without_private_ecom(name, *args, **kwargs):
+        if name == "sim.pro_perturbations.ecom":
+            raise ModuleNotFoundError("private ECOM is absent", name=name)
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", without_private_ecom)
+    adapter = _load_precision_adapter()
+    force = SchwarzschildAcceleration()
+    assert adapter.precision_code(force) == 10
+    assert adapter.specifications([force], OrbitContext(398600.4418, 300.0)) == [(10, [], [])]
+
+
+@pytest.mark.parametrize("failure", [
+    ModuleNotFoundError("missing internal ECOM dependency", name="missing_ecom_dependency"),
+    ImportError("broken internal ECOM import"),
+])
+def test_precision_adapter_does_not_hide_private_dependency_failures(monkeypatch, failure):
+    original_import = builtins.__import__
+
+    def broken_private_ecom(name, *args, **kwargs):
+        if name == "sim.pro_perturbations.ecom":
+            raise failure
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", broken_private_ecom)
+    with pytest.raises(type(failure), match=str(failure)) as caught:
+        _load_precision_adapter()
+    assert caught.value is failure

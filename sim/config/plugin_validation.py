@@ -385,6 +385,28 @@ def _validate_object_knowledge(knowledge: dict[str, Any], path: str) -> list[str
             normalize_numeric_backend(backend_value, error_message=f"{backend_path} must be 'python' or 'rust'.")
         except ValueError as exc:
             errs.append(str(exc))
+    # Validate the opt-in policy before execution, including misspelled fields.
+    estimation_map = dict(estimation or {}) if isinstance(estimation, dict) else {}
+    ekf_map = estimation_map.get("ekf", raw.get("ekf", {})) or {}
+    if isinstance(ekf_map, dict) and ekf_map.get("innovation_recovery") is not None:
+        recovery_path = f"{path}.estimation.ekf.innovation_recovery"
+        try:
+            from sim.estimation.innovation_recovery import InnovationRecoveryConfig, validate_recovery_config
+
+            policy_raw = ekf_map["innovation_recovery"]
+            if not isinstance(policy_raw, dict):
+                raise ValueError("must be a mapping/object")
+            policy = InnovationRecoveryConfig(**policy_raw)
+            measurement_model = str(estimation_map.get("measurement_model", "state")).lower()
+            if measurement_model in {"full_state", "ric_state"}:
+                measurement_model = "relative_state"
+            validate_recovery_config(policy, measurement_model)
+            if policy.enabled and str(estimation_map.get("type", "ekf")) == "measured_state":
+                raise ValueError("requires an EKF estimator")
+            if policy.enabled and any(float(v) <= 0.0 for v in ekf_map.get("meas_noise_diag", [1.0] * 6)):
+                raise ValueError("requires positive measurement variances")
+        except (TypeError, ValueError, OverflowError) as exc:
+            errs.append(f"{recovery_path}: {exc}")
     if "sensor" in raw:
         errs.append(
             f"{path}.sensor: unsupported modeled-sensor configuration block. "

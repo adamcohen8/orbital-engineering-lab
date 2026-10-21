@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import base64
 import gzip
+import hashlib
 import io
 import json
 import os
@@ -103,6 +104,19 @@ def _source_files(root: Path) -> list[Path]:
         if path.is_file():
             files.append(path)
     return sorted(files, key=lambda item: item.relative_to(root).as_posix())
+
+
+def release_source_identity(root: Path) -> dict[str, Any]:
+    """Bind an audit to exactly the source inventory shipped in its archive."""
+    files = {
+        path.relative_to(root).as_posix(): {
+            "sha256": sha256_file(path),
+            "executable": os.access(path, os.X_OK),
+        }
+        for path in _source_files(root)
+    }
+    digest = hashlib.sha256(json.dumps(files, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    return {"schema": "oel.release-source-identity.v1", "sha256": digest, "files": len(files)}
 
 
 def _build_source_archive(root: Path, output: Path, *, version: str, epoch: int) -> None:
@@ -212,6 +226,7 @@ def _collect_supply_chain_evidence(
     *,
     version: str,
     required: bool,
+    public_source_root: Path | None = None,
 ) -> dict[str, Any]:
     if source is None:
         if required:
@@ -226,10 +241,30 @@ def _collect_supply_chain_evidence(
         not isinstance(gate, dict)
         or gate.get("schema_version") != 1
         or gate.get("kind") != "oel_supply_chain_gate"
-        or gate.get("product") != "oel-pro"
+        or gate.get("product") not in {"oel-pro", "oel-public"}
+        or (public_source_root is None and gate.get("product") != "oel-pro")
         or not gate.get("passed")
     ):
         raise ValueError("Supply-chain evidence is not a passing gate.")
+    if public_source_root is not None:
+        if (
+            gate.get("product") != "oel-public"
+            or not gate.get("isolated_environment")
+            or gate.get("source_identity") != release_source_identity(public_source_root)
+        ):
+            raise ValueError("Signed public releases require an isolated audit of the exact public source export.")
+        from tools.native_source_identity import native_source_identity
+
+        qualified = dict(gate.get("dependency_sources", {}) or {}).get("qualified_native_wheels", [])
+        expected = {
+            "oel-rust-orbit": native_source_identity(public_source_root / "rust" / "oel-orbit")["sha256"],
+            "oel-rust-game": native_source_identity(public_source_root / "rust" / "oel-game")["sha256"],
+        }
+        if (
+            len(qualified) != len(expected)
+            or {row.get("package"): row.get("source_identity_sha256") for row in qualified} != expected
+        ):
+            raise ValueError("Public native wheel qualifications differ from the public crate source.")
     gate_version = str(gate.get("package_version", "") or "")
     if gate_version and gate_version != version:
         raise ValueError(f"Supply-chain evidence version {gate_version!r} does not match release {version!r}.")
@@ -266,6 +301,10 @@ def _collect_supply_chain_evidence(
     ]
     if not resolved_wheels or any(not row["name"] or len(row["sha256"]) != 64 for row in resolved_wheels):
         raise ValueError("Supply-chain wheel inventory is incomplete or lacks immutable wheel hashes.")
+    if public_source_root is not None:
+        for row in qualified:
+            if {"name": row.get("wheel"), "sha256": row.get("sha256")} not in resolved_wheels:
+                raise ValueError("Public native wheel inventory differs from its qualification receipt.")
     source_digests: list[dict[str, Any]] = []
     names: set[str] = set()
     for path in source_files:
@@ -519,6 +558,7 @@ def build_release(
         output,
         version=version,
         required=not developer_unsigned,
+        public_source_root=root if edition == "public" and not developer_unsigned else None,
     )
     wheel_files, wheel_artifacts = _collect_wheelhouse(
         wheelhouse,

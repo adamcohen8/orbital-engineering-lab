@@ -63,7 +63,7 @@ impl Frame {
             return Err(error("invalid native stage frame"));
         }
         if !eop.is_empty()
-            && (eop.len() != 5
+            && ((eop.len() != 5 && eop.len() != 7)
                 || eop[0].is_empty()
                 || eop
                     .iter()
@@ -162,11 +162,28 @@ impl Frame {
                 .jd
                 .ok_or_else(|| error("IAU76/80 frame requires an absolute epoch"))?;
             self.elapsed_guard(t)?;
-            let [xp, yp, dut, dat] = self.interp(jd + t / 86400.)?;
+            let sample_jd = jd + t / 86400.;
+            let [xp, yp, dut, dat] = self.interp(sample_jd)?;
+            let mut corrections = [self.values[4], self.values[5]];
+            if self.eop.len() == 7 {
+                let x = sample_jd - 2400000.5;
+                let tt = &self.eop[0];
+                let right = tt.partition_point(|value| *value <= x).min(tt.len() - 1);
+                let left = right.saturating_sub(1);
+                let fraction = if right == left {
+                    0.
+                } else {
+                    ((x - tt[left]) / (tt[right] - tt[left])).clamp(0., 1.)
+                };
+                for (a, correction) in corrections.iter_mut().enumerate() {
+                    let yy = &self.eop[a + 5];
+                    *correction += yy[left] + fraction * (yy[right] - yy[left]);
+                }
+            }
             native
                 .ok_or_else(|| error("native environment context is required"))?
                 .borrow(py)
-                .rotation_iau76_80(t, jd, xp, yp, dut, dat, self.values[4], self.values[5])?
+                .rotation_iau76_80(t, jd, xp, yp, dut, dat, corrections[0], corrections[1])?
                 .try_into()
                 .map_err(|_| error("invalid rotation shape"))?
         };
@@ -250,6 +267,7 @@ pub(crate) struct NativeStageContext {
     density_callback: Option<Py<PyAny>>,
     density_body_inputs: bool,
     density_frame_inputs: bool,
+    shadow_frame_inputs: bool,
     nrlmsise00_inputs: Option<(Vec<f64>, Option<f64>, Option<Py<PyAny>>)>,
     body_callback: Option<Py<PyAny>>,
     body_mode: u8,
@@ -265,7 +283,7 @@ pub(crate) struct NativeStageContext {
 impl NativeStageContext {
     #[new]
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature=(native, frames, codes, density_mode, density_values, geodetic, density_callback, body_callback, body_mode, jd, fixed_jd, dat, resource_paths, fallback, density_body_inputs=false, density_frame_inputs=false, nrlmsise00_inputs=None))]
+    #[pyo3(signature=(native, frames, codes, density_mode, density_values, geodetic, density_callback, body_callback, body_mode, jd, fixed_jd, dat, resource_paths, fallback, density_body_inputs=false, density_frame_inputs=false, nrlmsise00_inputs=None, shadow_frame_inputs=false))]
     fn new(
         native: Option<Py<NativeEnvironmentContext>>,
         frames: Vec<FrameSpec>,
@@ -284,6 +302,7 @@ impl NativeStageContext {
         density_body_inputs: bool,
         density_frame_inputs: bool,
         nrlmsise00_inputs: Option<(Vec<f64>, Option<f64>, Option<Py<PyAny>>)>,
+        shadow_frame_inputs: bool,
     ) -> PyResult<Self> {
         if frames.len() != 5
             || density_mode > 2
@@ -340,6 +359,7 @@ impl NativeStageContext {
             density_callback,
             density_body_inputs,
             density_frame_inputs,
+            shadow_frame_inputs,
             nrlmsise00_inputs,
             body_callback,
             body_mode,
@@ -370,6 +390,14 @@ impl NativeStageContext {
     }
     #[staticmethod]
     fn supports_density_frame_inputs() -> bool {
+        true
+    }
+    #[staticmethod]
+    fn supports_shadow_frame_inputs() -> bool {
+        true
+    }
+    #[staticmethod]
+    fn supports_eop_nutation() -> bool {
         true
     }
     #[staticmethod]
@@ -508,7 +536,7 @@ impl NativeStageContext {
             row[13..16].copy_from_slice(&bodies.0);
             row[16..19].copy_from_slice(&bodies.1);
         }
-        if self.codes.contains(&1) {
+        if self.codes.contains(&1) || self.shadow_frame_inputs {
             row[..9].copy_from_slice(&self.frames[0].rotation(py, self.native.as_ref(), t)?);
         }
         let position = [state[0], state[1], state[2]];
@@ -630,7 +658,12 @@ pub(crate) fn prepare(
     t: f64,
     state: [f64; 6],
 ) -> PyResult<StageInputs> {
-    if callback.bind(py).is_instance_of::<NativeStageContext>() {
+    if callback.bind(py).is_instance_of::<ImmutableStageTable>() {
+        callback
+            .bind(py)
+            .extract::<PyRef<'_, ImmutableStageTable>>()?
+            .prepare(py, t, state)
+    } else if callback.bind(py).is_instance_of::<NativeStageContext>() {
         let native = callback
             .bind(py)
             .extract::<PyRef<'_, NativeStageContext>>()?;
@@ -648,6 +681,99 @@ pub(crate) fn prepare(
         }
     }
 }
+
+/// Exact caller-prepared time-only stages; never cache state or acceleration.
+/// Every resource is checked at every RK stage. A changed/deleted resource
+/// permanently restores the authoritative callback for this table.
+#[pyclass(name = "ONPImmutableStageTable", module = "oel_rust_orbit")]
+struct ImmutableStageTable {
+    rows: HashMap<u64, StageInputs>,
+    resources: Vec<Resource>,
+    fallback: Option<Py<PyAny>>,
+    stale: AtomicBool,
+}
+
+#[pymethods]
+impl ImmutableStageTable {
+    #[new]
+    fn new(
+        times: Vec<f64>,
+        rows: Vec<Vec<f64>>,
+        resource_paths: Vec<String>,
+        fallback: Py<PyAny>,
+    ) -> PyResult<Self> {
+        if times.is_empty()
+            || times.len() > 262144
+            || times.len() != rows.len()
+            || times.iter().any(|t| !t.is_finite())
+            || times.windows(2).any(|w| w[1] <= w[0])
+        {
+            return Err(error(
+                "immutable stages require 1..262144 distinct increasing finite epochs",
+            ));
+        }
+        let rows = times
+            .into_iter()
+            .zip(rows)
+            .map(|(t, row)| {
+                StageInputs::from_values(row)
+                    .map(|value| (t.to_bits(), value))
+                    .map_err(error)
+            })
+            .collect::<PyResult<HashMap<_, _>>>()?;
+        Ok(Self {
+            rows,
+            resources: resource_paths
+                .into_iter()
+                .map(|path| Resource {
+                    signature: signature(&path),
+                    path,
+                })
+                .collect(),
+            fallback: Some(fallback),
+            stale: AtomicBool::new(false),
+        })
+    }
+    fn __traverse__(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
+        visit.call(&self.fallback)
+    }
+    fn __clear__(&mut self) {
+        self.rows.clear();
+        self.fallback = None;
+        self.stale.store(true, Ordering::Relaxed);
+    }
+    fn row_count(&self) -> usize {
+        self.rows.len()
+    }
+}
+
+impl ImmutableStageTable {
+    fn prepare(&self, py: Python<'_>, t: f64, state: [f64; 6]) -> PyResult<StageInputs> {
+        if !t.is_finite() || state.iter().any(|x| !x.is_finite()) {
+            return Err(error("stage state and time must be finite"));
+        }
+        if self.stale.load(Ordering::Relaxed)
+            || self
+                .resources
+                .iter()
+                .any(|r| r.signature.is_none() || signature(&r.path) != r.signature)
+        {
+            self.stale.store(true, Ordering::Relaxed);
+            let row = self
+                .fallback
+                .as_ref()
+                .ok_or_else(|| error("cleared stage table"))?
+                .call1(py, (t, state))?;
+            return StageInputs::from_values(row.extract::<Vec<f64>>(py)?).map_err(error);
+        }
+        self.rows
+            .get(&t.to_bits())
+            .cloned()
+            .ok_or_else(|| error("epoch outside exact immutable stage schedule"))
+    }
+}
+
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    module.add_class::<NativeStageContext>()
+    module.add_class::<NativeStageContext>()?;
+    module.add_class::<ImmutableStageTable>()
 }

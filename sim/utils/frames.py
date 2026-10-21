@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+from contextvars import ContextVar
+from dataclasses import dataclass
+from threading import RLock
+
 import numpy as np
 
 from sim.acceleration.settings import acceleration_cache_key, acceleration_settings_from_mode
 from sim.numeric_backend import normalize_numeric_backend
 
-_FRAME_ACCEL_CACHE_KEY: tuple[str, bool] | None = None
-_FRAME_ACCEL_CACHE_ENABLED: bool | None = None
+# These names remain as narrowly scoped compatibility seams for existing tests
+# and downstream monkeypatches.  Normal dispatch never writes them: selecting
+# acceleration is per execution context below, rather than process-global.
 eci_relative_to_ric_rect_kernel = None
 ric_angular_rate_eci_from_rv_kernel = None
 ric_angular_rate_eci_from_rva_kernel = None
@@ -18,46 +24,100 @@ ric_rect_to_curv_kernel = None
 eci_relative_to_ric_rect_rva_kernel = None
 
 
-def _frame_acceleration_enabled() -> bool:
-    global _FRAME_ACCEL_CACHE_ENABLED, _FRAME_ACCEL_CACHE_KEY
-    global eci_relative_to_ric_rect_kernel, ric_angular_rate_eci_from_rv_kernel
-    global ric_angular_rate_eci_from_rva_kernel, eci_relative_to_ric_rect_rva_kernel
-    global ric_curv_to_rect_kernel, ric_dcm_ir_from_rv_kernel
-    global ric_rect_state_to_eci_kernel, ric_rect_state_to_eci_rva_kernel, ric_rect_to_curv_kernel
-    cache_key = acceleration_cache_key()
-    if cache_key != _FRAME_ACCEL_CACHE_KEY:
-        _FRAME_ACCEL_CACHE_KEY = cache_key
-        _FRAME_ACCEL_CACHE_ENABLED = bool(acceleration_settings_from_mode().enabled)
-        if _FRAME_ACCEL_CACHE_ENABLED:
-            # Load each missing kernel independently.  Existing globals are a
-            # deliberate patch seam used by the acceleration-context tests and
-            # by downstream callers that provide an instrumented kernel.
-            from sim.acceleration.kernels import frames as accelerated_frames
+@dataclass(frozen=True)
+class _FrameKernelBundle:
+    """Immutable frame-kernel selection for one acceleration context."""
 
-            if eci_relative_to_ric_rect_kernel is None:
-                eci_relative_to_ric_rect_kernel = accelerated_frames.eci_relative_to_ric_rect_kernel
-            if ric_angular_rate_eci_from_rv_kernel is None:
-                ric_angular_rate_eci_from_rv_kernel = accelerated_frames.ric_angular_rate_eci_from_rv_kernel
-            if ric_angular_rate_eci_from_rva_kernel is None:
-                ric_angular_rate_eci_from_rva_kernel = accelerated_frames.ric_angular_rate_eci_from_rva_kernel
-            if ric_curv_to_rect_kernel is None:
-                ric_curv_to_rect_kernel = accelerated_frames.ric_curv_to_rect_kernel
-            if ric_dcm_ir_from_rv_kernel is None:
-                ric_dcm_ir_from_rv_kernel = accelerated_frames.ric_dcm_ir_from_rv_kernel
-            if ric_rect_state_to_eci_kernel is None:
-                ric_rect_state_to_eci_kernel = accelerated_frames.ric_rect_state_to_eci_kernel
-            if ric_rect_state_to_eci_rva_kernel is None:
-                ric_rect_state_to_eci_rva_kernel = accelerated_frames.ric_rect_state_to_eci_rva_kernel
-            if ric_rect_to_curv_kernel is None:
-                ric_rect_to_curv_kernel = accelerated_frames.ric_rect_to_curv_kernel
-            if eci_relative_to_ric_rect_rva_kernel is None:
-                eci_relative_to_ric_rect_rva_kernel = accelerated_frames.eci_relative_to_ric_rect_rva_kernel
-    return bool(_FRAME_ACCEL_CACHE_ENABLED)
+    cache_key: tuple[str, bool]
+    enabled: bool
+    eci_relative_to_ric_rect_kernel: Callable[..., np.ndarray] | None = None
+    ric_angular_rate_eci_from_rv_kernel: Callable[..., np.ndarray] | None = None
+    ric_angular_rate_eci_from_rva_kernel: Callable[..., np.ndarray] | None = None
+    ric_curv_to_rect_kernel: Callable[..., np.ndarray] | None = None
+    ric_dcm_ir_from_rv_kernel: Callable[..., np.ndarray] | None = None
+    ric_rect_state_to_eci_kernel: Callable[..., np.ndarray] | None = None
+    ric_rect_state_to_eci_rva_kernel: Callable[..., np.ndarray] | None = None
+    ric_rect_to_curv_kernel: Callable[..., np.ndarray] | None = None
+    eci_relative_to_ric_rect_rva_kernel: Callable[..., np.ndarray] | None = None
+
+
+_FRAME_KERNEL_BUNDLES: dict[tuple[str, bool], _FrameKernelBundle] = {}
+_FRAME_KERNEL_CONTEXT: ContextVar[_FrameKernelBundle | None] = ContextVar(
+    "oel_frame_kernel_bundle", default=None
+)
+_FRAME_KERNEL_LOCK = RLock()
+
+
+def _load_frame_kernel_bundle(cache_key: tuple[str, bool], enabled: bool) -> _FrameKernelBundle:
+    """Return a process-cached immutable bundle, loading kernels once."""
+
+    key = (str(cache_key[0]), bool(cache_key[1]))
+    with _FRAME_KERNEL_LOCK:
+        cached = _FRAME_KERNEL_BUNDLES.get(key)
+        if cached is not None:
+            return cached
+        if not enabled:
+            bundle = _FrameKernelBundle(cache_key=key, enabled=False)
+        else:
+            from sim.acceleration.kernels.frames import (
+                eci_relative_to_ric_rect_kernel,
+                eci_relative_to_ric_rect_rva_kernel,
+                ric_angular_rate_eci_from_rv_kernel,
+                ric_angular_rate_eci_from_rva_kernel,
+                ric_curv_to_rect_kernel,
+                ric_dcm_ir_from_rv_kernel,
+                ric_rect_state_to_eci_kernel,
+                ric_rect_state_to_eci_rva_kernel,
+                ric_rect_to_curv_kernel,
+            )
+
+            bundle = _FrameKernelBundle(
+                cache_key=key,
+                enabled=True,
+                eci_relative_to_ric_rect_kernel=eci_relative_to_ric_rect_kernel,
+                ric_angular_rate_eci_from_rv_kernel=ric_angular_rate_eci_from_rv_kernel,
+                ric_angular_rate_eci_from_rva_kernel=ric_angular_rate_eci_from_rva_kernel,
+                ric_curv_to_rect_kernel=ric_curv_to_rect_kernel,
+                ric_dcm_ir_from_rv_kernel=ric_dcm_ir_from_rv_kernel,
+                ric_rect_state_to_eci_kernel=ric_rect_state_to_eci_kernel,
+                ric_rect_state_to_eci_rva_kernel=ric_rect_state_to_eci_rva_kernel,
+                ric_rect_to_curv_kernel=ric_rect_to_curv_kernel,
+                eci_relative_to_ric_rect_rva_kernel=eci_relative_to_ric_rect_rva_kernel,
+            )
+        _FRAME_KERNEL_BUNDLES[key] = bundle
+        return bundle
+
+
+def _frame_kernel_bundle() -> _FrameKernelBundle:
+    cache_key = acceleration_cache_key()
+    current = _FRAME_KERNEL_CONTEXT.get()
+    if current is not None and current.cache_key == cache_key:
+        return current
+    bundle = _load_frame_kernel_bundle(cache_key, bool(acceleration_settings_from_mode().enabled))
+    _FRAME_KERNEL_CONTEXT.set(bundle)
+    return bundle
+
+
+def _frame_kernel(bundle: _FrameKernelBundle, name: str) -> Callable[..., np.ndarray]:
+    """Resolve a bundle member, honoring legacy test monkeypatch seams."""
+
+    override = globals().get(name)
+    if override is not None:
+        return override
+    kernel = getattr(bundle, name)
+    if kernel is None:
+        raise RuntimeError(f"Frame kernel {name} is unavailable in an enabled context.")
+    return kernel
+
+
+def _frame_acceleration_enabled() -> bool:
+    return _frame_kernel_bundle().enabled
 
 
 def ric_dcm_ir_from_rv(r_eci_km: np.ndarray, v_eci_km_s: np.ndarray) -> np.ndarray:
     if _frame_acceleration_enabled():
-        return ric_dcm_ir_from_rv_kernel(
+        bundle = _frame_kernel_bundle()
+        return _frame_kernel(bundle, "ric_dcm_ir_from_rv_kernel")(
             np.asarray(r_eci_km, dtype=float).reshape(3),
             np.asarray(v_eci_km_s, dtype=float).reshape(3),
         )
@@ -137,10 +197,12 @@ def ric_angular_rate_eci_from_rv(
         v = np.asarray(v_eci_km_s, dtype=float).reshape(3)
         acceleration = np.asarray(chief_accel_eci_km_s2, dtype=float).reshape(3)
         if _frame_acceleration_enabled():
-            return ric_angular_rate_eci_from_rva_kernel(r, v, acceleration)
+            bundle = _frame_kernel_bundle()
+            return _frame_kernel(bundle, "ric_angular_rate_eci_from_rva_kernel")(r, v, acceleration)
         return _ric_angular_rate_eci_from_rva_python(r, v, acceleration)
     if _frame_acceleration_enabled():
-        return ric_angular_rate_eci_from_rv_kernel(
+        bundle = _frame_kernel_bundle()
+        return _frame_kernel(bundle, "ric_angular_rate_eci_from_rv_kernel")(
             np.asarray(r_eci_km, dtype=float).reshape(3),
             np.asarray(v_eci_km_s, dtype=float).reshape(3),
         )
@@ -192,7 +254,8 @@ def ric_rect_state_to_eci(
         v = np.asarray(v_chief_eci_km_s, dtype=float).reshape(3)
         acceleration = np.asarray(chief_accel_eci_km_s2, dtype=float).reshape(3)
         if _frame_acceleration_enabled():
-            return ric_rect_state_to_eci_rva_kernel(x_rel, r, v, acceleration)
+            bundle = _frame_kernel_bundle()
+            return _frame_kernel(bundle, "ric_rect_state_to_eci_rva_kernel")(x_rel, r, v, acceleration)
         c_ir = ric_dcm_ir_from_rv(r, v)
         omega_ric_eci = _ric_angular_rate_eci_from_rva_python(r, v, acceleration)
         dr_eci = c_ir @ x_rel[:3]
@@ -200,7 +263,8 @@ def ric_rect_state_to_eci(
         dv_eci = c_ir @ x_rel[3:] + omega_cross_dr
         return np.hstack((r + dr_eci, v + dv_eci))
     if _frame_acceleration_enabled():
-        return ric_rect_state_to_eci_kernel(
+        bundle = _frame_kernel_bundle()
+        return _frame_kernel(bundle, "ric_rect_state_to_eci_kernel")(
             np.asarray(x_rel_ric_rect, dtype=float).reshape(6),
             np.asarray(r_chief_eci_km, dtype=float).reshape(3),
             np.asarray(v_chief_eci_km_s, dtype=float).reshape(3),
@@ -253,7 +317,8 @@ def eci_relative_to_ric_rect(
         chief = np.asarray(x_chief_eci, dtype=float).reshape(6)
         acceleration = np.asarray(chief_accel_eci_km_s2, dtype=float).reshape(3)
         if _frame_acceleration_enabled():
-            return eci_relative_to_ric_rect_rva_kernel(deputy, chief, acceleration)
+            bundle = _frame_kernel_bundle()
+            return _frame_kernel(bundle, "eci_relative_to_ric_rect_rva_kernel")(deputy, chief, acceleration)
         r_chief = chief[:3]
         v_chief = chief[3:]
         c_ir = ric_dcm_ir_from_rv(r_chief, v_chief)
@@ -264,7 +329,8 @@ def eci_relative_to_ric_rect(
         dv_ric = c_ir.T @ (dv_eci - np.cross(omega_ric_eci, dr_eci))
         return np.hstack((dr_ric, dv_ric))
     if _frame_acceleration_enabled():
-        return eci_relative_to_ric_rect_kernel(
+        bundle = _frame_kernel_bundle()
+        return _frame_kernel(bundle, "eci_relative_to_ric_rect_kernel")(
             np.asarray(x_dep_eci, dtype=float).reshape(6),
             np.asarray(x_chief_eci, dtype=float).reshape(6),
         )
@@ -298,7 +364,10 @@ def dcm_to_euler_321(dcm: np.ndarray) -> np.ndarray:
 
 def ric_curv_to_rect(x_ric_curv: np.ndarray, r0_km: float, eps: float = 1e-12) -> np.ndarray:
     if _frame_acceleration_enabled():
-        return ric_curv_to_rect_kernel(np.asarray(x_ric_curv, dtype=float).reshape(6), float(r0_km), float(eps))
+        bundle = _frame_kernel_bundle()
+        return _frame_kernel(bundle, "ric_curv_to_rect_kernel")(
+            np.asarray(x_ric_curv, dtype=float).reshape(6), float(r0_km), float(eps)
+        )
     x_r_curv, x_i_curv, x_c_curv, x_r_curv_dot, x_i_curv_dot, x_c_curv_dot = np.array(x_ric_curv, dtype=float).reshape(
         6
     )
@@ -334,7 +403,10 @@ def ric_curv_to_rect(x_ric_curv: np.ndarray, r0_km: float, eps: float = 1e-12) -
 
 def ric_rect_to_curv(x_ric_rect: np.ndarray, r0_km: float, eps: float = 1e-12) -> np.ndarray:
     if _frame_acceleration_enabled():
-        return ric_rect_to_curv_kernel(np.asarray(x_ric_rect, dtype=float).reshape(6), float(r0_km), float(eps))
+        bundle = _frame_kernel_bundle()
+        return _frame_kernel(bundle, "ric_rect_to_curv_kernel")(
+            np.asarray(x_ric_rect, dtype=float).reshape(6), float(r0_km), float(eps)
+        )
     x_r, x_i, x_c, x_rdot, x_idot, x_cdot = np.array(x_ric_rect, dtype=float).reshape(6)
     r0 = max(float(r0_km), eps)
 

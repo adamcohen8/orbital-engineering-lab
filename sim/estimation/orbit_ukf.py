@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from threading import RLock
 
 import numpy as np
 
@@ -11,15 +12,21 @@ from sim.dynamics.orbit.propagator import OrbitPropagator
 from sim.numeric_backend import normalize_numeric_backend
 
 rust_estimation_backend = None
+_RUST_ESTIMATION_BACKEND_LOCK = RLock()
 
 
 def _load_rust_estimation_backend():
     global rust_estimation_backend
-    if rust_estimation_backend is None:
-        from sim import rust_estimation_backend as backend
+    backend = rust_estimation_backend
+    if backend is None:
+        with _RUST_ESTIMATION_BACKEND_LOCK:
+            backend = rust_estimation_backend
+            if backend is None:
+                from sim import rust_estimation_backend as loaded_backend
 
-        rust_estimation_backend = backend
-    return rust_estimation_backend
+                backend = loaded_backend
+                rust_estimation_backend = backend
+    return backend
 
 
 @dataclass

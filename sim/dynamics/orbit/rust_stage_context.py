@@ -21,7 +21,7 @@ from sim.dynamics.orbit import nrlmsise00_backend as _nrl
 from sim.dynamics.orbit.frames import (
     FRAME_MODEL_IAU76_80_EOP,
     FrameContext,
-    _load_eop_table,
+    _load_eop_stage_table,
 )
 
 _NRL_OWNERS = (
@@ -156,7 +156,7 @@ def _frame_spec(context: FrameContext | None, *, guard=False):
     mode = 0
     if context.model == FRAME_MODEL_IAU76_80_EOP and context.eop_rotation_available:
         mode = 2 if context.eop_extrapolation == "hold" else 1
-    table = [] if not path or (mode == 0 and not guard) else [row.tolist() for row in _load_eop_table(str(path))]
+    table = [] if not path or (mode == 0 and not guard) else [row.tolist() for row in _load_eop_stage_table(str(path))]
     values = [
         0.0 if context.xp_arcsec is None else float(context.xp_arcsec),
         0.0 if context.yp_arcsec is None else float(context.yp_arcsec),
@@ -245,6 +245,10 @@ def try_native_stage_context(
         if context is not None and context.model == FRAME_MODEL_IAU76_80_EOP and context.jd_utc_start is None:
             return None
         frames.append(_frame_spec(context))
+    if not (hasattr(constructor, "supports_eop_nutation") and constructor.supports_eop_nutation()):
+        if any(table and any(any(column) for column in table[5:]) for _, _, _, table, _ in frames):
+            return None  # Older wheels retain the corrected Python stage adapter.
+        frames = [(mode, jd, values, table[:5], path) for mode, jd, values, table, path in frames]
     jd = env.get("jd_utc_start")
     mode = str(env.get("ephemeris_mode", "analytic_enhanced")).lower()
     de440 = bool(
@@ -352,6 +356,10 @@ def try_native_stage_context(
         return float(density_from_model(model, np.asarray(raw_state, dtype=float)[:3], float(time), env=stage_env))
 
     body_options = {"density_body_inputs": True} if density_body_inputs else {}
+    if str(env.get("srp_shadow_model", "")).lower() == "conical_ellipsoid" and 3 in codes:
+        if not (hasattr(constructor, "supports_shadow_frame_inputs") and constructor.supports_shadow_frame_inputs()):
+            return None
+        body_options["shadow_frame_inputs"] = True
     if density_frame_inputs:
         body_options["density_frame_inputs"] = True
     if (

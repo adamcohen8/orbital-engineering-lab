@@ -8,6 +8,12 @@ from sim.core.interfaces import Estimator
 from sim.core.models import Measurement, StateBelief
 from sim.dynamics.orbit.elements import rv_to_coe_eci
 from sim.dynamics.orbit.environment import EARTH_MU_KM3_S2
+from sim.estimation.innovation_recovery import (
+    FullStateInnovationRecovery,
+    InnovationRecoveryConfig,
+    InnovationRecoveryDiagnostics,
+    validate_recovery_config,
+)
 from sim.estimation.orbit_ekf import _solve_innovation_gain_and_vector
 from sim.estimation.relative_hcw_ekf import (
     _default_measurement_noise_for_model,
@@ -34,6 +40,7 @@ class THRelativeEKFUpdateDiagnostics:
     nis: float = float("nan")
     predicted_cov_trace: float = float("nan")
     posterior_cov_trace: float = float("nan")
+    recovery_diagnostics: InnovationRecoveryDiagnostics | None = None
 
 
 @dataclass
@@ -62,6 +69,8 @@ class THRelativeEKFEstimator(Estimator):
     meas_noise_covariance: np.ndarray | None = None
     numeric_backend: str = "rust"
     last_update_diagnostics: THRelativeEKFUpdateDiagnostics | None = field(default=None, init=False, repr=False)
+    innovation_recovery: InnovationRecoveryConfig | None = field(default=None, kw_only=True)
+    _innovation_recovery: FullStateInnovationRecovery = field(default_factory=FullStateInnovationRecovery, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.chief_state_eci_km_s = _state6(self.chief_state_eci_km_s, "chief_state_eci_km_s")
@@ -78,6 +87,7 @@ class THRelativeEKFEstimator(Estimator):
         self.numeric_backend = _normalize_numeric_backend(self.numeric_backend)
         self.process_noise_diag = _diag6(self.process_noise_diag, "process_noise_diag")
         self.measurement_model = normalize_hcw_measurement_model(self.measurement_model)
+        validate_recovery_config(self.innovation_recovery, self.measurement_model)
         self.measurement_origin = _normalize_measurement_origin(self.measurement_origin)
         meas_dim = hcw_measurement_dimension(self.measurement_model)
         meas_noise = np.array(self.meas_noise_diag, dtype=float).reshape(-1)
@@ -112,7 +122,17 @@ class THRelativeEKFEstimator(Estimator):
         self.chief_state_eci_km_s = _state6(chief_state_eci_km_s, "chief_state_eci_km_s")
         self.chief_epoch_t_s = float(t_s)
 
+    def reset_innovation_recovery(self) -> None:
+        """Discard pending anomaly history after an external track/reference reset."""
+        self._innovation_recovery.reset()
+
     def update(self, belief: StateBelief, measurement: Measurement | None, t_s: float) -> StateBelief:
+        if self.innovation_recovery is not None and self.innovation_recovery.enabled:
+            return self._innovation_recovery.update(self, belief, measurement, t_s)
+        self._innovation_recovery.reset()
+        return self._update_standard(belief, measurement, t_s)
+
+    def _update_standard(self, belief: StateBelief, measurement: Measurement | None, t_s: float) -> StateBelief:
         output_t_s, meas_t_s = _validated_update_epochs(belief, measurement, t_s)
 
         x_pred, p_pred = self._predict(belief.state, belief.covariance, from_t_s=belief.last_update_t_s, to_t_s=meas_t_s)

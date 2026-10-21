@@ -2769,6 +2769,22 @@ def _insert_metrics(conn: sqlite3.Connection, *, summary: dict[str, Any]) -> Non
             if name in stats:
                 metric_id = f"{object_id}:{name}"
                 rows.append((metric_id, name, str(object_id), None, None, _float_or_none(stats.get(name)), units, "summary"))
+    # Recovery counts and acquisition/decision epochs are distinct from maneuver
+    # confirmations. Only opt-in tracks emit these keys; legacy runs are unchanged.
+    for observer_id, targets in dict(summary.get("knowledge_consistency_by_observer", {}) or {}).items():
+        for target_id, evidence in dict(targets or {}).items():
+            evidence = dict(evidence or {})
+            for name, units in (
+                ("recovery_hold_count", "samples"),
+                ("recovery_reinitialization_count", "events"),
+                ("recovery_transient_count", "events"),
+                ("last_recovery_event_t_s", "s"),
+                ("last_recovery_decision_t_s", "s"),
+            ):
+                if name in evidence:
+                    metric_id = f"{observer_id}:{target_id}:{name}"
+                    rows.append((metric_id, name, str(observer_id), None, str(target_id),
+                                 _float_or_none(evidence[name]), units, "innovation_recovery"))
     recovery = dict(summary.get("mission_recovery", {}) or {})
     estimate = dict(recovery.get("recovery_estimate", {}) or {})
     object_id = str(recovery.get("object_id", "") or "")

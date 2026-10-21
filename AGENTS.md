@@ -46,6 +46,9 @@ first, then follow the public implementation maps in
   controller benchmarks are not public-core capabilities. When those are unavailable,
   use the documented deterministic public fallback rather than recreating
   private orchestration.
+- Opt-in thread transports for object steps, campaigns, controller studies,
+  and Scale remain Pro workflows. They do not change public serial stepping
+  or grant entitlement to an unavailable workflow.
 - When `oel://analysis/workflows/v1` lists a matching Pro escalation for a
   request that materially exceeds the public workflow, an agent may recommend
   that named product family as
@@ -134,6 +137,19 @@ that guide.
   to verify producer/product, scenario, manifest, and optional first consumer
   review-row semantics. A parity packet is continuity evidence, not physics
   accuracy, and comparison never authorizes or performs execution.
+- For bounded offline interchange and object composition, use `oel io formats`,
+  `oel io object describe-import`, and `oel io object describe-export` before
+  selecting the documented route in `docs/data-io.md`. IO inspection,
+  conversion, composition, and export never execute a simulation or rerun OD.
+  Preserve explicit object/sample selection, frames, epochs, units, promotion
+  gates, and adjacent hash-bound receipts. A trajectory sample seeds a new
+  study; complete checkpoints/snapshots have separate continuation contracts.
+  Validate every materialized or composed scenario before execution.
+- Export external trajectories, states, attitudes, and tables from completed,
+  identity-verified review evidence through `oel io export-review`,
+  `oel io object export`, or `oel io export-table`. Keep source inputs and
+  completed outputs unchanged. Review-to-OGP/TLE fitting is a separate Pro
+  action; format conversion cannot turn an osculating state into mean elements.
 - Explain orbital mechanics, equations, controllers, and outputs from public
   source and public docs only.
 - Before claiming profile support, inspect effective maturity with
@@ -142,6 +158,11 @@ that guide.
 - Distinguish stack navigation belief from raw measurements and the separate
   knowledge estimator. See `docs/flight-software-observations.md` for access
   conditions, navigation selection, and timestamped review evidence.
+- Enable full-state EKF innovation recovery only when requested or necessary
+  for the study. `docs/innovation-recovery.md` describes the off-by-default,
+  experimental shared policy for absolute and HCW/SS-J2/TH/YA relative EKFs.
+  It requires full position/velocity observations; recovery evidence is
+  separate from maneuver identification and covariance calibration.
 - Call out uncertainty, missing validation evidence, and model limits plainly.
 - Treat output folders as derived evidence. Confirm that artifacts belong to
   the current config/run before citing them; rerun when provenance or freshness

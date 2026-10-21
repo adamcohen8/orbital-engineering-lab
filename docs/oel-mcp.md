@@ -356,6 +356,29 @@ represented by a dedicated MCP tool or recipe:
 - Thermal and power resources are available through scenario YAML and the
   ordinary scenario/review path, but have no typed MCP authoring or dedicated
   MCP evidence route.
+- Modular offline data IO uses `oel io` or `python -m sim.data_io`. Discover
+  exact formats and optional dependencies with `oel io formats`. The shared
+  object interface can compose an imported orbit or attitude sample into a new
+  validated scenario; completed-evidence exports read saved review rows and
+  write new artifacts with hash-bound receipts. Neither action implicitly
+  executes a scenario, replays a history, or fits an orbit. Existing
+  `oel.inspect_ccsds.v1`, `oel.convert_frame_time.v1`, and typed handoff tools
+  retain their narrower advertised contracts. They do not expose the whole IO
+  catalog or the shared object interface. See [Modular data IO](data-io.md).
+- Experimental full-state innovation recovery is an opt-in knowledge-estimator
+  setting in existing scenario YAML or estimator Python APIs. It defaults off,
+  requires full-state observations and positive-definite measurement covariance,
+  and uses the ordinary scenario validation/run and completed-review query
+  routes. It does not configure flight-software navigation or extend Pro
+  sequential/continuous tracking OD. See [Full-state innovation
+  recovery](innovation-recovery.md).
+
+The existing `oel://agent/workflows/v1` resource includes `local_workflows`
+metadata for these IO and recovery entry points, with empty
+`dedicated_mcp_tools` lists. These are host-authorized local fallbacks, not
+additional callable MCP contracts. Review-to-OGP/TLE fitting remains a separate
+Pro `tracking_od` operation; advanced OD, calibration, SLR, and continuous
+tracking retain their Pro boundaries and have no new MCP contracts in v0.35.0.
 
 These are capability gaps for a future MCP contract review, not permissions to
 broaden the current registry. Use the documented local fallback only when the

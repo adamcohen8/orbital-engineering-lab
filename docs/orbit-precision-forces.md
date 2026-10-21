@@ -99,3 +99,23 @@ The public Rust source is a buildable, experimental kernel library at
 OEL's authoritative force owners and keeps resource/frame/propagator policy
 with the caller. Run its documented Cargo tests to check the synthetic native
 contracts without any external FES dataset or private validation fixture.
+
+
+## Explicit empirical RIC acceleration
+
+`sim.pro_perturbations.empirical.EmpiricalRICAcceleration` is an opt-in Python
+acceleration plugin with a source-public native force-plan implementation.
+Its three constants and optional cosine/sine triples are radial, transverse
+and orbit-normal accelerations in km/s². Harmonics use an explicit angular
+frequency in rad/s and reference elapsed time in seconds; nonzero harmonic
+coefficients require positive frequency. Transverse is the orbit-normal unit vector crossed with radial, and all
+three directions are recomputed at each current integrator stage. A zero
+coefficient does not add a physical perturbation. This model can represent
+unmodeled accelerations for a declared study; it does not identify a thermal,
+drag or other physical mechanism. Fit coefficients only on declared training
+data, carry their uncertainty, and keep them fixed for forecast evaluation.
+There is no automatic scenario enabling or qualification claim. Older native
+extensions retain the reference callback unless their explicit empirical-RIC
+capability is present. Harmonic execution additionally requires the explicit
+harmonic capability; a constant-only native extension uses the reference
+callback for harmonic inputs.

@@ -56,6 +56,7 @@ def _load_swdata(path: str) -> np.ndarray:
     arr = np.loadtxt(str(Path(path).expanduser().resolve()), dtype=float)
     if arr.ndim != 2 or arr.shape[1] < 30:
         raise ValueError(f"Unexpected SW-All shape {arr.shape} from {path}")
+    arr.setflags(write=False)
     return arr
 
 
@@ -411,7 +412,9 @@ def _default_sun_angles(jd_utc: float, sun_model: str) -> tuple[float, float]:
 
 @lru_cache(maxsize=4096)
 def _position_rotation(jd_utc: float, eop_path: str | None) -> np.ndarray:
-    return eci_to_ecef_rotation_hpop_like(0.0, jd_utc_start=jd_utc, eop_path=eop_path)
+    rotation = eci_to_ecef_rotation_hpop_like(0.0, jd_utc_start=jd_utc, eop_path=eop_path)
+    rotation.setflags(write=False)
+    return rotation
 
 
 def clear_trajectory_epoch_caches() -> None:

@@ -38,7 +38,7 @@ from the default point-mass GM.
 
 ## Build and run
 
-Build/install `rust/oel-orbit` wheel 0.18.2 in the active environment;
+Build/install `rust/oel-orbit` wheel 0.18.3 in the active environment;
 the extension must export `PlanetaryPlan`, `planetary_rotation`,
 `planetary_atmosphere_sample` and `planetary_tdb_seconds`. See the crate README.
 Older Earth-compatible wheels fail planetary validation clearly. There is no

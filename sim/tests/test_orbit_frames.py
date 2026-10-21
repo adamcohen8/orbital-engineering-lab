@@ -359,6 +359,28 @@ def test_accelerated_iau_frame_rotation_is_numerically_equivalent() -> None:
     np.testing.assert_allclose(accelerated @ accelerated.T, np.eye(3), rtol=0.0, atol=2.0e-15)
 
 
+def test_iau1982_split_sidereal_time_matches_sofa_reference_and_keeps_microseconds() -> None:
+    from sim.dynamics.orbit.frames import _gmst_iau1982_split
+
+    # SOFA/ERFA t_sofa_c.c / t_erfa_c.c gmst82 reference, UT1 MJD 53736.
+    actual = _gmst_iau1982_split(2453736.5, 0., 0.)
+    assert actual == pytest.approx(1.754174981860675096, abs=1.e-13)
+    # A one-microsecond interval is below the scalar JD resolution here.
+    later = _gmst_iau1982_split(2453736.5, 1.e-6, 0.)
+    assert later - actual == pytest.approx(7.2921158553e-11, abs=1.e-14)
+    assert _gmst_iau1982_split(2453736.5, 86400., .2) == pytest.approx(
+        _gmst_iau1982_split(2453737.5, 0., .2), abs=1.e-13)
+
+
+def test_complementary_equinox_terms_start_at_1997_utc_midnight() -> None:
+    from sim.dynamics.orbit.frames import _equation_of_equinoxes_iau1994
+
+    # At the convention boundary UTC=TAI-30s and TT=TAI+32.184s.
+    start_tt = 2450506.5 + 62.184/86400.
+    assert _equation_of_equinoxes_iau1994(start_tt-15./86400., 0.) == 0.
+    assert _equation_of_equinoxes_iau1994(start_tt+15./86400., 0.) != 0.
+
+
 def test_eop_frame_context_without_epoch_does_not_claim_or_apply_eop(tmp_path: Path) -> None:
     eop_path = tmp_path / "EOP-All.txt"
     _write_minimal_eop(eop_path)
@@ -478,6 +500,24 @@ def test_transform_state_applies_rotating_frame_velocity_term() -> None:
     np.testing.assert_allclose(v_ecef, expected_v_ecef, rtol=0.0, atol=1e-9)
     np.testing.assert_allclose(roundtrip_r, r_eci, rtol=0.0, atol=1e-12)
     np.testing.assert_allclose(roundtrip_v, v_eci, rtol=0.0, atol=1e-9)
+
+
+@pytest.mark.parametrize("elapsed_s", [0.0, 10.0, 420.0, 86400.0])
+def test_simple_frame_station_speed_has_no_julian_date_quantization(elapsed_s: float) -> None:
+    from sim.dynamics.orbit.frames import PreparedFrameEvaluator, eci_to_ecef_rotation_derivative_context
+
+    context = frame_context_from_mapping({"model": "simple_gmst"}, jd_utc_start=2460000.5)
+    station_ecef = np.array([6378.137, 0.0, 0.0])
+    position, velocity = transform_state(station_ecef, np.zeros(3), "ecef", "eci",
+                                         t_s=elapsed_s, context=context)
+    # GMST polynomial speed at JD 2460000.5, including its secular terms.
+    # Variation over this one-day fixture is below 1e-15 km/s.
+    expected_speed = 0.46510113945651635
+    assert np.linalg.norm(velocity) == pytest.approx(expected_speed, abs=1e-12)
+    assert abs(float(position @ velocity)) < 1e-12
+    evaluator = PreparedFrameEvaluator(context)
+    np.testing.assert_array_equal(evaluator.derivative(elapsed_s),
+                                eci_to_ecef_rotation_derivative_context(elapsed_s, context))
 
 
 def test_manual_eop_fields_propagate_to_drag_relative_velocity() -> None:

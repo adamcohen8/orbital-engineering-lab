@@ -2,6 +2,74 @@
 
 Thanks for taking a look at Orbital Engineering Lab.
 
+## How Contributions Reach A Release
+
+Public issues and pull requests are welcome. For a substantial feature or API
+change, open an issue first so maintainers can discuss scope, compatibility,
+and ongoing work before you invest in an implementation. Small fixes and
+documentation improvements can be submitted directly.
+
+OEL's public repository is generated from a separate development repository.
+Maintainers review public contributions, integrate accepted work there, and
+validate it before a later public export. A contribution may be adapted,
+combined with broader work, or replaced by another implementation rather than
+merged directly from its original pull request. Submission does not guarantee
+acceptance or a release date. Contributors do not need access to the development
+repository; public discussion and release references remain here.
+
+When work lands through a replacement implementation, maintainers will link
+the original issue or pull request and explain its disposition. Accepted
+contributions receive appropriate public credit in release notes and, where
+applicable, commit authorship or coauthor attribution. Original authorship and
+required notices are preserved for incorporated material. An independently
+written implementation inspired by a proposal is credited as such.
+
+## Licensing And Submission Rights
+
+Unless separately agreed in writing, contributions intentionally submitted for
+inclusion in OEL are licensed under the [Apache License 2.0](LICENSE.txt),
+consistent with its contribution provision. Contributors retain copyright in
+their contributions; submission does not assign copyright to the maintainer.
+
+OEL includes public and private/Pro development. Apache-2.0 permits commercial
+reuse, including use in proprietary products, subject to its license and notice
+requirements. Contributions do not by themselves create an entitlement to
+payment, royalties, equity, employment, or a maintainer role. Any different
+arrangement must be agreed separately in writing.
+
+Only submit material you have the right to license. Obtain any necessary
+employer or other rights-holder permission. Identify incorporated third-party
+code, data, assets, and their sources and licenses; retain required notices.
+Do not submit confidential or restricted material. If terms are unclear or
+differ from the repository license, discuss them before submission.
+
+## Developer Certificate Of Origin
+
+For new contributions submitted after this policy is published, each
+contribution commit must include a sign-off certifying the
+[Developer Certificate of Origin 1.1](https://developercertificate.org/).
+Read the certificate before signing. A sign-off records your certification of
+submission rights; it does not assign copyright or replace the project license.
+
+Use your name and an email address you are willing to publish in commit history:
+
+```bash
+git commit -s
+```
+
+This adds a trailer in this form:
+
+```text
+Signed-off-by: Your Name <your-public-email@example.com>
+```
+
+A GitHub-provided no-reply address associated with your account is acceptable.
+Sign-offs are public and retained in repository history. Sign only your own
+certification; maintainers must not invent or add another person's sign-off.
+Earlier submissions are reviewed under their original terms; this policy does
+not imply that an existing contribution was signed off. Maintainers review
+submission rights, third-party notices, and sign-offs before accepting work.
+
 ## Development Setup
 
 Use Python 3.10 through 3.14. Python 3.14 is recommended for a new environment;

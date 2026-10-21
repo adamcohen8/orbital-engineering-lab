@@ -7,6 +7,10 @@ engine and never executes a scenario.
 
 The supported profile identifier is `oel.ccsds-oem-kvn.v0.2`.
 
+The separate [modular IO adapter](data-io.md) adds bounded OEM 2.0/3.0 KVN/XML
+conversion and saved-review exports. The legacy profile below retains its
+existing contract and import behavior.
+
 ## Supported Profile
 
 The v0.2 reader and writer support:

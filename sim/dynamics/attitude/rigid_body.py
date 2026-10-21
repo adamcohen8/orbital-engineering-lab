@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass
+from threading import RLock
 
 import numpy as np
 
@@ -17,6 +18,23 @@ from sim.utils.quaternion import (
 _MAX_ABS_RATE_RAD_S = 1e6
 _MAX_ABS_TORQUE_NM = 1e12
 propagate_attitude_exponential_map_kernel = None
+_ATTITUDE_KERNEL_LOCK = RLock()
+
+
+def _load_attitude_propagation_kernel():
+    global propagate_attitude_exponential_map_kernel
+    kernel = propagate_attitude_exponential_map_kernel
+    if kernel is None:
+        with _ATTITUDE_KERNEL_LOCK:
+            kernel = propagate_attitude_exponential_map_kernel
+            if kernel is None:
+                from sim.acceleration.kernels.attitude import (
+                    propagate_attitude_exponential_map_kernel as accelerated_propagate,
+                )
+
+                kernel = accelerated_propagate
+                propagate_attitude_exponential_map_kernel = kernel
+    return kernel
 
 
 @dataclass
@@ -257,15 +275,9 @@ def propagate_attitude_exponential_map(
         _add_guardrail_counts(counts)
         return q_next, omega_next
 
-    global propagate_attitude_exponential_map_kernel
     if acceleration_enabled_from_mode(acceleration_mode):
-        if propagate_attitude_exponential_map_kernel is None:
-            from sim.acceleration.kernels.attitude import (
-                propagate_attitude_exponential_map_kernel as accelerated_propagate,
-            )
-
-            propagate_attitude_exponential_map_kernel = accelerated_propagate
-        q_next, omega_next, counts = propagate_attitude_exponential_map_kernel(
+        kernel = _load_attitude_propagation_kernel()
+        q_next, omega_next, counts = kernel(
             np.asarray(quat_bn, dtype=float).reshape(4),
             np.asarray(omega_body_rad_s, dtype=float).reshape(3),
             np.asarray(inertia_kg_m2, dtype=float).reshape(3, 3),

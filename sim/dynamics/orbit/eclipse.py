@@ -6,6 +6,31 @@ from sim.dynamics.orbit.environment import EARTH_RADIUS_KM, SUN_RADIUS_KM
 from sim.dynamics.orbit.epoch import AU_KM, resolve_sun_moon_positions
 
 
+def ellipsoid_limb_angle(r_fixed_km, sun_fixed_km, equatorial_radius_km, flattening=1.0 / 298.257223563):
+    """Apparent limb in the observer/centre/Sun plane of an oblate Earth.
+
+    Intersect the ellipsoid quadratic with that plane, then solve the tangent
+    condition r.T Q limb = 1. The positive transverse root faces the Sun.
+    The disc-overlap approximation remains the same as the conical model.
+    """
+    r = np.asarray(r_fixed_km, dtype=float)
+    sun = np.asarray(sun_fixed_km, dtype=float)
+    distance = float(np.linalg.norm(r))
+    u = r / distance
+    transverse = sun - float(sun @ u) * u
+    if np.linalg.norm(transverse) <= 1e-12 * max(float(np.linalg.norm(sun)), 1.0):
+        axis = np.eye(3)[int(np.argmin(abs(u)))]
+        transverse = axis - float(axis @ u) * u
+    v = transverse / np.linalg.norm(transverse)
+    q = np.array([1.0, 1.0, (1.0 - flattening) ** -2]) / equatorial_radius_km**2
+    a, b, c = float((u * q) @ u), float((u * q) @ v), float((v * q) @ v)
+    if a * distance**2 <= 1.0:
+        return float(np.pi / 2)
+    y = float(np.sqrt((1.0 - 1.0 / (a * distance**2)) / (c - b * b / a)))
+    x = (1.0 / distance - b * y) / a
+    return float(np.arctan2(y, distance - x))
+
+
 def _resolve_sun_position_eci_km(env: dict, t_s: float) -> np.ndarray:
     if "sun_pos_eci_km" in env:
         return np.asarray(env["sun_pos_eci_km"], dtype=float)
@@ -143,6 +168,11 @@ def srp_shadow_factor(
     # Conical angular model (umbra + penumbra).
     # Apparent angular radii as seen from spacecraft.
     alpha = float(np.arcsin(np.clip(earth_radius_km / r_norm, -1.0, 1.0)))
+    if model == "conical_ellipsoid":
+        from sim.dynamics.orbit.frames import eci_to_ecef_rotation_context, frame_context_from_environment
+
+        rotation = eci_to_ecef_rotation_context(t_s, frame_context_from_environment(env))
+        alpha = ellipsoid_limb_angle(rotation @ r_sc, rotation @ r_sun, earth_radius_km)
     beta = float(np.arcsin(np.clip(sun_radius_km / rho_norm, -1.0, 1.0)))
     u_earth = -r_sc / r_norm
     u_sun = np.asarray(geometry["sun_dir_sc_eci"], dtype=float)

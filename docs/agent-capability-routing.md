@@ -1,5 +1,12 @@
 # Agent Capability Routing
 
+For external formats, use [modular data IO](data-io.md): discover with `oel io
+formats`, inspect explicit profiles, convert supported local files, compose
+objects through `oel io object`, materialize a new validated scenario, or export
+an already-completed review store. Fit a saved
+ONP review arc to a catalog product through the separate Pro `fit-review`
+operation. A format conversion never implicitly runs propagation or estimation.
+
 Use this routing map when a user asks for OEL help that is broader than the
 checked-in agent examples. The goal is to choose the smallest documented OEL
 workflow that can answer the user's question, then validate, run, inspect
@@ -91,6 +98,8 @@ single-scenario work does not require that separate prototype.
 | User intent | Public workflow | Start here | Evidence to inspect | Ask before proceeding when | Do not claim |
 | --- | --- | --- | --- | --- | --- |
 | Plan an open-ended study without executing it | Use `oel study capabilities`, typed preflight, and content-bound plan review; stop at `PLAN_VALID`, `CLARIFICATION_REQUIRED`, or `UNSUPPORTED` | `docs/study-planning.md`, `oel study capabilities --scope discovery`, restricted `oel-study-mcp` | Capability-manifest digest, config-validation receipts, typed edges, route, transfer summary, evidence promises, limitations, and plan-review digest | Material choices, inputs, frames/epochs, fidelity, evidence, or acceptance criteria remain unresolved | That `PLAN_VALID` authorizes execution or payment, that an unavailable Pro descriptor is executable, or that the agent may approve its own plan |
+| Import local orbital data, compose scenario objects, or export saved evidence | Discover a bounded profile with `oel io formats`; use object preflight/import/export or completed-review/table export | `docs/data-io.md`, `oel io object describe-import`, `oel io object describe-export` | Source/output hashes, object/sample selectors, frame/epoch/units, retained and omitted fields, promotion gates and receipts | Object, sample, epoch/frame, model context or source provenance is ambiguous, or a new prediction/fit is requested | That conversion estimates an orbit, propagates a state, replays a history, or executes the materialized scenario; review-to-OGP/TLE fitting is Pro |
+| Recover from discrepant full-state EKF observations | Explicitly opt into experimental knowledge-estimation recovery for HCW, SS-J2, TH, YA or absolute ECI EKFs | `docs/innovation-recovery.md`, `knowledge.estimation.ekf.innovation_recovery` | Raw NIS, held/reinitialized counts, acquisition and decision epochs, separate maneuver-detector evidence | Measurements are partial-state, noise/model assumptions are unresolved, or the user expects flight-stack navigation or maneuver identification | Calibrated maneuver probabilities, real-sensor accuracy, operational readiness, or broader relative-model validity |
 | Study Earth radiation, Schwarzschild or solid/ocean tides | Opt-in experimental public ONP force models with Python reference and optional Rust kernels | `docs/orbit-precision-forces.md`, `configs/precision_forces_demo.yaml` | Validated config, epoch/frame/data provenance, saved state rows and model-specific comparison evidence | Epoch, EOP/ephemerides, ocean coefficient source or tide convention is missing | Empirical orbit accuracy, stock Knocke equivalence or universal native speedup |
 | Propagate a satellite | Single-run scenario YAML with simple dynamics first | `configs/quickstart_5min.yaml`, `agents/examples/public_agent_single_satellite.yaml`, `docs/scenario-yaml.md` | `run_metadata`, `objects`, `object_state`, `master_run_summary.json` | Duration, initial orbit/TLE/altitude, or fidelity changes the answer | Operational ephemeris accuracy or mission validation |
 | Simulate onboard thermal or electrical resources | Add the independently opt-in ONP `specs.thermal` and/or `specs.power` model to a normal scenario | `docs/models/spacecraft-resources.md`, `configs/spacecraft_resources_demo.yaml`, `docs/scenario-yaml.md` | `spacecraft_resources` review rows when review is enabled; otherwise `spacecraft_resources.json`/CSV and run provenance | Initial resource state, attitude/geometry, panel and battery limits, or load assumptions change the result | Detailed EPS or thermal-network performance; that truth outputs are received telemetry or navigation estimates; degradation, qualification, or operational power authority |
@@ -168,6 +177,7 @@ Useful public fallbacks:
 | --- | --- | --- |
 | Propagation | `object_state`, `run_metadata`, `objects`, summary JSON | `run_metadata`, `objects`, `passive_final_state` |
 | Rendezvous | `relative_state`, `metrics`, `thrust`, `events` | `rendezvous_metrics`, `rendezvous_closest_approach`, `relative_final_state`, `burn_activity`, `burn_events` |
+| EKF innovation recovery | Knowledge consistency summaries and `metrics` with `source = 'innovation_recovery'`; raw NIS remains separate | Use the explicit metrics query in [Full-state innovation recovery](innovation-recovery.md) |
 | Mission recovery | `mission_recovery_summary`, `mission_recovery_elements`, `object_state`, `metrics` | `mission_recovery_summary`, `mission_recovery_elements` |
 | Ground access | `ground_access`, access/no-access rows | `ground_access_summary`, `ground_access_no_access_reasons` |
 | Coverage and directed links | `coverage_*` and `link_*` summary/sample/interval/transition tables | `coverage_summary`, `coverage_transition_summary`, `directed_link_summary`, `directed_link_windows` |

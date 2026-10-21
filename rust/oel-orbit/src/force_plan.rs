@@ -23,6 +23,7 @@ pub struct ForcePlan {
     pub precision: Vec<PrecisionForce>,
 }
 
+#[derive(Clone)]
 pub struct StageInputs {
     pub precision: Vec<PrecisionStage>,
     pub rotation: [f64; 9],
@@ -64,11 +65,11 @@ impl ForcePlan {
         if !self.scalars.iter().all(|value| value.is_finite()) || self.scalars[0] <= 0.0 {
             return Err("force-plan scalars must be finite and central mu positive");
         }
-        if self.shadow_model > 2 {
-            return Err("shadow model must be 0, 1, or 2");
+        if self.shadow_model > 3 {
+            return Err("shadow model must be 0, 1, 2, or 3");
         }
         for &code in &self.codes {
-            if !(HARMONICS..=crate::precision_plan::OCEAN).contains(&code) {
+            if !(HARMONICS..=crate::precision_plan::ECOM2).contains(&code) {
                 return Err("unsupported Rust force code");
             }
             if code == HARMONICS && self.harmonics.is_none() {
@@ -137,11 +138,12 @@ impl ForcePlan {
                     &self.scalars,
                     self.shadow_model,
                     mass_kg,
+                    stage.rotation,
                 ),
                 SUN => third_body(r, stage.sun_eci_km, self.scalars[12]),
                 MOON => third_body(r, stage.moon_eci_km, self.scalars[13]),
                 J2..=J4 => zonal::component(code - 4, r, self.scalars[14]),
-                crate::precision_plan::RADIATION..=crate::precision_plan::OCEAN => {
+                crate::precision_plan::RADIATION..=crate::precision_plan::ECOM2 => {
                     let index = precision_index;
                     precision_index += 1;
                     self.precision[index].acceleration(
@@ -198,7 +200,7 @@ fn drag(stage: &StageInputs, mass: f64, cd: f64, area: f64) -> [f64; 3] {
     std::array::from_fn(|i| scale * v[i])
 }
 
-fn illumination(alpha: f64, beta: f64, gamma: f64) -> f64 {
+pub(crate) fn illumination(alpha: f64, beta: f64, gamma: f64) -> f64 {
     if beta <= 0.0 || gamma >= alpha + beta {
         return 1.0;
     }
@@ -231,7 +233,27 @@ fn illumination(alpha: f64, beta: f64, gamma: f64) -> f64 {
         .clamp(0.0, 1.0)
 }
 
-fn srp(r: [f64; 3], sun: [f64; 3], s: &[f64; 15], shadow_model: u8, mass_kg: f64) -> [f64; 3] {
+fn ellipsoid_limb_angle(r: [f64; 3], sun: [f64; 3], radius: f64) -> f64 {
+    let distance = dot(r, r).sqrt();
+    let u = r.map(|x| x / distance);
+    let mut v = std::array::from_fn(|i| sun[i] - dot(sun, u) * u[i]);
+    if dot(v, v).sqrt() <= 1e-12 * dot(sun, sun).sqrt().max(1.) {
+        let axis = (0..3).min_by(|&a, &b| u[a].abs().total_cmp(&u[b].abs())).unwrap();
+        v = std::array::from_fn(|i| if i == axis { 1. - u[axis] * u[i] } else { -u[axis] * u[i] });
+    }
+    let norm = dot(v, v).sqrt();
+    v = v.map(|x| x / norm);
+    let q = [1., 1., (1.0_f64 - 1. / 298.257223563).powi(-2)].map(|x| x / radius.powi(2));
+    let a: f64 = (0..3).map(|i| u[i] * q[i] * u[i]).sum();
+    let b: f64 = (0..3).map(|i| u[i] * q[i] * v[i]).sum();
+    let c: f64 = (0..3).map(|i| v[i] * q[i] * v[i]).sum();
+    if a * distance.powi(2) <= 1. { return std::f64::consts::FRAC_PI_2; }
+    let y = ((1. - 1. / (a * distance.powi(2))) / (c - b * b / a)).sqrt();
+    let x = (1. / distance - b * y) / a;
+    y.atan2(distance - x)
+}
+
+fn srp(r: [f64; 3], sun: [f64; 3], s: &[f64; 15], shadow_model: u8, mass_kg: f64, rotation: [f64; 9]) -> [f64; 3] {
     let r_norm = dot(r, r).sqrt();
     let sun_norm = dot(sun, sun).sqrt();
     let rho = [sun[0] - r[0], sun[1] - r[1], sun[2] - r[2]];
@@ -252,7 +274,10 @@ fn srp(r: [f64; 3], sun: [f64; 3], s: &[f64; 15], shadow_model: u8, mass_kg: f64
                         shadow = 0.0;
                     }
                 } else {
-                    let alpha = (s[10] / r_norm).clamp(-1.0, 1.0).asin();
+                    let alpha = if shadow_model == 3 {
+                        let rotate = |v: [f64; 3]| std::array::from_fn(|i| rotation[i*3]*v[0]+rotation[i*3+1]*v[1]+rotation[i*3+2]*v[2]);
+                        ellipsoid_limb_angle(rotate(r), rotate(sun), s[10])
+                    } else { (s[10] / r_norm).clamp(-1.0, 1.0).asin() };
                     let beta = (s[11] / rho_norm).clamp(-1.0, 1.0).asin();
                     let separation = (-dot(r, rho) / (r_norm * rho_norm)).clamp(-1.0, 1.0).acos();
                     shadow = illumination(alpha, beta, separation);

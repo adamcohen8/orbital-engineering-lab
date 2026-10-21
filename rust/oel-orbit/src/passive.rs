@@ -152,9 +152,16 @@ mod python {
             include_j2,
             command_accel_eci_km_s2: [0.0; 3],
         };
-        let rows = sampled_history(initial, &widths, &sample_ends, parameters)
+        // All inputs are Rust-owned before detaching. Only the returned Python
+        // bytes allocation needs the interpreter; propagation and packing do not.
+        let bytes = py
+            .detach(|| {
+                let rows = sampled_history(initial, &widths, &sample_ends, parameters)?;
+                Ok::<Vec<u8>, &'static str>(
+                    rows.iter().flat_map(|value| value.to_le_bytes()).collect(),
+                )
+            })
             .map_err(PyValueError::new_err)?;
-        let bytes: Vec<u8> = rows.iter().flat_map(|value| value.to_le_bytes()).collect();
         Ok(PyBytes::new(py, &bytes))
     }
 
@@ -201,6 +208,7 @@ mod python {
     }
 
     pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
+        module.add("PASSIVE_HISTORY_GIL_RELEASED", true)?;
         module.add_function(wrap_pyfunction!(
             propagate_adaptive_sampled_eci_bytes,
             module
