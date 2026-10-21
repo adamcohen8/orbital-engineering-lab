@@ -273,7 +273,9 @@ def test_innovation_spike_gate_rejects_single_sample_optical_glint_and_holds_pre
             assert gate_diag.return_ratio == pytest.approx(0.0, abs=1.0e-12)
             # glint_weight=0 holds the prediction: state and covariance stay mutually consistent.
             assert gated.last_update_diagnostics.update_applied is False
-            assert gated.last_update_diagnostics.posterior_cov_trace == gated.last_update_diagnostics.predicted_cov_trace
+            assert (
+                gated.last_update_diagnostics.posterior_cov_trace == gated.last_update_diagnostics.predicted_cov_trace
+            )
 
             ungated_glint_err = float(np.linalg.norm(ungated_belief.state - truth_arc[3]))
             gated_glint_err = float(np.linalg.norm(gated_belief.state - truth_arc[3]))
@@ -576,7 +578,9 @@ def test_gate_streaming_does_not_accept_outlier_after_step_or_override_caller_be
         belief = estimator.update(belief, meas, meas.t_s)
     assert estimator.last_update_diagnostics.gate_diagnostics.classification == "pending_impulse"
     offset = np.array([1.0e-4, 0.0, 0.0, 0.0, 0.0, 0.0])
-    replaced = StateBelief(state=truth_arc[2] + offset, covariance=belief.covariance, last_update_t_s=belief.last_update_t_s)
+    replaced = StateBelief(
+        state=truth_arc[2] + offset, covariance=belief.covariance, last_update_t_s=belief.last_update_t_s
+    )
     belief = estimator.update(replaced, measurements[2], measurements[2].t_s)
     # A caller-replaced belief is respected: the pending glint is dropped rather than replayed from the old prior.
     assert estimator.last_update_diagnostics.gate_diagnostics.classification == "nominal"
@@ -607,4 +611,3 @@ def test_gate_default_threshold_leaves_nominal_noisy_tracking_unchanged() -> Non
     ungated_err = np.sqrt(np.mean([np.sum((b.state[:3] - t[:3]) ** 2) for b, t in zip(ungated_beliefs, truth_arc)]))
     # The 6-dof 99.9% NIS threshold keeps false triggers rare; the old 9.21 default fired on ~20% of epochs.
     assert gated_err < 1.1 * ungated_err
-

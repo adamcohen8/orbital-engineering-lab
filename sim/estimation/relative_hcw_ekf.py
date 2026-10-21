@@ -9,6 +9,7 @@ from sim.core.interfaces import Estimator
 from sim.core.models import Measurement, StateBelief
 from sim.dynamics.orbit.environment import EARTH_J2, EARTH_RADIUS_KM
 from sim.dynamics.orbit.relative_linear import RelativeLinearDynamics
+from sim.estimation.maneuver_detection import chi_square_threshold
 from sim.estimation.orbit_ekf import _solve_innovation_gain_and_vector
 from sim.numeric_backend import normalize_numeric_backend
 
@@ -26,17 +27,18 @@ HCW_MEASUREMENT_MODELS = {
 class InnovationSpikeGateConfig:
     """Configuration for the 3-sample innovation gate separating 1-sample glints from impulsive steps.
 
-    The default ``nis_threshold`` is the 99.9% chi-square quantile for the 6-dof ``relative_state`` innovation.
+    The gate is evaluated only when the NIS exceeds the chi-square quantile ``nis_probability`` for the
+    innovation dimension (22.46 for the 6-dof ``relative_state`` innovation at the default 0.999).
     """
 
     enabled: bool = True
-    nis_threshold: float = 22.46
+    nis_probability: float = 0.999
     max_return_ratio: float = 0.35
     glint_weight: float = 0.0
 
     def __post_init__(self) -> None:
-        if not np.isfinite(self.nis_threshold) or self.nis_threshold <= 0.0:
-            raise ValueError("nis_threshold must be finite and positive.")
+        if not 0.0 < float(self.nis_probability) < 1.0:
+            raise ValueError("nis_probability must be between 0 and 1.")
         if not np.isfinite(self.max_return_ratio) or not 0.0 <= self.max_return_ratio < 1.0:
             raise ValueError("max_return_ratio must lie in [0, 1).")
         if not np.isfinite(self.glint_weight) or not 0.0 <= self.glint_weight <= 1.0:
@@ -79,11 +81,15 @@ def innovation_spike_gate(
 
     jump = float(np.linalg.norm(curr_vec - prev_vec))
     return_ratio = float(np.linalg.norm(next_vec - prev_vec)) / max(jump, 1.0e-15)
-    if not cfg.enabled or (nis is not None and float(nis) <= cfg.nis_threshold) or jump <= 1.0e-15:
+    if not cfg.enabled or (nis is not None and _nis_within_gate(nis, curr_vec.size, cfg)) or jump <= 1.0e-15:
         return InnovationSpikeGateDiagnostics(False, "nominal", return_ratio, 1.0)
     if return_ratio <= cfg.max_return_ratio:
         return InnovationSpikeGateDiagnostics(True, "glint_rejected", return_ratio, float(cfg.glint_weight))
     return InnovationSpikeGateDiagnostics(True, "step_maneuver", return_ratio, 1.0)
+
+
+def _nis_within_gate(nis: float, dof: int, cfg: InnovationSpikeGateConfig) -> bool:
+    return float(nis) <= chi_square_threshold(dof, cfg.nis_probability)
 
 
 @dataclass(frozen=True)
@@ -212,7 +218,9 @@ class HCWRelativeEKFEstimator(Estimator):
             # Replay only if the caller's belief is the held prediction (possibly propagated), not a replaced one.
             if float(measurement.t_s) >= belief_t_s >= pending_t_s and np.allclose(
                 self._predict(held_state, belief.covariance, from_t_s=pending_t_s, to_t_s=belief_t_s)[0],
-                belief.state, rtol=1.0e-9, atol=1.0e-12,
+                belief.state,
+                rtol=1.0e-9,
+                atol=1.0e-12,
             ):
                 self._last_innovation = prev_innov
                 belief = self.update(prior_belief, pending_meas, pending_t_s, next_measurement=measurement)
@@ -282,8 +290,19 @@ class HCWRelativeEKFEstimator(Estimator):
         x_upd, p_upd, update_applied, gate_diag = x_raw_upd, p_raw_upd, True, resolved_gate
         if gate_cfg is not None and gate_cfg.enabled:
             x_upd, p_upd, update_applied, gate_diag = self._apply_innovation_spike_gate(
-                belief, measurement, meas_t_s, x_pred, p_pred, x_raw_upd, p_raw_upd,
-                h_jac, r, innovation, nis, next_measurement, resolved_gate,
+                belief,
+                measurement,
+                meas_t_s,
+                x_pred,
+                p_pred,
+                x_raw_upd,
+                p_raw_upd,
+                h_jac,
+                r,
+                innovation,
+                nis,
+                next_measurement,
+                resolved_gate,
             )
 
         self.last_update_diagnostics = HCWRelativeEKFUpdateDiagnostics(
@@ -302,9 +321,19 @@ class HCWRelativeEKFEstimator(Estimator):
         return StateBelief(state=x_upd, covariance=p_upd, last_update_t_s=output_t_s)
 
     def _apply_innovation_spike_gate(
-        self, belief: StateBelief, measurement: Measurement, meas_t_s: float, x_pred: np.ndarray, p_pred: np.ndarray,
-        x_raw_upd: np.ndarray, p_raw_upd: np.ndarray, h_jac: np.ndarray, r_mat: np.ndarray,
-        innovation: np.ndarray, nis: float, next_measurement: Measurement | None,
+        self,
+        belief: StateBelief,
+        measurement: Measurement,
+        meas_t_s: float,
+        x_pred: np.ndarray,
+        p_pred: np.ndarray,
+        x_raw_upd: np.ndarray,
+        p_raw_upd: np.ndarray,
+        h_jac: np.ndarray,
+        r_mat: np.ndarray,
+        innovation: np.ndarray,
+        nis: float,
+        next_measurement: Measurement | None,
         resolved_gate: InnovationSpikeGateDiagnostics | None,
     ) -> tuple[np.ndarray, np.ndarray, bool, InnovationSpikeGateDiagnostics | None]:
         cfg = self.innovation_spike_gate
@@ -314,7 +343,7 @@ class HCWRelativeEKFEstimator(Estimator):
             if self._last_innovation is None or self._last_innovation.shape != innovation.shape
             else self._last_innovation
         )
-        if nis <= cfg.nis_threshold:
+        if _nis_within_gate(nis, innovation.size, cfg):
             self._last_innovation = np.array(innovation, dtype=float)
             return x_raw_upd, p_raw_upd, True, resolved_gate or InnovationSpikeGateDiagnostics(False, "nominal")
 
