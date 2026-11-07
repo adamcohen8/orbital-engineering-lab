@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.20)
+project(oel_fsw_sdk LANGUAGES C)
+add_library(oel_fsw_sdk STATIC oel_fsw.c)
+target_include_directories(oel_fsw_sdk PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_features(oel_fsw_sdk PUBLIC c_std_99)
+if(NOT MSVC)
+  target_link_libraries(oel_fsw_sdk PUBLIC m)
+endif()

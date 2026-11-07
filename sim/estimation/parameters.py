@@ -21,12 +21,25 @@ class EstimatedParameter:
     def __post_init__(self) -> None:
         if not str(self.name).strip():
             raise ValueError("EstimatedParameter name must be non-empty.")
-        if not np.isfinite(float(self.value)):
+        try:
+            value = float(self.value)
+            scale = float(self.scale)
+            lower = float(self.lower)
+            upper = float(self.upper)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(f"Parameter {self.name} value, scale, and bounds must be numeric.") from exc
+        if not np.isfinite(value):
             raise ValueError(f"Parameter {self.name} initial value must be finite.")
-        if not np.isfinite(float(self.scale)) or float(self.scale) <= 0.0:
+        if not np.isfinite(scale) or scale <= 0.0:
             raise ValueError(f"Parameter {self.name} scale must be finite and positive.")
-        if float(self.lower) > float(self.upper):
+        # Bounds may be unbounded, but NaN would poison the optimizer's
+        # scaled bounds while making the ordering comparison silently false.
+        if np.isnan(lower) or np.isnan(upper):
+            raise ValueError(f"Parameter {self.name} bounds must not be NaN.")
+        if lower > upper:
             raise ValueError(f"Parameter {self.name} lower bound exceeds upper bound.")
+        if value < lower or value > upper:
+            raise ValueError(f"Parameter {self.name} initial value must lie within its bounds.")
 
 
 class ParameterSet:

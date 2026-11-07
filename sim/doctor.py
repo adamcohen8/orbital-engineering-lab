@@ -1,7 +1,7 @@
 """Bootstrap-safe environment diagnostics for the OEL command-line interface.
 
-Keep this module limited to the Python standard library and lightweight OEL
-metadata helpers. The doctor must remain usable when scientific dependencies
+Keep this module limited to the Python standard library, lightweight package
+metadata parsing and OEL metadata helpers. The doctor must remain usable when scientific dependencies
 are missing or incompatible.
 """
 
@@ -100,9 +100,10 @@ def _pillow_spec(version: tuple[int, int]) -> DependencySpec:
 
 
 CORE_SPECS = (
-    DependencySpec("oel-rust-game", "0.5", "0.6"),
-    DependencySpec("oel-rust-orbit", "0.18.3", "0.19"),
+    DependencySpec("oel-rust-game", "0.5.1", "0.6"),
+    DependencySpec("oel-rust-orbit", "0.18.4", "0.19"),
     DependencySpec("numpy", "2.1", "2.5"),
+    DependencySpec("jsonschema", "4.26", "5"),
     DependencySpec("matplotlib", "3.8", "3.12"),
     _pillow_spec(tuple(sys.version_info[:2])),
     DependencySpec("tqdm", "4.65", "5"),
@@ -113,7 +114,7 @@ CORE_SPECS = (
 DEV_SPECS_BASE = (
     DependencySpec("pytest", "9", "10"),
     DependencySpec("ruff", exact="0.15.14"),
-    DependencySpec("setuptools", "83", "84"),
+    DependencySpec("setuptools", "84.1", "85"),
 )
 GAME_MEDIA_SPECS = (
     _pillow_spec(tuple(sys.version_info[:2])),
@@ -125,7 +126,8 @@ VALIDATION_SPECS = (DependencySpec("sgp4", "2.24", "3"),)
 ML_SPECS = (
     DependencySpec("gymnasium", "0.29", "2"),
     DependencySpec("torch", "2.13", "2.14"),
-    DependencySpec("filelock", "3.20.3", "4"),
+    (DependencySpec("filelock", "3.20.3", "4") if sys.version_info[:2] < (3, 11)
+     else DependencySpec("filelock", "4.2.1", "5")),
 )
 
 
@@ -331,7 +333,7 @@ def _os_version_detail(system: str) -> str:
 
 def _pip_check() -> tuple[bool, str]:
     if _installed_version("pip") is None:
-        return False, "pip is unavailable; dependency consistency could not be checked."
+        return _metadata_dependency_check()
     try:
         result = subprocess.run(
             [sys.executable, "-m", "pip", "check"],
@@ -346,6 +348,40 @@ def _pip_check() -> tuple[bool, str]:
     if result.returncode == 0:
         return True, output or "No broken requirements found."
     return False, output or f"`python -m pip check` exited with status {result.returncode}."
+
+
+def _metadata_dependency_check() -> tuple[bool, str]:
+    """Check base requirements without adding provisioning tools to a runtime."""
+
+    try:
+        from packaging.requirements import Requirement
+        from packaging.utils import canonicalize_name
+
+        installed = {}
+        for distribution in metadata.distributions():
+            name = distribution.metadata.get("Name")
+            if not name:
+                return False, "Installed distribution metadata has no name."
+            key = canonicalize_name(name)
+            if key in installed:
+                return False, f"Installed distribution metadata is duplicated: {name}."
+            installed[key] = distribution
+        issues = []
+        for name, distribution in sorted(installed.items()):
+            for raw in distribution.requires or []:
+                requirement = Requirement(raw)
+                if requirement.marker is not None and not requirement.marker.evaluate({"extra": ""}):
+                    continue
+                dependency = installed.get(canonicalize_name(requirement.name))
+                if dependency is None:
+                    issues.append(f"{name} requires missing {requirement.name}")
+                elif not requirement.specifier.contains(dependency.version, prereleases=True):
+                    issues.append(f"{name} requires {requirement}; installed {dependency.version}")
+        if issues:
+            return False, "; ".join(issues[:8])
+    except Exception as exc:
+        return False, f"Installed metadata dependency check could not run: {exc}"
+    return True, "No broken requirements found using installed metadata (pip is not part of this runtime)."
 
 
 def _quickstart_check(source_root: Path, quickstart: Path) -> tuple[bool, str]:
@@ -387,26 +423,36 @@ def remediation_commands(
     *,
     system: str | None = None,
     version_info: Sequence[int] | None = None,
+    source_root: str | Path | None = None,
 ) -> tuple[str, ...]:
     target = tuple(version_info or sys.version_info[:2])[:2]
     if not interpreter_is_supported(target):
         target = (3, 14)
     minor = f"{target[0]}.{target[1]}"
     constraint = f"constraints/py{target[0]}{target[1]}.txt"
+    root = Path(source_root) if source_root is not None else Path(__file__).resolve().parents[1]
+    native_source = all((root / "rust" / crate / "Cargo.toml").is_file() for crate in ("oel-orbit", "oel-game"))
     if str(system or platform.system()).lower() == "windows":
-        win_constraint = constraint.replace("/", "\\")
-        return (
-            f"py -{minor} -m venv .venv",
-            r".\.venv\Scripts\python.exe -m pip install --upgrade pip",
-            rf'.\.venv\Scripts\python.exe -m pip install -c {win_constraint} ".[cross-platform]"',
-            r".\.venv\Scripts\python.exe run_simulation.py --doctor",
+        create = f"py -{minor} -m venv .venv"
+        python = r".\.venv\Scripts\python.exe"
+        constraint = constraint.replace("/", "\\")
+    else:
+        create = f"python{minor} -m venv .venv"
+        python = ".venv/bin/python"
+    commands = [create, f"{python} -m pip install --upgrade pip"]
+    if native_source:
+        commands.append(f'{python} -m pip install "maturin>=1.10,<2"')
+        commands.extend(
+            f"{python} -m maturin build --release --locked --manifest-path rust/{crate}/Cargo.toml "
+            f"--interpreter {python} --out dist/native"
+            for crate in ("oel-orbit", "oel-game")
         )
-    return (
-        f"python{minor} -m venv .venv",
-        ".venv/bin/python -m pip install --upgrade pip",
-        f'.venv/bin/python -m pip install -c {constraint} ".[cross-platform]"',
-        ".venv/bin/python run_simulation.py --doctor",
-    )
+    links = " --find-links dist/native" if native_source else ""
+    commands.extend((
+        f'{python} -m pip install -c {constraint}{links} ".[cross-platform]"',
+        f"{python} run_simulation.py --doctor",
+    ))
+    return tuple(commands)
 
 
 def _status_text(ok: bool, *, optional: bool = False, legacy: bool = False) -> str:
@@ -458,10 +504,18 @@ def _profile_detail(
 
 def print_doctor_report(*, source_root: str | Path | None = None) -> bool:
     root = Path(source_root).expanduser().resolve() if source_root is not None else Path(__file__).resolve().parents[1]
-    try:
-        quickstart = quickstart_config_path()
-    except ResourceNotFoundError:
-        quickstart = root / "configs" / "quickstart_5min.yaml"
+    # A caller can inspect an alternate checkout (for example, a managed
+    # installation or release staging tree).  Prefer that tree's config so
+    # the report does not accidentally validate the interpreter's own package
+    # resources instead.
+    checkout_quickstart = root / "configs" / "quickstart_5min.yaml"
+    if checkout_quickstart.is_file():
+        quickstart = checkout_quickstart
+    else:
+        try:
+            quickstart = quickstart_config_path()
+        except ResourceNotFoundError:
+            quickstart = checkout_quickstart
     version = tuple(sys.version_info[:2])
     python_ok = interpreter_is_supported(version)
     security_ok, security_detail = security_support_detail(version)
@@ -475,6 +529,10 @@ def print_doctor_report(*, source_root: str | Path | None = None) -> bool:
     system = platform.system() or "unknown"
     machine = platform.machine() or "unknown"
     platform_ok, platform_expected = _platform_is_supported(system, machine)
+    # The maintained host matrix describes qualification. Other common Linux
+    # hosts may probe runtime readiness without acquiring a qualification claim.
+    linux_probe = system.lower() == "linux" and machine.lower() in {"x86_64", "amd64", "arm64", "aarch64"}
+    runtime_platform_ok = platform_ok or linux_probe
 
     print("")
     print("=" * 88)
@@ -491,7 +549,14 @@ def print_doctor_report(*, source_root: str | Path | None = None) -> bool:
         _status_text(security_ok, legacy=python_ok and not security_ok),
         security_detail,
     )
-    _print_row("Operating system", _status_text(platform_ok), f"{system}; expected {platform_expected}.")
+    if linux_probe and not platform_ok:
+        _print_row(
+            "Operating system", "WARN",
+            f"{system}/{machine} is outside the release-qualified {platform_expected} target; "
+            "runtime checks will run, but passing does not qualify this host.",
+        )
+    else:
+        _print_row("Operating system", _status_text(platform_ok), f"{system}; expected {platform_expected}.")
     _print_row("OS version", "INFO", _os_version_detail(system))
     _print_row("Architecture", "INFO", machine)
     _print_row("Python executable", "INFO", str(Path(sys.executable).absolute()))
@@ -629,7 +694,7 @@ def print_doctor_report(*, source_root: str | Path | None = None) -> bool:
     output_root = Path(os.environ.get("OEL_OUTPUT_ROOT", str(root / "outputs"))).expanduser().resolve()
     output_ok, output_detail = _write_check(output_root)
     _print_row("Output directory", _status_text(output_ok), output_detail)
-    prerequisite_ok = python_ok and platform_ok and core_ok and pip_ok and quickstart_exists
+    prerequisite_ok = python_ok and runtime_platform_ok and core_ok and pip_ok and quickstart_exists
     if prerequisite_ok:
         quickstart_ok, quickstart_detail = _quickstart_check(root, quickstart)
     else:
@@ -639,7 +704,7 @@ def print_doctor_report(*, source_root: str | Path | None = None) -> bool:
 
     overall_ok = (
         python_ok
-        and platform_ok
+        and runtime_platform_ok
         and core_ok
         and pip_ok
         and (version_status.ok or not version_status.required)
@@ -648,7 +713,10 @@ def print_doctor_report(*, source_root: str | Path | None = None) -> bool:
     )
     print("-" * 88)
     print("Recovery commands")
-    for command in remediation_commands(system=system, version_info=version):
+    print("  Source installs require Rust/Cargo; see docs/native-source-build.md. Run from the checkout root.")
+    if not runtime_platform_ok:
+        print(f"  Use a declared host target ({platform_expected}); reinstalling packages cannot repair this host mismatch.")
+    for command in remediation_commands(system=system, version_info=version, source_root=root):
         print(f"  {command}")
     print("-" * 88)
     if overall_ok:

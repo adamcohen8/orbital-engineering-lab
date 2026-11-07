@@ -130,7 +130,10 @@ def build_downloadable_contract() -> dict[str, Any]:
 
 
 def _rounded_state(values: Any) -> list[float]:
-    return [round(float(value), 12) for value in values]
+    # Frame transforms can produce either sign of zero across platforms.
+    # Keep the JSON fixture canonical after rounding without changing precision.
+    rounded = [round(float(value), 12) for value in values]
+    return [0.0 if value == 0.0 else value for value in rounded]
 
 
 def build_reference_trajectories() -> dict[str, Any]:

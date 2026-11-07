@@ -37,6 +37,29 @@ def _unit(v: np.ndarray, eps: float = 1e-12) -> np.ndarray:
     return x / n
 
 
+def _attitude_belief_from_truth(truth: StateTruth) -> StateBelief:
+    """Build the canonical full-state attitude belief used by controllers.
+
+    Attitude controllers consume the shared ``[r, v, q, w]`` state layout.
+    Mission execution can still be called without an estimator belief, so the
+    truth fallback must preserve that layout instead of passing a shortened
+    ``[q, w]`` vector that causes the standard controllers to return zero.
+    """
+    state = np.hstack(
+        (
+            np.asarray(truth.position_eci_km, dtype=float).reshape(3),
+            np.asarray(truth.velocity_eci_km_s, dtype=float).reshape(3),
+            np.asarray(truth.attitude_quat_bn, dtype=float).reshape(4),
+            np.asarray(truth.angular_rate_body_rad_s, dtype=float).reshape(3),
+        )
+    )
+    return StateBelief(
+        state=state,
+        covariance=np.eye(13, dtype=float) * 1e-6,
+        last_update_t_s=float(truth.t_s),
+    )
+
+
 def _estimate_stack_delta_v_m_s(rocket_state: RocketState, vehicle_cfg: RocketVehicleConfig) -> float:
     stages = vehicle_cfg.stack.stages
     if not stages:

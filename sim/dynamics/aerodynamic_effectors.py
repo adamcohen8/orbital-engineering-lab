@@ -65,8 +65,13 @@ class VariableGeometryAerodynamicsConfig:
         ids = [surface.actuator_id for surface in self.surfaces]
         if not self.surfaces or len(ids) != len(set(ids)):
             raise ValueError("aerodynamic surfaces must be non-empty with unique actuator IDs")
-        if self.base_drag_area_m2 < 0.0 or self.base_drag_coefficient < 0.0:
-            raise ValueError("base aerodynamic values must be nonnegative")
+        if (
+            not isfinite(float(self.base_drag_area_m2))
+            or not isfinite(float(self.base_drag_coefficient))
+            or self.base_drag_area_m2 < 0.0
+            or self.base_drag_coefficient < 0.0
+        ):
+            raise ValueError("base aerodynamic values must be finite and nonnegative")
         center = np.asarray(self.center_of_mass_body_m, dtype=float)
         if center.size != 3 or not np.all(np.isfinite(center)):
             raise ValueError("center_of_mass_body_m must contain three finite values")
@@ -103,6 +108,8 @@ class VariableGeometryAerodynamics:
         relative_velocity = velocity_eci_m_s - np.asarray(atmosphere_velocity_eci_m_s, dtype=float)
         speed = float(np.linalg.norm(relative_velocity))
         device_position_items = tuple(sorted((str(key), float(value)) for key, value in device_positions.items()))
+        if not all(isfinite(value) for _, value in device_position_items):
+            raise ValueError("device_positions must contain only finite values")
         drag_area, lift_area = self._realized_areas(device_positions)
         if speed <= 0.0 or density == 0.0:
             zero = (0.0, 0.0, 0.0)
@@ -195,9 +202,14 @@ def _perpendicular_reference(axis: np.ndarray, position_eci_km: np.ndarray) -> n
     projected = radial - float(radial @ axis) * axis
     norm = float(np.linalg.norm(projected))
     if norm <= 1.0e-12:
-        candidate = np.array([0.0, 0.0, 1.0])
+        # Pick the Cartesian basis vector least aligned with the wind axis.
+        # A fixed z-axis fallback is parallel to a z-axis wind and leaves a
+        # zero vector, which used to propagate NaNs through lift and torque.
+        candidate = np.eye(3, dtype=float)[int(np.argmin(np.abs(axis)))]
         projected = candidate - float(candidate @ axis) * axis
         norm = float(np.linalg.norm(projected))
+    if norm <= 1.0e-12 or not np.isfinite(norm):
+        raise ValueError("aerodynamic relative-wind axis must admit a finite perpendicular reference")
     return projected / norm
 
 

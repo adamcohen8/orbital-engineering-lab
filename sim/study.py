@@ -59,8 +59,14 @@ __all__ = [
 
 def _read_json_object(path: Path, field: str) -> dict[str, Any]:
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        value = json.loads(
+            read_regular_file_nofollow(
+                path,
+                min_bytes=1,
+                max_bytes=MAX_STUDY_EVIDENCE_BYTES,
+            )
+        )
+    except (OSError, SafeReadError, json.JSONDecodeError) as exc:
         raise StudyLifecycleError(f"Could not read {field} from {path}: {exc}") from exc
     if not isinstance(value, dict):
         raise StudyLifecycleError(f"{field} must contain a JSON object.")

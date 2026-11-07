@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import uuid
 from dataclasses import asdict
 from pathlib import Path
@@ -116,11 +117,14 @@ def render_cr3bp_research(
     frames: int = 120,
     fps: int = 20,
     style: str = "oel_dark",
+    record: bool = True,
 ) -> dict:
     """Render trajectory, zero_velocity slice/overlay, or Jacobi-change diagnostic.
 
     Movie frames select nearest recorded samples at uniform requested times,
     without interpolation or propagation. Exact selected times are recorded.
+    The record flag controls generated-artifact indexes; protected MCP renders
+    set it to false so completed-run sidecars remain unchanged.
     """
     if not isinstance(workspace, ReviewWorkspace):
         with ReviewWorkspace.open(workspace) as opened:
@@ -142,6 +146,7 @@ def render_cr3bp_research(
                 frames=frames,
                 fps=fps,
                 style=style,
+                record=record,
             )
     if kind not in {"trajectory", "zero_velocity", "jacobi"} or plane not in {"xy", "xz", "yz"}:
         raise ValueError("Use trajectory/zero_velocity/jacobi and xy/xz/yz.")
@@ -213,12 +218,23 @@ def render_cr3bp_research(
     from sim.plotting.quality import STRICT_AGENT_PLOT_QUALITY, apply_plot_quality_policy
     from sim.plotting.style import add_artifact_footer, artifact_metadata, oel_plot_context, role_color, save_oel_figure
     from sim.review.plotting import ReviewPlotArtifact, ReviewPlotSpec, record_generated_artifact
+    from sim.security.output_writes import (
+        current_output_writer,
+        mkdir_output,
+        sha256_output,
+        staged_output_file,
+        write_output_text,
+    )
 
     if movie_format == "mp4" and not FFMpegWriter.isAvailable():
         raise ValueError("MP4 rendering requires FFmpeg; install it or select GIF.")
     artifact_id = "cr3bp_" + kind + "_" + uuid.uuid4().hex[:10]
+    active_writer = current_output_writer()
     folder = workspace.review_dir / "figures"
-    folder.mkdir(parents=True, exist_ok=True)
+    if active_writer is None:
+        folder.mkdir(parents=True, exist_ok=True)
+    else:
+        mkdir_output(folder)
     path = folder / (artifact_id + ".png")
     metadata = artifact_metadata(scenario_name=workspace.output_dir.name, artifact_id=artifact_id)
     provenance = {
@@ -331,7 +347,18 @@ def render_cr3bp_research(
         add_artifact_footer(fig, metadata=metadata, artifact_id=artifact_id)
         fig.tight_layout(rect=(0, 0.05, 1, 0.92 if movie_format else 0.96))
         qa = apply_plot_quality_policy(fig, policy=STRICT_AGENT_PLOT_QUALITY).to_dict()
-        save_oel_figure(fig, path, dpi=150, metadata=metadata, artifact_id=artifact_id, style_name=style)
+        if active_writer is None:
+            save_oel_figure(fig, path, dpi=150, metadata=metadata, artifact_id=artifact_id, style_name=style)
+        else:
+            with staged_output_file(path) as staged_path:
+                save_oel_figure(
+                    fig,
+                    staged_path,
+                    dpi=150,
+                    metadata=metadata,
+                    artifact_id=artifact_id,
+                    style_name=style,
+                )
         files = {"figure": str(path)}
         if movie_format:
             targets = np.linspace(times[0], times[-1], frames)
@@ -364,28 +391,59 @@ def render_cr3bp_research(
                 return (trail, marker, timestamp, *[a for a, _ in moving])
 
             movie = folder / (artifact_id + "." + movie_format)
+            contact_sheet = movie.with_suffix(".contact-sheet.png")
+            quality_receipt = movie.with_suffix(".quality.json")
             from sim.plotting.animation_quality import save_animation_with_quality
 
             animation = FuncAnimation(fig, update, frames=frames, blit=False)
-            report = save_animation_with_quality(
-                animation,
-                fig,
-                movie,
-                update=update,
-                frame_values=tuple(range(frames)),
-                frame_times_s=tuple(times[indices]),
-                fps=fps,
-                camera_policy="fixed",
-                metadata=metadata,
-                artifact_id=artifact_id,
-                style_name=style,
-                format_limits={(0, "x"): tuple(bounds[:2]), (0, "y"): tuple(bounds[2:])},
-                source=provenance,
-            )
+            if active_writer is None:
+                report = save_animation_with_quality(
+                    animation,
+                    fig,
+                    movie,
+                    update=update,
+                    frame_values=tuple(range(frames)),
+                    frame_times_s=tuple(times[indices]),
+                    fps=fps,
+                    camera_policy="fixed",
+                    metadata=metadata,
+                    artifact_id=artifact_id,
+                    style_name=style,
+                    format_limits={(0, "x"): tuple(bounds[:2]), (0, "y"): tuple(bounds[2:])},
+                    source=provenance,
+                )
+            else:
+                # Matplotlib and the encoder receive a private path.  Each
+                # durable companion is published through its own descriptor
+                # transaction, while the quality report keeps logical paths.
+                with staged_output_file(movie) as staged_movie:
+                    staged_contact_sheet = staged_movie.with_suffix(".contact-sheet.png")
+                    staged_quality_receipt = staged_movie.with_suffix(".quality.json")
+                    report = save_animation_with_quality(
+                        animation,
+                        fig,
+                        staged_movie,
+                        update=update,
+                        frame_values=tuple(range(frames)),
+                        frame_times_s=tuple(times[indices]),
+                        fps=fps,
+                        camera_policy="fixed",
+                        metadata=metadata,
+                        artifact_id=artifact_id,
+                        style_name=style,
+                        format_limits={(0, "x"): tuple(bounds[:2]), (0, "y"): tuple(bounds[2:])},
+                        source=provenance,
+                        logical_contact_sheet_path=contact_sheet,
+                        logical_quality_receipt_path=quality_receipt,
+                    )
+                    with staged_output_file(contact_sheet) as staged_contact:
+                        shutil.copyfile(staged_contact_sheet, staged_contact)
+                    with staged_output_file(quality_receipt) as staged_quality:
+                        shutil.copyfile(staged_quality_receipt, staged_quality)
             files.update(
                 movie=str(movie),
-                contact_sheet=report.contact_sheet_path,
-                movie_quality_receipt=report.quality_receipt_path,
+                contact_sheet=str(contact_sheet),
+                movie_quality_receipt=str(quality_receipt),
             )
             provenance.update(
                 movie_frame_times_s=times[indices].tolist(),
@@ -403,11 +461,18 @@ def render_cr3bp_research(
     if workspace.evidence_identity() != identity:
         raise ValueError("Review store changed during rendering; generated artifacts are not valid evidence.")
     provenance.update(files=files, presentation_quality=qa)
-    from sim.utils.io import sha256_file
+    if active_writer is None:
+        from sim.utils.io import sha256_file
 
-    provenance["artifact_sha256"] = {key: sha256_file(Path(value)) for key, value in files.items()}
+        provenance["artifact_sha256"] = {key: sha256_file(Path(value)) for key, value in files.items()}
+    else:
+        provenance["artifact_sha256"] = {key: sha256_output(Path(value)) for key, value in files.items()}
     receipt = folder / (artifact_id + ".json")
-    receipt.write_text(json.dumps(provenance, indent=2) + "\n", encoding="utf-8")
+    receipt_payload = json.dumps(provenance, indent=2) + "\n"
+    if active_writer is None:
+        receipt.write_text(receipt_payload, encoding="utf-8")
+    else:
+        write_output_text(receipt, receipt_payload)
     spec = ReviewPlotSpec(
         sql=STATE_SQL,
         x_column="time_s",
@@ -426,7 +491,14 @@ def render_cr3bp_research(
         spec,
         {"presentation_quality": qa, "visual_qa_status": "pending_agent_review"},
     )
-    record_generated_artifact(workspace, artifact, review_store_identity=identity)
+    if record:
+        record_generated_artifact(
+            workspace,
+            artifact,
+            review_store_identity=identity,
+            writer=active_writer,
+            logical_output_dir=Path(active_writer.logical_root) if active_writer is not None else None,
+        )
     return {**files, "receipt": str(receipt), "diagnostics": provenance["diagnostics"]}
 
 

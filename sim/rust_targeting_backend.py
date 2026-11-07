@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from importlib import import_module
+from operator import index as as_index
 
 import numpy as np
 
@@ -44,10 +45,18 @@ def try_first_apsis(
 def try_two_body_coast(
     state: np.ndarray, *, step_s: float, steps: int, mu_km3_s2: float,
 ) -> np.ndarray | None:
+    if isinstance(steps, bool):
+        raise ValueError("steps must be a nonnegative integer")
+    try:
+        step_count = as_index(steps)
+    except TypeError as exc:
+        raise ValueError("steps must be a nonnegative integer") from exc
+    if step_count < 0:
+        raise ValueError("steps must be a nonnegative integer")
     native = getattr(_extension(), "targeting_two_body_coast_bytes", None)
     if native is None:
         return None
-    raw = native(_state_bytes(state), float(step_s), int(steps), float(mu_km3_s2))
+    raw = native(_state_bytes(state), float(step_s), int(step_count), float(mu_km3_s2))
     return np.frombuffer(raw, dtype="<f8").copy().reshape(6)
 
 

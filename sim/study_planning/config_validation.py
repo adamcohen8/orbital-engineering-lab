@@ -8,7 +8,9 @@ from pathlib import Path
 from typing import Any
 
 from sim.api import SimulationWorkspace
+from sim.config.scenario.loader import load_simulation_yaml_bytes
 from sim.resource_limits import estimate_resource_requirements
+from sim.security import ConfigPathPolicy
 
 from .contracts import canonical_sha256
 
@@ -20,18 +22,25 @@ def validate_config_path(
     config_path: str | Path,
     *,
     workspace_root: str | Path | None = None,
+    content: bytes | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
-    """Safely validate one configuration and return a receipt plus normalized data."""
+    """Safely validate one configuration and return a receipt plus normalized data.
+
+    ``content`` is an optional descriptor-bound snapshot supplied by an
+    adapter that already authorized the input. When present, validation parses
+    those exact bytes instead of reopening ``config_path``; the path remains
+    provenance for relative references.
+    """
 
     source = Path(config_path).expanduser().resolve()
     root = Path(workspace_root or Path.cwd()).expanduser().resolve()
-    if not source.is_file():
+    if content is None and not source.is_file():
         raise FileNotFoundError("The selected study configuration is not a regular file.")
     try:
         source.relative_to(root)
     except ValueError as exc:
         raise PermissionError("Study configuration must be inside the selected local workspace.") from exc
-    raw = source.read_bytes()
+    raw = bytes(content) if content is not None else source.read_bytes()
     if len(raw) > MAX_CONFIG_BYTES:
         raise ValueError("Study configuration exceeds the 2 MB validation boundary.")
 
@@ -42,10 +51,32 @@ def validate_config_path(
         allow_config_dir_writes=True,
     )
     try:
-        config = workspace.load(source)
+        if content is None:
+            config = workspace.load(source)
+        else:
+            path_policy = ConfigPathPolicy.default(
+                config_path=source,
+                workspace_root=root,
+                read_roots=(root,),
+                write_roots=(root,),
+                allow_config_dir_writes=True,
+                require_secure_reads=True,
+            )
+            config = load_simulation_yaml_bytes(
+                raw,
+                source_path=source,
+                path_policy=path_policy,
+            )
         validation = workspace.validate(config, import_plugins=False)
         normalized = config.to_dict()
-        estimate = asdict(estimate_resource_requirements(config.to_scenario_config()))
+        # ``SimulationWorkspace.load`` returns the public ``SimulationConfig``
+        # wrapper, while ``load_simulation_yaml_bytes`` returns the underlying
+        # ``SimulationScenarioConfig``.  The resource estimator accepts the
+        # latter directly; calling ``to_scenario_config`` unconditionally makes
+        # the descriptor-bound path fail closed for every valid MCP config.
+        to_scenario_config = getattr(config, "to_scenario_config", None)
+        scenario = to_scenario_config() if callable(to_scenario_config) else config
+        estimate = asdict(estimate_resource_requirements(scenario))
         estimate["action"] = (
             "refuse"
             if estimate["risk"] == "unsafe"

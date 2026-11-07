@@ -24,8 +24,16 @@ def compute_scores(log: SimLog) -> ScoreSummary:
         ri = log.truth_by_object[oid_i][:, :3]
         for oid_j in object_ids[i + 1 :]:
             rj = log.truth_by_object[oid_j][:, :3]
-            dist = np.linalg.norm(ri - rj, axis=1)
-            min_sep = min(min_sep, float(np.min(dist)))
+            # Termination and per-object diagnostics can leave histories with
+            # different lengths.  Compare only the aligned prefix rather than
+            # failing the entire score on a partial series.
+            n = min(ri.shape[0], rj.shape[0])
+            if n == 0:
+                continue
+            dist = np.linalg.norm(ri[:n] - rj[:n], axis=1)
+            finite_dist = dist[np.isfinite(dist)]
+            if finite_dist.size:
+                min_sep = min(min_sep, float(np.min(finite_dist)))
     if np.isinf(min_sep):
         min_sep = 0.0
 
@@ -41,6 +49,11 @@ def compute_scores(log: SimLog) -> ScoreSummary:
         runtime = np.asarray(log.controller_runtime_ms_by_object[oid], dtype=float).reshape(-1)
         skipped = np.asarray(log.controller_skipped_by_object[oid], dtype=bool).reshape(-1)
         rt = runtime[1:] if runtime.size > 1 else np.empty(0, dtype=float)
+        # A controller may leave an invalid timing sample when a run is
+        # interrupted or a timing source is unavailable.  Keep the score
+        # finite and let the remaining measured samples determine the
+        # summary instead of propagating NaN/inf through every statistic.
+        rt = rt[np.isfinite(rt)]
         skip = skipped[1:] if skipped.size > 1 else np.empty(0, dtype=bool)
         overruns[oid] = int(np.sum(skip))
         if rt.size == 0:

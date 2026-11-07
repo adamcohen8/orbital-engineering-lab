@@ -72,24 +72,45 @@ def _resolve_preset_path(
             candidates.append(repo_root / "sim" / "presets" / "objects" / ref_path.with_suffix(".yaml"))
 
     for candidate in candidates:
-        if candidate.is_file():
-            if path_policy is None:
+        if path_policy is None:
+            if candidate.is_file():
                 return candidate
-            return path_policy.resolve_input_file(candidate, purpose=f"{role}.preset", must_exist=True)
+            continue
+        try:
+            # Resolve the logical candidate here and perform the one
+            # descriptor-bound content read in ``_load_yaml_mapping``.  A
+            # separate retained-file check would authorize one inode and then
+            # reopen the visible path for YAML parsing, leaving a replacement
+            # window between the two operations.
+            return path_policy.resolve_input_file(candidate, purpose=f"{role}.preset")
+        except FileNotFoundError:
+            continue
 
     checked = ", ".join(str(c) for c in candidates)
     raise FileNotFoundError(f"Could not resolve {role} preset YAML '{preset_ref}'. Checked: {checked}")
 
 
-def _load_yaml_mapping(path: Path, section_name: str) -> dict[str, Any]:
+def _load_yaml_mapping(
+    path: Path,
+    section_name: str,
+    *,
+    path_policy: ConfigPathPolicy | None = None,
+) -> dict[str, Any]:
     try:
         import yaml  # type: ignore
     except Exception as exc:
         raise RuntimeError(
             "PyYAML is required to load simulation YAML configs. Install with `pip install pyyaml`."
         ) from exc
-    with path.open("r", encoding="utf-8") as f:
-        raw = yaml.safe_load(f) or {}
+    if path_policy is None:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    else:
+        _logical, text = path_policy.read_input_text(
+            path,
+            purpose=section_name,
+            max_bytes=2_000_000,
+        )
+        raw = yaml.safe_load(text) or {}
     if not isinstance(raw, dict):
         raise ValueError(f"{section_name} YAML root must be a mapping/object.")
     return dict(raw)
@@ -129,7 +150,11 @@ def _resolve_agent_preset(
         role=role,
         path_policy=path_policy,
     )
-    preset_raw = _load_yaml_mapping(preset_path, f"{role} preset")
+    preset_raw = _load_yaml_mapping(
+        preset_path,
+        f"{role} preset",
+        path_policy=path_policy,
+    )
     preset_fragment = _agent_fragment_from_preset(preset_raw, role=role, preset_path=preset_path)
     local_fragment = {k: v for k, v in d.items() if k not in _AGENT_PRESET_KEYS}
     merged = _deep_merge_dicts(preset_fragment, local_fragment)

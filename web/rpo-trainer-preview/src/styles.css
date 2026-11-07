@@ -568,6 +568,10 @@ h1 {
   display: none;
 }
 
+#topTimingMetric.timing-warning {
+  color: var(--hint);
+}
+
 .objective-checklist {
   min-width: 0;
   display: grid;

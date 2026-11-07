@@ -357,6 +357,26 @@ def test_lambert_rejects_exact_same_position_singular_geometry() -> None:
         solve_lambert_universal_variable(r1_km, r1_km, 100.0)
 
 
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"r1_km": np.array([7000.0, np.nan, 0.0])}, "r1_km must be finite"),
+        ({"r2_km": np.array([7000.0, 0.0])}, "r2_km must contain exactly three"),
+        ({"max_iterations": 0}, "max_iterations must be a positive integer"),
+        ({"tolerance_s": np.nan}, "tolerance_s must be finite and positive"),
+    ],
+)
+def test_lambert_rejects_invalid_inputs_before_backend_dispatch(kwargs: dict, message: str) -> None:
+    base = {
+        "r1_km": np.array([7000.0, 0.0, 0.0]),
+        "r2_km": np.array([0.0, 8000.0, 0.0]),
+        "time_of_flight_s": 4200.0,
+        "backend": "rust",
+    }
+    with pytest.raises(ValueError, match=message):
+        solve_lambert_universal_variable(**{**base, **kwargs})
+
+
 def test_lambert_handles_high_energy_short_time_of_flight() -> None:
     r1_km = np.array([7000.0, 0.0, 0.0])
     r2_km = np.array([0.0, 7000.0, 0.0])

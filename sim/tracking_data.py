@@ -165,6 +165,14 @@ def normalize_tdm_tracking_dataset(
                 else _epoch_tai_seconds({"epoch_utc": observation.epoch_utc})
             )
             epoch_jd_utc = _epoch_jd_utc({"epoch_utc": observation.epoch_utc})
+            _validate_epoch_consistency(
+                {
+                    "epoch_utc": observation.epoch_utc,
+                    "time_tai_seconds": observation.epoch_tai_seconds,
+                },
+                epoch_jd_utc=epoch_jd_utc,
+                epoch_tai_seconds=epoch_tai_seconds,
+            )
             group = grouped.setdefault(
                 epoch_tai_seconds,
                 {
@@ -259,11 +267,17 @@ def _normalize_station_catalog(value: Any) -> dict[str, dict[str, float | str]]:
         station_key = station_id.strip()
         if not station_key:
             raise ValueError("tracking station IDs must be non-empty.")
+        if station_key in stations:
+            raise ValueError(f"tracking station {station_key!r} is declared more than once.")
         if not {"lat_deg", "lon_deg"}.issubset(raw):
             raise ValueError(f"tracking station {station_key!r} requires lat_deg and lon_deg.")
         coordinates = np.array([raw["lat_deg"], raw["lon_deg"], raw.get("alt_km", 0.0)], dtype=float)
         if not np.all(np.isfinite(coordinates)):
             raise ValueError(f"tracking station {station_key!r} coordinates must be finite.")
+        if not -90.0 <= coordinates[0] <= 90.0:
+            raise ValueError(f"tracking station {station_key!r} latitude must lie within [-90, 90] degrees.")
+        if not -180.0 <= coordinates[1] <= 180.0:
+            raise ValueError(f"tracking station {station_key!r} longitude must lie within [-180, 180] degrees.")
         stations[station_key] = {
             "id": station_key,
             "lat_deg": float(coordinates[0]),
@@ -295,7 +309,15 @@ def _adapt_observations(
         if unknown:
             raise ValueError(f"tracking observation {index} has unsupported measurements: {unknown}.")
         row = _base_row(item, station_id=station_id, station=station, default_id=f"tracking:{index}")
-        row.update({"components": components, "vector": [float(measurements[name]) for name in components]})
+        row.update(
+            {
+                "components": components,
+                "vector": [
+                    _measurement_value(measurements[name], component=name, context=f"tracking observation {index}")
+                    for name in components
+                ],
+            }
+        )
         _copy_uncertainty(item, row)
         rows.append(row)
     return rows
@@ -308,7 +330,7 @@ def _adapt_observable_records(
     format_name: str,
 ) -> list[dict[str, Any]]:
     component_map = _TDM_COMPONENT_MAP if format_name == "ccsds_tdm_compatible_json" else _OEL_COMPONENT_MAP
-    grouped: dict[tuple[str, float], dict[str, Any]] = {}
+    grouped: dict[tuple[str, str, float], dict[str, Any]] = {}
     for index, raw_record in enumerate(records):
         record = dict(raw_record or {})
         keyword = str(record.get("keyword", "") or "").strip().upper()
@@ -321,13 +343,24 @@ def _adapt_observable_records(
         station_id = str(record.get("station_id", "") or "").strip()
         station = _station(stations, station_id)
         epoch_jd_utc = _epoch_jd_utc(record)
-        key = (station_id, epoch_jd_utc)
+        epoch_tai_seconds = _epoch_tai_seconds(record) if _has_exact_epoch(record) else None
+        _validate_epoch_consistency(record, epoch_jd_utc=epoch_jd_utc, epoch_tai_seconds=epoch_tai_seconds)
+        # Julian dates are useful for interoperability but do not retain enough
+        # binary64 precision to identify sub-millisecond records.  Group by the
+        # exact parsed epoch whenever the source supplies UTC or TAI identity;
+        # retain the scalar JD only as the explicitly approximate fallback.
+        key = (
+            station_id,
+            "tai_seconds" if epoch_tai_seconds is not None else "julian_date",
+            epoch_tai_seconds if epoch_tai_seconds is not None else epoch_jd_utc,
+        )
         group = grouped.setdefault(
             key,
             {
                 "station_id": station_id,
                 "station_metadata": dict(station),
                 "time_jd_utc": epoch_jd_utc,
+                **({"time_tai_seconds": epoch_tai_seconds} if epoch_tai_seconds is not None else {}),
                 "components": [],
                 "vector": [],
                 "source_keywords": [],
@@ -336,13 +369,30 @@ def _adapt_observable_records(
         )
         component = component_map[keyword]
         if component in group["components"]:
-            raise ValueError(f"duplicate {keyword} record for station {station_id!r} at JD {epoch_jd_utc}.")
+            epoch_label = (
+                f"TAI seconds {epoch_tai_seconds}"
+                if epoch_tai_seconds is not None
+                else f"JD {epoch_jd_utc}"
+            )
+            raise ValueError(f"duplicate {keyword} record for station {station_id!r} at {epoch_label}.")
         group["components"].append(component)
-        group["vector"].append(float(record["value"]))
+        group["vector"].append(
+            _measurement_value(record.get("value"), component=component, context=f"tracking observable {keyword!r}")
+        )
         group["source_keywords"].append(keyword)
         group["source_indices"].append(index)
     rows = []
-    for row_index, ((_station_id, _epoch), group) in enumerate(sorted(grouped.items())):
+
+    def _group_sort_key(group: Mapping[str, Any]) -> tuple[float, int, float, str]:
+        exact_epoch = group.get("time_tai_seconds")
+        return (
+            float(group["time_jd_utc"]),
+            0 if exact_epoch is not None else 1,
+            float(exact_epoch) if exact_epoch is not None else 0.0,
+            str(group["station_id"]),
+        )
+
+    for row_index, group in enumerate(sorted(grouped.values(), key=_group_sort_key)):
         group["measurement_id"] = f"tracking-group:{row_index}"
         group["measurement_type"] = "+".join(group["components"])
         rows.append(group)
@@ -356,7 +406,7 @@ def _base_row(
     station: Mapping[str, Any],
     default_id: str,
 ) -> dict[str, Any]:
-    return {
+    row = {
         "measurement_id": str(item.get("measurement_id", default_id) or default_id),
         "station_id": station_id,
         "station_metadata": dict(station),
@@ -364,6 +414,14 @@ def _base_row(
         "measurement_type": str(item.get("measurement_type", "tracking_adapter") or "tracking_adapter"),
         "arc_id": str(item.get("arc_id", "tracking_adapter") or "tracking_adapter"),
     }
+    if _has_exact_epoch(item):
+        row["time_tai_seconds"] = _epoch_tai_seconds(item)
+    _validate_epoch_consistency(
+        item,
+        epoch_jd_utc=float(row["time_jd_utc"]),
+        epoch_tai_seconds=row.get("time_tai_seconds"),
+    )
+    return row
 
 
 def _copy_uncertainty(source: Mapping[str, Any], target: dict[str, Any]) -> None:
@@ -402,4 +460,53 @@ def _epoch_tai_seconds(value: Mapping[str, Any]) -> float:
         raise ValueError("tracking observation requires time_tai_seconds or epoch_utc.")
     if not np.isfinite(parsed):
         raise ValueError("tracking observation epoch must be finite.")
+    return parsed
+
+
+def _has_exact_epoch(value: Mapping[str, Any]) -> bool:
+    return value.get("time_tai_seconds") is not None or value.get("epoch_utc") is not None
+
+
+def _validate_epoch_consistency(
+    value: Mapping[str, Any],
+    *,
+    epoch_jd_utc: float,
+    epoch_tai_seconds: float | None,
+) -> None:
+    """Reject contradictory exact and scalar epoch representations.
+
+    Julian dates are retained for interoperability, but a UTC string or TAI
+    scalar is the exact grouping identity.  Accepting contradictory fields
+    would silently pair one time for grouping with another time for the OD
+    frame conversion.
+    """
+
+    epoch_utc = value.get("epoch_utc")
+    if epoch_utc is None:
+        return
+    parsed = parse_epoch(str(epoch_utc).strip(), TimeScale.UTC)
+    parsed_jd_utc = float(epoch_julian_date(parsed, TimeScale.UTC))
+    tolerance_s = 1.0e-3
+    if value.get("time_jd_utc") is not None and abs((float(epoch_jd_utc) - parsed_jd_utc) * 86400.0) > tolerance_s:
+        raise ValueError("tracking observation time_jd_utc is inconsistent with epoch_utc.")
+    if value.get("time_tai_seconds") is not None and epoch_tai_seconds is not None:
+        if abs(float(epoch_tai_seconds) - float(parsed.tai_seconds)) > tolerance_s:
+            raise ValueError("tracking observation time_tai_seconds is inconsistent with epoch_utc.")
+
+
+def _measurement_value(value: Any, *, component: str, context: str) -> float:
+    if isinstance(value, (bool, np.bool_)):
+        raise ValueError(f"{context} {component} must be a finite numeric value.")
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{context} {component} must be a finite numeric value.") from exc
+    if not math.isfinite(parsed):
+        raise ValueError(f"{context} {component} must be a finite numeric value.")
+    if component == "azimuth_deg" and not -180.0 <= parsed < 360.0:
+        raise ValueError(f"{context} azimuth_deg must lie within [-180, 360) degrees.")
+    if component == "elevation_deg" and not -90.0 <= parsed <= 90.0:
+        raise ValueError(f"{context} elevation_deg must lie within [-90, 90] degrees.")
+    if component == "range_km" and parsed < 0.0:
+        raise ValueError(f"{context} range_km must be nonnegative.")
     return parsed

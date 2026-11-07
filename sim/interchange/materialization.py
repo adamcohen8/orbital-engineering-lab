@@ -74,6 +74,10 @@ def materialize_onp(
     duration_s: float,
     dt_s: float,
     manifest_path: str | Path | None = None,
+    logical_scenario_path: str | Path | None = None,
+    logical_manifest_path: str | Path | None = None,
+    logical_output_dir: str | Path | None = None,
+    validation_path_policy: Any | None = None,
     trust_plugins: bool = False,
     overwrite: bool = False,
 ) -> dict[str, Any]:
@@ -83,6 +87,21 @@ def materialize_onp(
         Path(manifest_path).expanduser().resolve()
         if manifest_path is not None
         else destination.with_name(f"{destination.stem}.handoff_manifest.json")
+    )
+    logical_destination = (
+        Path(logical_scenario_path).expanduser().resolve()
+        if logical_scenario_path is not None
+        else destination
+    )
+    logical_manifest_target = (
+        Path(logical_manifest_path).expanduser().resolve()
+        if logical_manifest_path is not None
+        else logical_destination.with_name(f"{logical_destination.stem}.handoff_manifest.json")
+    )
+    logical_output = (
+        Path(logical_output_dir).expanduser().resolve()
+        if logical_output_dir is not None
+        else Path(output_dir).expanduser().resolve()
     )
     _ensure_distinct_materialization_paths(
         (("source product", product_path), ("scenario", destination), ("manifest", manifest_target)),
@@ -103,8 +122,8 @@ def materialize_onp(
         source_hash=source_hash,
         product=product,
         scenario_name=scenario_name,
-        destination=destination,
-        output_dir=output_dir,
+        destination=logical_destination,
+        output_dir=logical_output,
         duration_s=duration_s,
         dt_s=dt_s,
         overwrite=overwrite,
@@ -162,15 +181,19 @@ def materialize_onp(
     scenario = build_onp_scenario(
         product,
         scenario_name=str(scenario_name).strip(),
-        output_dir=output_dir,
+        output_dir=logical_output,
         duration_s=float(duration_s),
         dt_s=float(dt_s),
-        manifest_path=manifest_target,
+        manifest_path=logical_manifest_target,
     )
     return materialize_scenario_document(
         scenario=scenario,
         destination=destination,
         manifest_target=manifest_target,
+        logical_destination=logical_destination,
+        logical_manifest_target=logical_manifest_target,
+        logical_output_dir=logical_output,
+        validation_path_policy=validation_path_policy,
         base_manifest=base_manifest,
         product_report=product_report.to_dict(),
         output_kind="onp_scenario",
@@ -188,6 +211,9 @@ def materialize_ogp(
     duration_s: float,
     dt_s: float,
     manifest_path: str | Path | None = None,
+    logical_scenario_path: str | Path | None = None,
+    logical_manifest_path: str | Path | None = None,
+    logical_output_dir: str | Path | None = None,
     trust_plugins: bool = False,
     overwrite: bool = False,
 ) -> dict[str, Any]:
@@ -199,6 +225,21 @@ def materialize_ogp(
         Path(manifest_path).expanduser().resolve()
         if manifest_path is not None
         else destination.with_name(f"{destination.stem}.handoff_manifest.json")
+    )
+    logical_destination = (
+        Path(logical_scenario_path).expanduser().resolve()
+        if logical_scenario_path is not None
+        else destination
+    )
+    logical_manifest_target = (
+        Path(logical_manifest_path).expanduser().resolve()
+        if logical_manifest_path is not None
+        else logical_destination.with_name(f"{logical_destination.stem}.handoff_manifest.json")
+    )
+    logical_output = (
+        Path(logical_output_dir).expanduser().resolve()
+        if logical_output_dir is not None
+        else Path(output_dir).expanduser().resolve()
     )
     _ensure_distinct_materialization_paths(
         (("source product", product_path), ("scenario", destination), ("manifest", manifest_target)),
@@ -216,8 +257,8 @@ def materialize_ogp(
         source_hash=sha256_file(product_path),
         product=product,
         scenario_name=scenario_name,
-        destination=destination,
-        output_dir=output_dir,
+        destination=logical_destination,
+        output_dir=logical_output,
         duration_s=duration_s,
         dt_s=dt_s,
         overwrite=overwrite,
@@ -250,15 +291,18 @@ def materialize_ogp(
     scenario = build_ogp_scenario(
         product,
         scenario_name=str(scenario_name).strip(),
-        output_dir=output_dir,
+        output_dir=logical_output,
         duration_s=float(duration_s),
         dt_s=float(dt_s),
-        manifest_path=manifest_target,
+        manifest_path=logical_manifest_target,
     )
     return materialize_scenario_document(
         scenario=scenario,
         destination=destination,
         manifest_target=manifest_target,
+        logical_destination=logical_destination,
+        logical_manifest_target=logical_manifest_target,
+        logical_output_dir=logical_output,
         base_manifest=base,
         product_report=report.to_dict(),
         output_kind="ogp_scenario",
@@ -272,6 +316,12 @@ def materialize_scenario_document(
     scenario: Mapping[str, Any],
     destination: str | Path,
     manifest_target: str | Path,
+    protected_paths: tuple[tuple[str, str | Path], ...] = (),
+    collision_error_type: type[ValueError] = ValueError,
+    logical_destination: str | Path | None = None,
+    logical_manifest_target: str | Path | None = None,
+    logical_output_dir: str | Path | None = None,
+    validation_path_policy: Any | None = None,
     base_manifest: Mapping[str, Any],
     product_report: Mapping[str, Any],
     output_kind: str,
@@ -282,10 +332,36 @@ def materialize_scenario_document(
 
     destination = Path(destination).expanduser().resolve()
     manifest_target = Path(manifest_target).expanduser().resolve()
-    _ensure_distinct_materialization_paths((("scenario", destination), ("manifest", manifest_target)))
+    logical_destination = (
+        Path(logical_destination).expanduser().resolve()
+        if logical_destination is not None
+        else destination
+    )
+    logical_manifest_target = (
+        Path(logical_manifest_target).expanduser().resolve()
+        if logical_manifest_target is not None
+        else manifest_target
+    )
+    scenario_document = _bind_scenario_paths(
+        scenario,
+        logical_manifest_target=logical_manifest_target,
+        logical_output_dir=logical_output_dir,
+    )
+    base_manifest = _bind_manifest_paths(
+        base_manifest,
+        logical_destination=logical_destination,
+        logical_output_dir=logical_output_dir,
+    )
+    protected = tuple(
+        (str(label), Path(path).expanduser().resolve()) for label, path in protected_paths
+    )
+    _ensure_distinct_materialization_paths(
+        (*protected, ("scenario", destination), ("manifest", manifest_target)),
+        collision_error_type,
+    )
     created_utc = str(base_manifest.get("created_utc", "") or _now_utc())
     try:
-        artifact = ScenarioArtifact.from_dict(scenario)
+        artifact = ScenarioArtifact.from_dict(scenario_document)
     except (TypeError, ValueError) as exc:
         manifest = _failed_manifest(
             base_manifest,
@@ -310,7 +386,7 @@ def materialize_scenario_document(
             failures=[
                 {
                     "code": "output.exists",
-                    "path": str(destination),
+                    "path": str(logical_destination),
                     "message": "Destination exists with different content; pass overwrite=True explicitly to replace it.",
                 }
             ],
@@ -323,7 +399,7 @@ def materialize_scenario_document(
         pending_manifest = deepcopy(base_manifest)
         pending_manifest["output"] = {
             "kind": str(output_kind),
-            "path": str(destination),
+            "path": str(logical_destination),
             "status": "materializing",
         }
         write_handoff_manifest(pending_manifest, manifest_target)
@@ -343,7 +419,7 @@ def materialize_scenario_document(
                             failures=[
                                 {
                                     "code": "output.exists",
-                                    "path": str(destination),
+                                    "path": str(logical_destination),
                                     "message": (
                                         "Destination appeared during materialization with different content; "
                                         "pass overwrite=True explicitly to replace it."
@@ -357,12 +433,39 @@ def materialize_scenario_document(
         finally:
             temporary.unlink(missing_ok=True)
 
-    from sim.api import SimulationWorkspace
+    from sim.api import SimulationConfig, SimulationWorkspace
 
     workspace = SimulationWorkspace()
-    safe_validation = workspace.validate_safe(destination)
+    if validation_path_policy is None:
+        validation_config: Any = destination
+        safe_validation = workspace.validate_safe(validation_config)
+    else:
+        try:
+            validation_config = SimulationConfig.from_dict(
+                scenario_document,
+                source_path=destination,
+                path_policy=validation_path_policy,
+            )
+            safe_validation = workspace.validate_safe(validation_config)
+        except Exception as exc:
+            validation_config = None
+            safe_validation = {
+                "ok": False,
+                "status": "failed",
+                "config_path": str(destination),
+                "errors": [str(exc)],
+            }
+    safe_validation = _bind_validation_result_paths(
+        safe_validation,
+        physical_destination=destination,
+        logical_destination=logical_destination,
+    )
     if trust_plugins and bool(safe_validation.get("ok", False)):
-        ordinary_validation = workspace.validate(destination, import_plugins=True)
+        ordinary_validation = _bind_validation_result_paths(
+            workspace.validate(validation_config, import_plugins=True),
+            physical_destination=destination,
+            logical_destination=logical_destination,
+        )
     else:
         ordinary_validation = {
             "ok": None,
@@ -384,14 +487,14 @@ def materialize_scenario_document(
         failures.append(
             {
                 "code": "output.changed_during_validation",
-                "path": str(destination),
+                "path": str(logical_destination),
                 "message": "Scenario content changed during validation; materialization is not reported as successful.",
             }
         )
     manifest = deepcopy(base_manifest)
     manifest["output"] = {
         "kind": str(output_kind),
-        "path": str(destination),
+        "path": str(logical_destination),
         "digest": scenario_digest,
         "status": output_status,
     }
@@ -402,7 +505,7 @@ def materialize_scenario_document(
     }
     manifest["failures"] = failures
     manifest["recommended_next_action"] = (
-        f"Review the scenario, then execute separately with: .venv/bin/python run_simulation.py --config {destination}"
+        f"Review the scenario, then execute separately with: .venv/bin/python run_simulation.py --config {logical_destination}"
         if validation_ok
         else "Correct the generated scenario validation failures before execution."
     )
@@ -413,7 +516,7 @@ def materialize_scenario_document(
         manifest["failures"].append(
             {
                 "code": "output.changed_during_validation",
-                "path": str(destination),
+                "path": str(logical_destination),
                 "message": "Scenario content changed before materialization completed; success is withdrawn.",
             }
         )
@@ -428,6 +531,76 @@ def materialize_scenario_document(
         manifest,
         product_report,
     )
+
+
+def _bind_scenario_paths(
+    scenario: Mapping[str, Any],
+    *,
+    logical_manifest_target: Path,
+    logical_output_dir: str | Path | None,
+) -> dict[str, Any]:
+    """Bind final logical paths before YAML serialization and validation."""
+
+    bound = deepcopy(dict(scenario))
+    if logical_output_dir is not None:
+        outputs = bound.setdefault("outputs", {})
+        if isinstance(outputs, dict):
+            outputs["output_dir"] = str(Path(logical_output_dir).expanduser().resolve())
+    metadata = bound.get("metadata")
+    if isinstance(metadata, dict) and isinstance(metadata.get("handoff"), dict):
+        metadata["handoff"]["manifest_path"] = str(logical_manifest_target)
+    return bound
+
+
+def _bind_manifest_paths(
+    manifest: Mapping[str, Any],
+    *,
+    logical_destination: Path,
+    logical_output_dir: str | Path | None,
+) -> dict[str, Any]:
+    """Bind manifest descriptor paths before identity finalization or writes."""
+
+    bound = deepcopy(dict(manifest))
+    options = bound.get("materialization_options")
+    if isinstance(options, dict):
+        options["scenario_path"] = str(logical_destination)
+        if logical_output_dir is not None:
+            options["output_dir"] = str(Path(logical_output_dir).expanduser().resolve())
+    output = bound.get("output")
+    if isinstance(output, dict):
+        output["path"] = str(logical_destination)
+    return bound
+
+
+def _bind_validation_result_paths(
+    validation: Mapping[str, Any],
+    *,
+    physical_destination: Path,
+    logical_destination: Path,
+) -> dict[str, Any]:
+    """Bind path-bearing validation metadata before it enters a manifest."""
+
+    bound = deepcopy(dict(validation))
+    physical_text = str(physical_destination)
+    logical_text = str(logical_destination)
+    if bound.get("config_path") == physical_text:
+        bound["config_path"] = logical_text
+    errors = bound.get("errors")
+    if isinstance(errors, list):
+        bound["errors"] = [
+            item.replace(physical_text, logical_text) if isinstance(item, str) else item
+            for item in errors
+        ]
+    for section_name in ("plugins", "generated"):
+        section = bound.get(section_name)
+        if isinstance(section, dict):
+            section_errors = section.get("errors")
+            if isinstance(section_errors, list):
+                section["errors"] = [
+                    item.replace(physical_text, logical_text) if isinstance(item, str) else item
+                    for item in section_errors
+                ]
+    return bound
 
 
 def _write_materialization_temp(destination: Path, yaml_text: str) -> Path:

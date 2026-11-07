@@ -3,8 +3,6 @@ from __future__ import annotations
 import hashlib
 import math
 import os
-import tempfile
-import urllib.request
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -20,6 +18,12 @@ from sim.dynamics.orbit.frames import (
     eci_to_ecef_rotation,
     eci_to_ecef_rotation_hpop_like,
     normalize_frame_model,
+)
+from sim.dynamics.orbit.gravity_assets import (
+    REAL_MODEL_DOWNLOADS as _REAL_MODEL_DOWNLOADS,
+)
+from sim.dynamics.orbit.gravity_assets import (
+    GravityModelDownload as GravityModelDownload,
 )
 
 _NORMALIZED_SPHERICAL_HARMONIC_ACCEL_ECI_KERNEL = None
@@ -63,14 +67,8 @@ class SphericalHarmonicTerm:
             raise ValueError("n must be >= 2 for perturbation terms.")
         if self.m < 0 or self.m > self.n:
             raise ValueError("m must satisfy 0 <= m <= n.")
-
-
-@dataclass(frozen=True)
-class GravityModelDownload:
-    urls: tuple[str, ...]
-    sha256: str
-    min_size_bytes: int = 1
-    size_bytes: int | None = None
+        if not math.isfinite(float(self.c_nm)) or not math.isfinite(float(self.s_nm)):
+            raise ValueError("spherical harmonic coefficients must be finite.")
 
 
 @dataclass(frozen=True)
@@ -923,18 +921,6 @@ def load_hpop_ggm03_terms(
     return out
 
 
-_REAL_MODEL_DOWNLOADS = {
-    "EGM96": GravityModelDownload(
-        urls=(
-            # SatelliteToolboxGravityModels.jl documented direct ICGEM link.
-            "https://icgem.gfz-potsdam.de/getmodel/gfc/"
-            "971b0a3b49a497910aad23cd85e066d4cd9af0aeafe7ce6301a696bed8570be3/EGM96.gfc",
-        ),
-        sha256="5247a9e9c316dd2c8f8fd491d53be0e163cb5cb3676b021754240cc9e44cb43b",
-        min_size_bytes=5_000_000,
-        size_bytes=5_620_000,
-    )
-}
 
 
 def _gravity_model_download_allowed(requested: bool) -> bool:
@@ -985,38 +971,11 @@ def _verify_downloaded_model_file(model: str, path: Path) -> None:
 
 
 def _download_model_file(model: str, outpath: Path) -> None:
-    spec = _REAL_MODEL_DOWNLOADS.get(model.upper())
-    urls = () if spec is None else spec.urls
-    last_err: Exception | None = None
-    for url in urls:
-        tmp_path: Path | None = None
-        try:
-            outpath.parent.mkdir(parents=True, exist_ok=True)
-            with tempfile.NamedTemporaryFile(
-                prefix=f".{outpath.name}.",
-                suffix=".tmp",
-                dir=outpath.parent,
-                delete=False,
-            ) as tmp:
-                tmp_path = Path(tmp.name)
-                with urllib.request.urlopen(url, timeout=120.0) as response:
-                    while True:
-                        chunk = response.read(1024 * 1024)
-                        if not chunk:
-                            break
-                        tmp.write(chunk)
-                tmp.flush()
-                os.fsync(tmp.fileno())
-            _verify_downloaded_model_file(model=model, path=tmp_path)
-            os.replace(tmp_path, outpath)
-            return
-        except Exception as exc:
-            last_err = exc
-            if tmp_path is not None:
-                tmp_path.unlink(missing_ok=True)
-    if last_err is not None:
-        raise RuntimeError(f"Failed downloading gravity model '{model}' to {outpath}: {last_err}") from last_err
-    raise RuntimeError(f"No download URL configured for gravity model '{model}'.")
+    from sim.data_acquisition.gravity_cache import download_model_file
+
+    if not _gravity_model_download_allowed(True):
+        raise RuntimeError("Sealed mode blocks gravity-model downloads.")
+    download_model_file(model, outpath, _REAL_MODEL_DOWNLOADS.get(model.upper()), _verify_downloaded_model_file)
 
 
 @lru_cache(maxsize=16)

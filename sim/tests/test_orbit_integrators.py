@@ -7,6 +7,7 @@ import numpy as np
 from sim.config import scenario_config_from_dict
 from sim.dynamics.orbit.accelerations import OrbitContext
 from sim.dynamics.orbit.integrators import integrate_adaptive, rkf78_stage_trace, rkf78_step
+from sim.dynamics.orbit.propagator import OrbitPropagator
 from sim.runtime_support import _build_orbit_propagator
 
 
@@ -102,6 +103,58 @@ class TestOrbitIntegrators(unittest.TestCase):
                 x=np.array([1.0], dtype=float),
                 dt_s=float("nan"),
             )
+
+    def test_adaptive_integrator_rejects_nonpositive_substep_budget(self):
+        with self.assertRaisesRegex(ValueError, "max_substeps must be a positive integer"):
+            integrate_adaptive(
+                deriv_fn=lambda _t_s, x: x,
+                t_s=0.0,
+                x=np.array([1.0], dtype=float),
+                dt_s=1.0,
+                max_substeps=0,
+            )
+
+    def test_hpop_integrator_rejects_nonpositive_attempt_budget(self):
+        from sim.dynamics.orbit.integrators import integrate_rkf78_hpop
+
+        with self.assertRaisesRegex(ValueError, "max_attempts must be a positive integer"):
+            integrate_rkf78_hpop(
+                deriv_fn=lambda _t_s, x: x,
+                t_s=0.0,
+                x=np.array([1.0], dtype=float),
+                dt_s=1.0,
+                max_attempts=0,
+            )
+
+    def test_orbit_propagator_rejects_nonfinite_inputs_before_backend_dispatch(self):
+        propagator = OrbitPropagator(model="two_body", numeric_backend="python")
+        context = OrbitContext(mu_km3_s2=398600.4418, mass_kg=100.0)
+        with self.assertRaisesRegex(ValueError, "state must be finite"):
+            propagator.propagate(
+                np.array([7000.0, 0.0, 0.0, 0.0, np.nan, 0.0]),
+                1.0,
+                0.0,
+                np.zeros(3),
+                {},
+                context,
+            )
+        with self.assertRaisesRegex(ValueError, "dt_s must be finite"):
+            propagator.propagate(
+                np.array([7000.0, 0.0, 0.0, 0.0, 7.5, 0.0]),
+                float("nan"),
+                0.0,
+                np.zeros(3),
+                {},
+                context,
+            )
+
+    def test_python_rk4_preserves_signed_short_coasts_for_tracking(self):
+        propagator = OrbitPropagator(model="two_body", numeric_backend="python", integrator="rk4")
+        context = OrbitContext(mu_km3_s2=398600.4418, mass_kg=100.0)
+        initial = np.array([7000.0, 0.0, 0.0, 0.0, 7.5, 0.0])
+        forward = propagator.propagate(initial, 0.1, 0.0, np.zeros(3), {}, context)
+        restored = propagator.propagate(forward, -0.1, 0.1, np.zeros(3), {}, context)
+        np.testing.assert_allclose(restored, initial, rtol=0.0, atol=1e-10)
 
     def test_adaptive_tolerance_tightening_reduces_error(self):
         def deriv(_t_s: float, x: np.ndarray) -> np.ndarray:

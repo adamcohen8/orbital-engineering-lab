@@ -17,7 +17,10 @@ class RectangularPrismGeometry:
     lz_m: float
 
     def __post_init__(self) -> None:
-        if self.lx_m <= 0.0 or self.ly_m <= 0.0 or self.lz_m <= 0.0:
+        dimensions = np.asarray((self.lx_m, self.ly_m, self.lz_m), dtype=float)
+        if not np.all(np.isfinite(dimensions)):
+            raise ValueError("Rectangular prism dimensions must be finite.")
+        if np.any(dimensions <= 0.0):
             raise ValueError("Rectangular prism dimensions must be positive.")
 
     def face_centers_body_m(self) -> np.ndarray:
@@ -181,6 +184,8 @@ class GeometryAreaProfile:
         triangles = np.asarray(vertices_body_m, dtype=float)
         if triangles.ndim != 3 or triangles.shape[1:] != (3, 3) or triangles.shape[0] == 0:
             raise ValueError("Mesh triangles must be an Nx3x3 array of body-frame vertices in meters.")
+        if not np.all(np.isfinite(triangles)):
+            raise ValueError("Mesh triangles must contain finite vertex coordinates.")
         edge_a = triangles[:, 1, :] - triangles[:, 0, :]
         edge_b = triangles[:, 2, :] - triangles[:, 0, :]
         area_vectors = 0.5 * np.cross(edge_a, edge_b)
@@ -198,6 +203,8 @@ class GeometryAreaProfile:
             normals_raw = np.asarray(normals_body, dtype=float)
             if normals_raw.shape != (keep.shape[0], 3):
                 raise ValueError("Mesh normals must be an Nx3 array matching the input triangles.")
+            if not np.all(np.isfinite(normals_raw)):
+                raise ValueError("Mesh normals must contain finite values.")
             normals_raw = normals_raw[keep]
             normal_norms = np.linalg.norm(normals_raw, axis=1)
             normals = np.divide(

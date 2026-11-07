@@ -5,6 +5,7 @@ from pathlib import Path
 
 from sim.config import scenario_config_from_dict as _parse_scenario_config_dict
 from sim.config import validate_scenario_plugins
+from sim.config.plugin_validation import _validate_object_knowledge
 from sim.runtime.actuator_factory import _build_satellite_actuator_stack_from_specs
 
 DEEP_SPACE_LINE1 = "1 90003U 24003A   24001.00000000  .00000000  00000+0  00000+0 0    10"
@@ -295,6 +296,24 @@ class TestPluginValidation(unittest.TestCase):
         )
 
         self.assertEqual(validate_scenario_plugins(cfg), [])
+
+    def test_knowledge_validation_rejects_malformed_targets_and_ekf_diagonals(self):
+        errors = _validate_object_knowledge(
+            {
+                "targets": {"target": True},
+                "estimation": {
+                    "ekf": {
+                        "process_noise_diag": [1.0, 2.0, 3.0],
+                        "init_cov_diag": [1.0, -1.0, 1.0, 1.0, 1.0, 1.0],
+                    }
+                },
+            },
+            "objects.chaser.knowledge",
+        )
+
+        self.assertTrue(any("targets" in error and "list" in error for error in errors))
+        self.assertTrue(any("process_noise_diag" in error and "six" in error for error in errors))
+        self.assertTrue(any("init_cov_diag" in error and ">= 0" in error for error in errors))
 
     def test_knowledge_sensor_error_rejects_nonfinite_and_negative_noise(self):
         for field_name, value in (

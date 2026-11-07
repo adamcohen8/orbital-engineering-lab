@@ -36,8 +36,11 @@ is required for orbit estimation; initial orbit determination is not included.
    and range masks. Outages suppress tracking, downlink, and uplink independently.
 2. Stations with `measurements.enabled` generate existing seeded noisy azimuth,
    elevation, range, and optional range-rate observations. The streaming sampler
-   preserves the batch sensor's random sequence and cadence. Truth diagnostics
-   are removed before observations reach the receiver.
+   preserves the batch sensor's random sequence and cadence. Raw Gaussian
+   draws are retained with a `valid` disposition and reason; impossible
+   angular/range draws remain evidence but are excluded before packet delivery
+   or observation conversion. Truth diagnostics are removed before valid
+   observations reach the receiver.
 3. Downlink samples the enabled spacecraft resource channels: temperature,
    battery SOC/energy, solar generation, demand, served/unmet load, and battery
    charge/discharge power. These are **ideal onboard sensor readings** in this

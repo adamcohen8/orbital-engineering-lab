@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from pathlib import Path
 
 import pytest
@@ -22,7 +23,12 @@ from tools.validate_ccsds_odm import _load_data_receipt as load_odm_data_receipt
 REPO_ROOT = Path(__file__).resolve().parents[2]
 OPM = REPO_ROOT / "sim/interchange/examples/oel_earth_eme2000_utc_v3.opm"
 OMM = REPO_ROOT / "sim/interchange/examples/oel_sgp4_mean_elements_v3.omm"
-MANIFEST = REPO_ROOT / "sim/interchange/examples/ccsds_odm_validation_manifest.json"
+HISTORICAL_MANIFEST = REPO_ROOT / "sim/interchange/examples/ccsds_odm_validation_manifest.json"
+CURRENT_MANIFEST = REPO_ROOT / "sim/interchange/examples/ccsds_odm_validation_manifest_v036.json"
+# The source-bound v0.36 receipt is private audit evidence.  Public exports
+# deliberately omit it and continue to exercise the retained public manifest
+# and receipt instead of relabelling the local replay as independent evidence.
+MANIFEST = CURRENT_MANIFEST if CURRENT_MANIFEST.is_file() else HISTORICAL_MANIFEST
 
 
 def test_opm_parses_round_trips_and_is_ready_for_bounded_import() -> None:
@@ -140,17 +146,82 @@ def test_tiny_negative_odm_variance_fails_closed() -> None:
         parse_odm_kvn(text)
 
 
+def _assert_retained_selected_field_replay(historical: dict[str, object]) -> None:
+    """Replay the public parser against the retained selected-field vector.
+
+    The historical report is an input vector, not a reason to skip current
+    parser execution.  This keeps the public export useful after the
+    audit-only current-source receipt is excluded.
+    """
+
+    orekit = historical["orekit"]
+    assert isinstance(orekit, dict)
+    opm = read_odm_kvn(OPM)
+    omm = read_odm_kvn(OMM)
+
+    assert isinstance(opm, OpmMessage)
+    assert isinstance(omm, OmmMessage)
+    assert math.isclose(float(opm.header.version), float(orekit["opm_version"]), abs_tol=1e-15)
+    assert opm.metadata.object_id == orekit["opm_object_id"]
+    assert opm.metadata.ref_frame == orekit["opm_frame"]
+    assert len(opm.maneuvers) == int(orekit["opm_maneuver_count"])
+    assert opm.covariance is not None
+    assert orekit["opm_covariance_present"] == "true"
+    expected_position = [float(value) for value in str(orekit["opm_position_m"]).split(",")]
+    expected_velocity = [float(value) for value in str(orekit["opm_velocity_m_s"]).split(",")]
+    actual_position = [float(opm.state[key]) * 1000.0 for key in ("X", "Y", "Z")]
+    actual_velocity = [float(opm.state[key]) * 1000.0 for key in ("X_DOT", "Y_DOT", "Z_DOT")]
+    assert all(math.isclose(actual, expected, abs_tol=1e-9) for actual, expected in zip(actual_position, expected_position))
+    assert all(math.isclose(actual, expected, abs_tol=1e-12) for actual, expected in zip(actual_velocity, expected_velocity))
+
+    assert math.isclose(float(omm.header.version), float(orekit["omm_version"]), abs_tol=1e-15)
+    assert omm.metadata.object_id == orekit["omm_object_id"]
+    assert omm.metadata.ref_frame == orekit["omm_frame"]
+    assert omm.metadata.mean_element_theory == orekit["omm_theory"]
+    assert math.isclose(
+        float(omm.mean_elements["MEAN_MOTION"]) * 2.0 * math.pi / 86400.0,
+        float(orekit["omm_mean_motion_rad_s"]),
+        abs_tol=1e-18,
+    )
+    assert math.isclose(float(omm.mean_elements["ECCENTRICITY"]), float(orekit["omm_eccentricity"]), abs_tol=1e-15)
+    assert math.isclose(
+        math.radians(float(omm.mean_elements["INCLINATION"])),
+        float(orekit["omm_inclination_rad"]),
+        abs_tol=1e-15,
+    )
+    assert omm.tle_parameters["NORAD_CAT_ID"] == orekit["omm_norad_id"]
+    assert compare_odm(opm, parse_odm_kvn(serialize_odm_kvn(opm)))["status"] == "equivalent"
+    assert compare_odm(omm, parse_odm_kvn(serialize_odm_kvn(omm)))["status"] == "equivalent"
+
+
 def test_odm_validation_manifest_is_hash_bound_and_retained_report_passes() -> None:
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     for artifact in manifest["artifacts"]:
         path = (MANIFEST.parent / artifact["path"]).resolve()
         assert path.is_file()
         assert hashlib.sha256(path.read_bytes()).hexdigest() == artifact["sha256"]
-    report = json.loads((MANIFEST.parent / "ccsds_odm_orekit_13_1_7_acceptance.json").read_text(encoding="utf-8"))
-    assert report["status"] == "pass"
-    assert report["runtime"]["orekit_version"] == "13.1.7"
-    assert all(report["checks"].values())
-    assert report["externally_validated_fields"] == {
+    if CURRENT_MANIFEST.is_file():
+        local_report = json.loads((MANIFEST.parent / "ccsds_odm_v036_local_replay.json").read_text(encoding="utf-8"))
+        historical_path = MANIFEST.parent / local_report["historical_receipt"]["path"]
+    else:
+        # Public exports retain only the historical receipt; the replay above
+        # still exercises the current exported parser against its vectors.
+        local_report = None
+        historical_path = MANIFEST.parent / "ccsds_odm_orekit_13_1_7_acceptance.json"
+    historical = json.loads(historical_path.read_text(encoding="utf-8"))
+    _assert_retained_selected_field_replay(historical)
+    assert historical["status"] == "pass"
+    assert historical["runtime"]["orekit_version"] == "13.1.7"
+    if local_report is None:
+        return
+    assert hashlib.sha256(historical_path.read_bytes()).hexdigest() == local_report["historical_receipt"]["sha256"]
+    assert local_report["status"] == "pass"
+    assert local_report["schema"] == "oel.ccsds-opm-omm-local-replay.v1"
+    assert local_report["sources"]["implementation"]["sha256"] == hashlib.sha256(
+        (MANIFEST.parent / local_report["sources"]["implementation"]["path"]).read_bytes()
+    ).hexdigest()
+    assert all(local_report["checks"].values())
+    assert local_report["retained_external_fields"] == {
         "opm": [
             "version", "object_id", "frame", "maneuver_count", "position",
             "velocity", "covariance_presence",
@@ -166,7 +237,7 @@ def test_odm_validation_manifest_is_hash_bound_and_retained_report_passes() -> N
         "omm_version", "omm_object_id", "omm_frame", "omm_theory",
         "omm_mean_motion", "omm_eccentricity", "omm_inclination", "omm_norad_id",
     }
-    assert set(report["checks"]) - mapped_checks == {"opm_roundtrip", "omm_roundtrip"}
+    assert set(local_report["checks"]) - mapped_checks == {"opm_roundtrip", "omm_roundtrip"}
 
 
 def test_odm_reference_refresh_rejects_stale_orekit_data_receipt(tmp_path: Path) -> None:

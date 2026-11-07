@@ -116,6 +116,25 @@ def test_native_mixed_batch_matches_individual_fused_calls_and_angle_wrap() -> N
     np.testing.assert_allclose(rust_pair[1], python_pair[1], rtol=0.0, atol=2.0e-12)
 
 
+def test_native_mixed_batch_accepts_per_row_finite_difference_steps() -> None:
+    target, observer = _states()
+    targets = np.vstack((target, target + np.array([0.25, -0.1, 0.3, 1.0e-4, -2.0e-4, 3.0e-4])))
+    observers = np.vstack((observer, observer + np.array([-0.05, 0.04, 0.02, 2.0e-5, -3.0e-5, 1.0e-5])))
+    models = ["relative_angles", "relative_angles_range_rate"]
+    steps = np.vstack((
+        np.array([1.0e-3, 1.0e-3, 1.0e-3, 1.0e-6, 1.0e-6, 1.0e-6]),
+        np.array([2.0e-3, 1.5e-3, 2.5e-3, 2.0e-6, 1.5e-6, 2.5e-6]),
+    ))
+
+    batch = relative_measurement_and_jacobian_batch(targets, observers, models, steps=steps)
+    for index, model in enumerate(models):
+        expected = relative_measurement_and_jacobian(
+            targets[index], observers[index], model, steps=steps[index]
+        )
+        np.testing.assert_allclose(batch[index][0], expected[0], rtol=0.0, atol=2.0e-14)
+        np.testing.assert_allclose(batch[index][1], expected[1], rtol=0.0, atol=2.0e-12)
+
+
 def test_native_seeded_random_mixed_batch_matches_reference() -> None:
     rng = np.random.default_rng(20260927)
     rows = 32

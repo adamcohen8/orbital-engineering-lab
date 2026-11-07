@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import stat
+import sys
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,39 @@ def _explicit_private_test_owner_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     """Private source tests opt in explicitly; production callers never inherit this."""
 
     monkeypatch.setenv("OEL_OWNER_MODE", "1")
+
+def _retire_test_python_provider_aliases(root: Path) -> None:
+    """Unlink known test-venv provider aliases without following their targets.
+
+    Signed installer fixtures intentionally point Python aliases at the host
+    provider. Retire those aliases after assertions so the outer scratch guard
+    can remain strict about escaping links. Unknown links are left for review.
+    """
+    if os.name != "posix" or root.is_symlink():
+        return
+    providers = {str(Path(value).resolve()) for value in (
+        sys.executable, getattr(sys, "_base_executable", sys.executable),
+    )}
+    names = {"python", "python3", f"python{sys.version_info.major}.{sys.version_info.minor}", "𝜋thon"}
+    for _directory, _children, files, directory_fd in os.fwalk(root, follow_symlinks=False):
+        for name in names.intersection(files):
+            try:
+                metadata = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+                if stat.S_ISLNK(metadata.st_mode) and os.readlink(name, dir_fd=directory_fd) in providers:
+                    os.unlink(name, dir_fd=directory_fd)
+            except FileNotFoundError:
+                continue
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_teardown(item: pytest.Item):
+    # Run after fixture finalizers, including restoration of monkeypatched OS
+    # primitives. Do not request a new temporary directory for other tests.
+    root = getattr(item, "funcargs", {}).get("tmp_path")
+    yield
+    if isinstance(root, Path) and root.exists():
+        _retire_test_python_provider_aliases(root)
+
 
 SMOKE_TEST_FILES = {
     "test_api_plugin_validation.py",

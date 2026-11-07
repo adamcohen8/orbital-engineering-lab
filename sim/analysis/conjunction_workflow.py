@@ -299,6 +299,30 @@ def _propagator(settings: PropagationSettings) -> OrbitPropagator:
     )
 
 
+def _ric_basis(state: np.ndarray) -> np.ndarray:
+    """Return the RIC basis, rejecting a degenerate angular-momentum vector."""
+
+    position = np.asarray(state[:3], dtype=float)
+    velocity = np.asarray(state[3:], dtype=float)
+    radius = float(np.linalg.norm(position))
+    angular_momentum = np.cross(position, velocity)
+    angular_momentum_norm = float(np.linalg.norm(angular_momentum))
+    if (
+        not math.isfinite(radius)
+        or radius <= 1.0e-12
+        or not np.all(np.isfinite(angular_momentum))
+        or not math.isfinite(angular_momentum_norm)
+        or angular_momentum_norm <= 1.0e-12
+    ):
+        raise ConjunctionAssessmentError(
+            "RIC burn frame requires finite position and nonzero angular momentum."
+        )
+    radial = position / radius
+    cross_track = angular_momentum / angular_momentum_norm
+    in_track = np.cross(cross_track, radial)
+    return np.column_stack((radial, in_track, cross_track))
+
+
 def propagate_history(
     initial_state: Sequence[float],
     duration_s: float,
@@ -318,11 +342,7 @@ def propagate_history(
     burn_vector = np.asarray(delta_v_m_s if delta_v_m_s is not None else [0.0, 0.0, 0.0], dtype=float)
     if burn_time_s is not None and abs(float(burn_time_s)) <= 1.0e-12:
         if burn_frame == "ric":
-            radial = state[:3] / float(np.linalg.norm(state[:3]))
-            cross_track = np.cross(state[:3], state[3:])
-            cross_track /= float(np.linalg.norm(cross_track))
-            in_track = np.cross(cross_track, radial)
-            basis = np.column_stack((radial, in_track, cross_track))
+            basis = _ric_basis(state)
         else:
             basis = np.eye(3)
         state[3:] += basis @ (burn_vector / 1000.0)
@@ -340,11 +360,7 @@ def propagate_history(
         incoming_velocity = state[3:].copy()
         if not burn_applied and burn_time_s is not None and abs(time_s - burn_time_s) <= 1.0e-10:
             if burn_frame == "ric":
-                radial = state[:3] / float(np.linalg.norm(state[:3]))
-                cross_track = np.cross(state[:3], state[3:])
-                cross_track /= float(np.linalg.norm(cross_track))
-                in_track = np.cross(cross_track, radial)
-                basis = np.column_stack((radial, in_track, cross_track))
+                basis = _ric_basis(state)
             else:
                 basis = np.eye(3)
             state = state.copy()

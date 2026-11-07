@@ -153,3 +153,26 @@ def test_maneuver_movie_uses_sample_jacobi(workspace, mode):
 def test_reject_incompatible_instantaneous_modes(workspace, kwargs):
     with pytest.raises(ValueError, match="Instantaneous|conflicts"):
         render_cr3bp_research(workspace, "vehicle", jacobi_mode="instantaneous", **kwargs)
+
+
+def test_protected_writer_publishes_cr3bp_artifact_bundle(workspace):
+    from sim.security.output_writes import SecureWriteRoot, bind_output_writer
+
+    with SecureWriteRoot.open(workspace.output_dir, approved_roots=(workspace.output_dir,), create=False) as writer:
+        with bind_output_writer(writer):
+            result = render_cr3bp_research(
+                workspace,
+                "vehicle",
+                movie_format="gif",
+                frames=3,
+                fps=3,
+                resolution=31,
+            )
+
+    for key in ("figure", "movie", "contact_sheet", "movie_quality_receipt", "receipt"):
+        assert Path(result[key]).is_file()
+    receipt = json.loads(Path(result["receipt"]).read_text(encoding="utf-8"))
+    assert receipt["files"]["movie"] == result["movie"]
+    assert receipt["artifact_sha256"]["movie"]
+    generated = json.loads((workspace.review_dir / "generated_artifacts.json").read_text(encoding="utf-8"))
+    assert generated["artifacts"][-1]["path"] == str(Path(result["figure"]).relative_to(workspace.output_dir))

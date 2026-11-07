@@ -54,6 +54,9 @@ def trajectory_from_document(value: dict) -> Trajectory:
     }
     if not isinstance(value, dict) or value.get("schema") != SCHEMA or set(value) - allowed:
         raise DataIOError("Invalid/unknown trajectory JSON contract.")
+    required = {"object_id", "center", "frame", "epoch", "time_system", "units", "time_basis", "times_s", "states"}
+    if not required.issubset(value):
+        raise DataIOError(f"Trajectory JSON is missing required fields: {sorted(required - set(value))}.")
     if value.get("units") != ["km"] * 3 + ["km/s"] * 3 or value.get("time_basis") != "elapsed_TAI_SI_seconds":
         raise DataIOError("Trajectory JSON requires declared km/km/s and elapsed TAI SI seconds.")
     return Trajectory(
@@ -126,7 +129,10 @@ def read_trajectory_table(
         for row in reader:
             if len(rows) >= MAX_SAMPLES or None in row or any(value is None for value in row.values()):
                 raise DataIOError("CSV exceeds row limits or has inconsistent columns.")
-            rows.append([float(row[mapping[key]]) for key in COLUMNS])
+            try:
+                rows.append([float(row[mapping[key]]) for key in COLUMNS])
+            except (TypeError, ValueError) as exc:
+                raise DataIOError("CSV trajectory values must be finite numeric data.") from exc
     elif format == "trajectory-parquet":
         try:
             import pyarrow as pa

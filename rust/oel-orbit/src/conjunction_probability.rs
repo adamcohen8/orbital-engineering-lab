@@ -36,6 +36,7 @@ pub fn integrand(values: &[f64]) -> f64 {
 
 /// SciPy supplies a pointer to `count` doubles for the duration of this call.
 /// No Python objects, retained pointers, global state or allocation are used.
+#[cfg(any(feature = "python", test))]
 unsafe extern "C" fn callback(count: i32, values: *mut f64) -> f64 {
     if count != 7 || values.is_null() {
         return f64::NAN;

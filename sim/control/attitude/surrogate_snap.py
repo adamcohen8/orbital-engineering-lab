@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from sim.control.attitude._validation import require_finite_scalar, require_finite_vector
 from sim.core.interfaces import Controller
 from sim.core.models import Command, StateBelief
 from sim.utils.frames import ric_dcm_ir_from_rv
@@ -81,6 +82,12 @@ class _BaseSurrogateSnap(Controller):
     _rng: np.random.Generator = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
+        require_finite_scalar(self.cancel_rate_mag_rad_s2, "cancel_rate_mag_rad_s2")
+        require_finite_scalar(self.rate_tolerance_rad_s, "rate_tolerance_rad_s")
+        require_finite_scalar(self.slew_time_180_s, "slew_time_180_s")
+        require_finite_scalar(self.pointing_sigma_deg, "pointing_sigma_deg")
+        require_finite_scalar(self.default_dt_s, "default_dt_s")
+        require_finite_scalar(self.rng_seed, "rng_seed")
         self._rng = np.random.default_rng(int(self.rng_seed))
 
     def _dt(self, t_s: float) -> float:
@@ -140,7 +147,7 @@ class SurrogateSnapECIController(_BaseSurrogateSnap):
         self.set_target(self.desired_attitude_quat_bn)
 
     def set_target(self, desired_attitude_quat_bn: np.ndarray) -> None:
-        q = normalize_quaternion(np.array(desired_attitude_quat_bn, dtype=float).reshape(4))
+        q = normalize_quaternion(require_finite_vector(desired_attitude_quat_bn, "desired_attitude_quat_bn", size=4))
         self.desired_attitude_quat_bn = q
         self._target_q_bn = q
         self._hold_q_bn = q.copy()
@@ -150,11 +157,13 @@ class SurrogateSnapECIController(_BaseSurrogateSnap):
     def act(self, belief: StateBelief, t_s: float, budget_ms: float) -> Command:
         if belief.state.size < 13:
             return Command.zero()
-        q_now = normalize_quaternion(np.array(belief.state[6:10], dtype=float))
-        w_now = np.array(belief.state[10:13], dtype=float)
+        q_now = normalize_quaternion(require_finite_vector(belief.state[6:10], "belief attitude quaternion", size=4))
+        w_now = require_finite_vector(belief.state[10:13], "belief angular rate", size=3)
         dt_s = self._dt(t_s)
 
-        q_attr = normalize_quaternion(np.array(self.desired_attitude_quat_bn, dtype=float).reshape(4))
+        q_attr = normalize_quaternion(
+            require_finite_vector(self.desired_attitude_quat_bn, "desired_attitude_quat_bn", size=4)
+        )
         if float(np.linalg.norm(q_attr - self._target_q_bn)) > 1e-12:
             self.set_target(q_attr)
 
@@ -208,7 +217,7 @@ class SurrogateSnapRICController(_BaseSurrogateSnap):
         self.set_target(self.desired_attitude_quat_br)
 
     def set_target(self, desired_attitude_quat_br: np.ndarray) -> None:
-        q = normalize_quaternion(np.array(desired_attitude_quat_br, dtype=float).reshape(4))
+        q = normalize_quaternion(require_finite_vector(desired_attitude_quat_br, "desired_attitude_quat_br", size=4))
         self.desired_attitude_quat_br = q
         self._target_q_br = q
         self._hold_q_br = q.copy()
@@ -218,13 +227,17 @@ class SurrogateSnapRICController(_BaseSurrogateSnap):
     def act(self, belief: StateBelief, t_s: float, budget_ms: float) -> Command:
         if belief.state.size < 13:
             return Command.zero()
-        r = np.array(belief.state[0:3], dtype=float)
-        v = np.array(belief.state[3:6], dtype=float)
-        q_now_bn = normalize_quaternion(np.array(belief.state[6:10], dtype=float))
-        w_now = np.array(belief.state[10:13], dtype=float)
+        r = require_finite_vector(belief.state[0:3], "belief position", size=3)
+        v = require_finite_vector(belief.state[3:6], "belief velocity", size=3)
+        q_now_bn = normalize_quaternion(
+            require_finite_vector(belief.state[6:10], "belief attitude quaternion", size=4)
+        )
+        w_now = require_finite_vector(belief.state[10:13], "belief angular rate", size=3)
         dt_s = self._dt(t_s)
 
-        q_attr = normalize_quaternion(np.array(self.desired_attitude_quat_br, dtype=float).reshape(4))
+        q_attr = normalize_quaternion(
+            require_finite_vector(self.desired_attitude_quat_br, "desired_attitude_quat_br", size=4)
+        )
         if float(np.linalg.norm(q_attr - self._target_q_br)) > 1e-12:
             self.set_target(q_attr)
 

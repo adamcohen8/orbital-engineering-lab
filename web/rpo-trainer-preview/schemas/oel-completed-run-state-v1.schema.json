@@ -161,7 +161,7 @@
         "run_id": {"type": "string", "minLength": 1},
         "scenario_name": {"type": "string", "minLength": 1},
         "review_schema_version": {"type": "string", "minLength": 1},
-        "generated_utc": {"type": "string", "format": "date-time"},
+        "generated_utc": {"type": ["string", "null"], "format": "date-time"},
         "config_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
         "review_db_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
         "initial_jd_utc": {"type": "number", "exclusiveMinimum": 0},

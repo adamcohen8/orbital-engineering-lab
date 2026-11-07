@@ -125,6 +125,16 @@ failure-mode demonstrations.
 
 ## Telemetry
 
+For GNC v2 ideal-wrench hardware, force and torque are always clipped to their
+configured norm limits. The `saturated` telemetry flag excludes only norm excess
+within eight machine epsilons relative to the limit, accounting for floating-point
+rounding after controller normalization. This changes classification, not the
+physical clipping calculation. There is no absolute allowance at a zero limit.
+Larger physical saturation still feeds the configured health monitor and can
+trigger isolation; repeated command rejections and explicit faults retain their
+existing handling. Controller-side command limiting remains separate allocation
+evidence and does not by itself indicate a failed actuator.
+
 Actuator models add diagnostics to `mode_flags`, including RCS thruster forces,
 electric propulsion thrust, gimbal direction/angle, reaction-wheel speeds and
 momentum, magnetorquer dipole, CMG torque caps, desaturation torque, propellant

@@ -56,15 +56,9 @@ def _finite(value: Any, field: str) -> float:
 
 
 def _integer(value: Any, field: str) -> int:
-    if isinstance(value, bool):
+    if isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, np.integer)):
         raise MissionSchedulingError(f"{field} must be an integer.")
-    try:
-        result = int(value)
-    except (TypeError, ValueError, OverflowError) as exc:
-        raise MissionSchedulingError(f"{field} must be an integer.") from exc
-    if result != value:
-        raise MissionSchedulingError(f"{field} must be an integer.")
-    return result
+    return int(value)
 
 
 def _mapping(value: Any, field: str) -> Mapping[str, Any]:

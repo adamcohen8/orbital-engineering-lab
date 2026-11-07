@@ -43,6 +43,7 @@ from sim.flight_software.contracts import (
     CmgGimbalRateCommand,
     ContinuousEngineCommand,
     DataValidity,
+    FlightSoftwareCheckpoint,
     FlightSoftwareInputBatch,
     FlightSoftwareOutput,
     FlightSoftwareSnapshot,
@@ -57,6 +58,7 @@ from sim.flight_software.contracts import (
     MagnetometerMeasurement,
     MagnetorquerDipoleCommand,
     MeasurementEvent,
+    NativeFlightSoftwareSnapshot,
     PacketId,
     Quality,
     ReactionWheelTorqueCommand,
@@ -279,7 +281,7 @@ class SatelliteFlightSoftwareRuntime:
                 enable_hardware(model)
         self.inputs = InputDeliveryQueue()
         self.evidence = FlightSoftwareRuntimeEvidence()
-        checkpoint_snapshot, checkpoint_state = self._decode_initial_checkpoint(initial_checkpoint)
+        checkpoint_snapshot, checkpoint_state, checkpoint_identity_hash = self._decode_initial_checkpoint(initial_checkpoint)
         self._clock_offset_ns = int(checkpoint_state.get("checkpoint_time_ns", 0))
         self._invocation_id = 0
         self._sensor_sequence = 0
@@ -298,12 +300,25 @@ class SatelliteFlightSoftwareRuntime:
         self.max_delta_v_m_s: float | None = None
         self.used_delta_v_m_s = 0.0
         self._shutdown = False
+        self._legacy_native_checkpoint_migration = False
         if checkpoint_snapshot is not None:
             boot_id = checkpoint_snapshot.boot_id
             self.boot_id = boot_id
         self.stack.boot(BootEvent(satellite_id, boot_id, self.clock_tag(0)))
         if checkpoint_snapshot is not None:
-            self.stack.restore(checkpoint_snapshot)
+            self._validate_checkpoint_identity_before_restore(
+                checkpoint_snapshot, checkpoint_state, checkpoint_identity_hash
+            )
+            restore_snapshot = checkpoint_snapshot
+            if self._legacy_native_checkpoint_migration:
+                migrate_legacy_snapshot = getattr(self.stack, "migrate_legacy_snapshot", None)
+                if not callable(migrate_legacy_snapshot):
+                    raise ValueError("legacy native checkpoint requires the host migration adapter")
+                restore_snapshot = migrate_legacy_snapshot(
+                    checkpoint_snapshot,
+                    expected_executable_sha256=checkpoint_identity_hash,
+                )
+            self.stack.restore(restore_snapshot)
             self._restore_runtime_state(checkpoint_state)
         elif initial_mission_load is not None:
             at = self.clock_tag(0)
@@ -868,9 +883,9 @@ class SatelliteFlightSoftwareRuntime:
     @staticmethod
     def _decode_initial_checkpoint(
         checkpoint: Mapping[str, object] | None,
-    ) -> tuple[FlightSoftwareSnapshot | None, dict[str, object]]:
+    ) -> tuple[FlightSoftwareCheckpoint | None, dict[str, object], str | None]:
         if checkpoint is None:
-            return None, {}
+            return None, {}, None
         raw = dict(checkpoint)
         if raw.get("checkpoint_schema") != "oel.satellite_runtime_checkpoint.v1":
             raise ValueError("unsupported flight-software checkpoint schema")
@@ -879,7 +894,10 @@ class SatelliteFlightSoftwareRuntime:
             snapshot_raw = dict(snapshot_raw)
             snapshot_raw.setdefault("active_load_id", None)
             snapshot_raw.setdefault("active_load_revision", None)
-        snapshot = from_primitive(FlightSoftwareSnapshot, snapshot_raw)
+        if isinstance(snapshot_raw, dict) and snapshot_raw.get("schema") == "oel.flight_software.native_snapshot.v1":
+            snapshot = from_primitive(NativeFlightSoftwareSnapshot, snapshot_raw)
+        else:
+            snapshot = from_primitive(FlightSoftwareSnapshot, snapshot_raw)
         encoded = raw.get("runtime_state_bytes_base64")
         expected_hash = str(raw.get("runtime_state_hash_sha256", "") or "")
         if not isinstance(encoded, str):
@@ -896,7 +914,45 @@ class SatelliteFlightSoftwareRuntime:
             raise ValueError("flight-software checkpoint runtime state is invalid JSON") from exc
         if not isinstance(state, dict) or state.get("schema") != "oel.satellite_runtime_state.v1":
             raise ValueError("flight-software checkpoint runtime state has an unsupported schema")
-        return snapshot, state
+        checkpoint_identity_hash = raw.get("implementation_hash")
+        if not isinstance(checkpoint_identity_hash, str):
+            raise ValueError("flight-software checkpoint implementation identity is missing")
+        return snapshot, state, checkpoint_identity_hash
+
+    def _validate_checkpoint_identity_before_restore(
+        self,
+        snapshot: FlightSoftwareCheckpoint,
+        state: Mapping[str, object],
+        checkpoint_identity_hash: str | None,
+    ) -> None:
+        """Reject implementation changes before delegating to stack.restore()."""
+
+        identity = self.stack.identity
+        if callable(identity):
+            identity = identity()
+        if (snapshot.stack_id, snapshot.stack_version) != (identity.stack_id, identity.stack_version):
+            raise ValueError("flight-software checkpoint stack identity is incompatible")
+        if isinstance(snapshot, NativeFlightSoftwareSnapshot):
+            if (
+                checkpoint_identity_hash != identity.implementation_hash
+                or snapshot.host_implementation_hash != identity.implementation_hash
+            ):
+                raise ValueError("native flight-software checkpoint implementation identity is incompatible")
+        elif checkpoint_identity_hash != identity.implementation_hash:
+            legacy_hash = getattr(self.stack, "_legacy_implementation_hash", None)
+            if not (
+                bool(getattr(self.stack, "_allow_legacy_snapshot_restore", False))
+                and isinstance(legacy_hash, str)
+                and checkpoint_identity_hash == legacy_hash
+            ):
+                raise ValueError("flight-software checkpoint implementation identity is incompatible")
+            self._legacy_native_checkpoint_migration = True
+        expected_identity = to_primitive(identity)
+        if state.get("stack_identity") != expected_identity:
+            legacy_identity = dict(expected_identity)
+            legacy_identity["implementation_hash"] = getattr(self.stack, "_legacy_implementation_hash", None)
+            if not self._legacy_native_checkpoint_migration or state.get("stack_identity") != legacy_identity:
+                raise ValueError("runtime checkpoint flight-software implementation identity is incompatible")
 
     def _restore_runtime_state(self, state: Mapping[str, object]) -> None:
         if int(state.get("checkpoint_time_ns", -1)) != self._clock_offset_ns:
@@ -910,8 +966,12 @@ class SatelliteFlightSoftwareRuntime:
         identity = self.stack.identity
         if callable(identity):
             identity = identity()
-        if state.get("stack_identity") != to_primitive(identity):
-            raise ValueError("runtime checkpoint flight-software implementation identity is incompatible")
+        expected_identity = to_primitive(identity)
+        if state.get("stack_identity") != expected_identity:
+            legacy_identity = dict(expected_identity)
+            legacy_identity["implementation_hash"] = getattr(self.stack, "_legacy_implementation_hash", None)
+            if not self._legacy_native_checkpoint_migration or state.get("stack_identity") != legacy_identity:
+                raise ValueError("runtime checkpoint flight-software implementation identity is incompatible")
         self._invocation_id = int(state["invocation_id"])
         self._sensor_sequence = int(state["sensor_sequence"])
         self._receipt_sequence = int(state["receipt_sequence"])

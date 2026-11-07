@@ -74,3 +74,26 @@ def test_surface_torque_weights_each_surface_force_at_its_own_center() -> None:
         rtol=0.0,
         atol=1.0e-12,
     )
+
+
+def test_lift_reference_uses_a_nonparallel_fallback_for_z_axis_wind() -> None:
+    model = VariableGeometryAerodynamics(
+        VariableGeometryAerodynamicsConfig(
+            (AerodynamicSurfaceGeometry("flap", 2.0, 2.0, 0.5, (1.0, 0.0, 0.0)),),
+        )
+    )
+    state = CoupledSatelliteState(
+        np.array([0.0, 0.0, 6_678.0]),
+        np.array([0.0, 0.0, 7.7]),
+        np.array([1.0, 0.0, 0.0, 0.0]),
+        np.zeros(3),
+        5_000.0,
+        np.zeros(2),
+        0.0,
+    )
+
+    effects, _ = model.evaluate(state, density_kg_m3=1.0e-10, device_positions={"flap": 1.0})
+
+    assert np.all(np.isfinite(effects.force_eci_n))
+    assert np.all(np.isfinite(effects.torque_body_n_m))
+    assert abs(float(effects.force_eci_n[0])) > 0.0

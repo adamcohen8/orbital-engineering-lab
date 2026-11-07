@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -41,15 +42,33 @@ def prepare_report_packet(
     max_rows: int,
     handling: dict[str, Any],
     approval_id: str,
+    writer: Any | None = None,
+    logical_output_dir: str | Path | None = None,
+    logical_source_output_dir: str | Path | None = None,
+    source_reader: Any | None = None,
+    protected_review: bool | None = None,
 ) -> dict[str, Any]:
+    writer = writer or _current_output_writer()
+    source_output_dir = Path(source_output_dir)
+    logical_source_root = Path(logical_source_output_dir) if logical_source_output_dir is not None else source_output_dir
     # A report packet is a downstream view of a completed MCP execution. Do
     # not turn a source manifest's ``artifacts_complete`` flag into a trust
     # decision without rechecking the content-bound records. The source
     # manifest and mutable index are intentionally excluded from that list.
     source_manifest_path = source_output_dir / "mcp_execution_manifest.json"
-    source_manifest_present = source_manifest_path.is_file()
+    source_manifest_present = _source_is_file(
+        source_manifest_path,
+        physical_root=source_output_dir,
+        logical_root=logical_source_root,
+        reader=source_reader,
+    )
     if source_manifest_present:
-        _validate_source_manifest(source_manifest_path, source_output_dir)
+        _validate_source_manifest(
+            source_manifest_path,
+            source_output_dir,
+            logical_root=logical_source_root,
+            reader=source_reader,
+        )
     inspection = inspect_output(
         source_output_dir,
         query_names=query_names or None,
@@ -57,13 +76,24 @@ def prepare_report_packet(
         write_packet=False,
         max_value_bytes=MAX_REVIEW_VALUE_BYTES,
         max_result_bytes=MAX_REVIEW_RESULT_BYTES,
+        protected=protected_review,
     )
-    artifacts, artifacts_truncated = _artifact_inventory(inspection, source_output_dir=source_output_dir)
+    artifacts, artifacts_truncated = _artifact_inventory(
+        inspection,
+        source_output_dir=source_output_dir,
+        logical_source_output_dir=logical_source_root,
+        source_reader=source_reader,
+    )
     # inspect_output and artifact inventory read mutable source files. Recheck
     # the execution manifest after those reads so a source mutation cannot be
     # turned into a completed, ready-to-cite packet by the initial check.
     if source_manifest_present:
-        _validate_source_manifest(source_manifest_path, source_output_dir)
+        _validate_source_manifest(
+            source_manifest_path,
+            source_output_dir,
+            logical_root=logical_source_root,
+            reader=source_reader,
+        )
     required_artifacts_missing = any(row["required"] and not row["exists"] for row in artifacts)
     review = _review_projection(dict(inspection.get("review", {}) or {}))
     query_evidence = _query_evidence(review)
@@ -94,7 +124,11 @@ def prepare_report_packet(
                 "next_step": "Narrow the source artifact set or prepare multiple explicitly scoped report packets.",
             }
         )
-    execution_provenance = _report_execution_provenance(source_output_dir)
+    execution_provenance = _report_execution_provenance(
+        source_output_dir,
+        logical_root=logical_source_root,
+        reader=source_reader,
+    )
     if execution_provenance.get("available") and execution_provenance.get("status") != "completed":
         failure_hints.append(
             {
@@ -105,18 +139,30 @@ def prepare_report_packet(
         )
     evidence_summary = _evidence_summary(
         source_output_dir=source_output_dir,
+        logical_source_output_dir=logical_source_root,
         artifacts=artifacts,
         queries_complete=queries_complete,
         failure_hints=failure_hints,
+        source_reader=source_reader,
     )
+    packet_output_dir = Path(packet_output_dir)
+    logical_packet_output_dir = _logical_output_dir(
+        packet_output_dir,
+        writer=writer,
+        logical_output_dir=logical_output_dir,
+    )
+    if writer is None:
+        packet_output_dir.mkdir(parents=True, exist_ok=True)
     packet_path = packet_output_dir / "report_evidence_packet.json"
     brief_path = packet_output_dir / "report_brief.md"
-    operation_manifest_path = packet_output_dir / "mcp_execution_manifest.json"
+    operation_manifest_path = logical_packet_output_dir / "mcp_execution_manifest.json"
+    logical_packet_path = logical_packet_output_dir / packet_path.name
+    logical_brief_path = logical_packet_output_dir / brief_path.name
     packet = {
         "schema_id": REPORT_PACKET_SCHEMA,
         "packet_id": packet_id,
         "generated_utc": _utc_now(),
-        "source_output_dir": str(source_output_dir),
+        "source_output_dir": str(logical_source_root),
         "handling": {
             "marking": str(handling.get("marking", "")),
             "release_scope": str(handling.get("release_scope", "")),
@@ -126,7 +172,10 @@ def prepare_report_packet(
         "query_evidence": query_evidence,
         "execution_provenance": execution_provenance,
         "source_execution_manifest_sha256": _optional_file_sha256(
-            source_output_dir / "mcp_execution_manifest.json"
+            source_output_dir / "mcp_execution_manifest.json",
+            physical_root=source_output_dir,
+            logical_root=logical_source_root,
+            reader=source_reader,
         ),
         "artifact_summary": {**_artifact_summary(artifacts), "truncated": artifacts_truncated},
         "source_evidence_identity_sha256": _sha256_json(
@@ -162,32 +211,38 @@ def prepare_report_packet(
     packet_bytes = _serialized_json(packet)
     if len(packet_bytes) > MAX_REPORT_SOURCE_BYTES:
         raise ValueError("The report packet exceeds the MCP report-packet size budget.")
-    _write_serialized_json(packet_path, packet_bytes)
-    brief_path.write_text(_report_brief(packet), encoding="utf-8")
+    _write_output_bytes(packet_path, packet_bytes, writer=writer)
+    _write_output_bytes(
+        brief_path,
+        _report_brief(packet).encode("utf-8"),
+        writer=writer,
+    )
     manifest = manifest_base(tool_id="oel.prepare_report_packet.v1", approval_id=approval_id)
     manifest.update(
         {
             "packet_id": packet_id,
-            "source_output_dir": str(source_output_dir),
+            "source_output_dir": str(logical_source_root),
             "packet_sha256": packet["packet_sha256"],
             "source_evidence_identity_sha256": packet["source_evidence_identity_sha256"],
             "provider_call_made": False,
         }
     )
     packet_status = "completed" if not failure_hints and not required_artifacts_missing else "partial"
-    complete_manifest(
+    _complete_output_manifest(
         manifest,
         status=packet_status,
-        artifacts=[str(packet_path), str(brief_path)],
+        logical_artifacts=[str(logical_packet_path), str(logical_brief_path)],
+        physical_artifacts=[str(packet_path), str(brief_path)],
+        writer=writer,
     )
-    write_execution_manifest(packet_output_dir, manifest)
+    write_execution_manifest(packet_output_dir, manifest, writer=writer)
     return {
         "status": packet_status,
         "packet_id": packet_id,
-        "source_output_dir": str(source_output_dir),
-        "packet_output_dir": str(packet_output_dir),
-        "packet_path": str(packet_path),
-        "brief_path": str(brief_path),
+        "source_output_dir": str(logical_source_root),
+        "packet_output_dir": str(logical_packet_output_dir),
+        "packet_path": str(logical_packet_path),
+        "brief_path": str(logical_brief_path),
         "manifest_path": str(operation_manifest_path),
         "packet_sha256": packet["packet_sha256"],
         "artifact_count": len(artifacts),
@@ -197,21 +252,32 @@ def prepare_report_packet(
     }
 
 
-def _source_manifest_artifacts_valid(manifest: dict[str, Any], output: Path) -> bool:
+def _source_manifest_artifacts_valid(
+    manifest: dict[str, Any],
+    output: Path,
+    *,
+    logical_root: Path | None = None,
+    reader: Any | None = None,
+) -> bool:
     """Validate immutable source artifacts before projecting a report packet."""
 
     if not bool(manifest.get("artifacts_complete", False)):
         return False
-    mutable_paths = {(output / "index.md").resolve()}
+    logical_root = logical_root or output
+    mutable_paths = {logical_root / "index.md"}
     artifacts = [
         str(path)
         for path in list(manifest.get("artifacts", []) or [])
-        if Path(str(path)).resolve() not in mutable_paths
+        if _logical_source_path(Path(str(path)), physical_root=output, logical_root=logical_root) not in mutable_paths
     ]
     records = [
         dict(raw or {})
         for raw in list(manifest.get("artifact_records", []) or [])
-        if Path(str(dict(raw or {}).get("path", "") or "")).resolve() not in mutable_paths
+        if _logical_source_path(
+            Path(str(dict(raw or {}).get("path", "") or "")),
+            physical_root=output,
+            logical_root=logical_root,
+        ) not in mutable_paths
     ]
     if not artifacts or len(records) != len(artifacts):
         return False
@@ -221,35 +287,71 @@ def _source_manifest_artifacts_valid(manifest: dict[str, Any], output: Path) -> 
     seen: set[str] = set()
     for record in records:
         raw_path = str(record.get("path", "") or "")
-        path = Path(raw_path)
+        logical_path = _logical_source_path(
+            Path(raw_path),
+            physical_root=output,
+            logical_root=logical_root,
+        )
+        if logical_path is None:
+            return False
+        path = _physical_source_path(
+            logical_path,
+            physical_root=output,
+            logical_root=logical_root,
+        )
+        if path is None:
+            return False
         if raw_path not in expected_paths or raw_path in seen:
             return False
-        try:
-            path.resolve().relative_to(output.resolve())
-        except ValueError:
+        if not _source_path_within(path, output):
             return False
-        if not path.is_file() or path.is_symlink():
+        if not _source_is_file(path, physical_root=output, logical_root=logical_root, reader=reader):
             return False
         try:
             expected_bytes = int(record.get("bytes", -1))
         except (TypeError, ValueError):
             return False
-        if expected_bytes != path.stat().st_size:
+        actual_record = _source_file_record(
+            path,
+            physical_root=output,
+            logical_root=logical_root,
+            reader=reader,
+            maximum=MAX_REPORT_ARTIFACT_BYTES,
+        )
+        if actual_record is None or expected_bytes != int(actual_record["bytes"]):
             return False
-        if str(record.get("sha256", "")) != _sha256_file(path):
+        if str(record.get("sha256", "")) != str(actual_record.get("sha256", "")):
             return False
         seen.add(raw_path)
     return seen == expected_paths
 
 
-def _validate_source_manifest(path: Path, output: Path) -> None:
+def _validate_source_manifest(
+    path: Path,
+    output: Path,
+    *,
+    logical_root: Path | None = None,
+    reader: Any | None = None,
+) -> None:
     try:
-        manifest = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        payload = _source_read_bytes(
+            path,
+            physical_root=output,
+            logical_root=logical_root or output,
+            reader=reader,
+            maximum=MAX_REPORT_SOURCE_BYTES,
+        )
+        manifest = json.loads(payload.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError, json.JSONDecodeError) as exc:
         raise ValueError("The source execution manifest is invalid.") from exc
     if not isinstance(manifest, dict):
         raise ValueError("The source execution manifest is invalid.")
-    if manifest.get("status") == "completed" and not _source_manifest_artifacts_valid(manifest, output):
+    if manifest.get("status") == "completed" and not _source_manifest_artifacts_valid(
+        manifest,
+        output,
+        logical_root=logical_root,
+        reader=reader,
+    ):
         raise ValueError("The source execution manifest artifact records do not match the current output.")
 
 
@@ -262,20 +364,34 @@ def audit_report(
     model: str,
     approval_id: str,
     preparation_manifest_path: Path | None = None,
+    writer: Any | None = None,
+    logical_output_dir: str | Path | None = None,
+    report_bytes: bytes | None = None,
+    packet_bytes: bytes | None = None,
+    preparation_manifest_bytes: bytes | None = None,
+    source_reader: Any | None = None,
 ) -> dict[str, Any]:
-    if report_path.stat().st_size > MAX_REPORT_SOURCE_BYTES:
+    writer = writer or _current_output_writer()
+    report_payload = report_bytes if report_bytes is not None else report_path.read_bytes()
+    packet_payload_bytes = packet_bytes if packet_bytes is not None else packet_path.read_bytes()
+    if len(report_payload) > MAX_REPORT_SOURCE_BYTES:
         raise ValueError("The report exceeds the MCP report-audit size budget.")
-    if packet_path.stat().st_size > MAX_REPORT_SOURCE_BYTES:
+    if len(packet_payload_bytes) > MAX_REPORT_SOURCE_BYTES:
         raise ValueError("The report packet exceeds the MCP report-audit size budget.")
-    packet = _load_packet(packet_path)
+    packet = _load_packet(packet_path, payload=packet_payload_bytes)
     provenance_binding = _validate_prepare_provenance(
         packet,
         packet_path=packet_path,
         manifest_path=preparation_manifest_path,
+        manifest_bytes=preparation_manifest_bytes,
+        source_reader=source_reader,
     )
-    _validate_audit_packet_budget(packet, packet_path=packet_path)
-    markdown = report_path.read_text(encoding="utf-8")
-    integrity = _verify_packet_artifacts(packet, packet_path=packet_path)
+    _validate_audit_packet_budget(packet, packet_path=packet_path, source_reader=source_reader)
+    try:
+        markdown = report_payload.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("The report is not valid UTF-8 Markdown.") from exc
+    integrity = _verify_packet_artifacts(packet, packet_path=packet_path, source_reader=source_reader)
     references = sorted(set(_EVIDENCE_REFERENCE.findall(markdown)))
     artifact_rows = [dict(item) for item in list(packet.get("artifacts", []) or [])]
     artifact_id_list = [str(item.get("artifact_id", "")) for item in artifact_rows]
@@ -335,12 +451,25 @@ def audit_report(
             "It does not call a model provider or authorize external release.",
         ],
     }
-    audit_output_dir.mkdir(parents=True, exist_ok=True)
+    audit_output_dir = Path(audit_output_dir)
+    logical_audit_output_dir = _logical_output_dir(
+        audit_output_dir,
+        writer=writer,
+        logical_output_dir=logical_output_dir,
+    )
+    if writer is None:
+        audit_output_dir.mkdir(parents=True, exist_ok=True)
     audit_json = audit_output_dir / "report_audit.json"
     audit_md = audit_output_dir / "report_audit.md"
-    operation_manifest_path = audit_output_dir / "mcp_execution_manifest.json"
-    _write_json(audit_json, audit)
-    audit_md.write_text(_audit_markdown(audit), encoding="utf-8")
+    operation_manifest_path = logical_audit_output_dir / "mcp_execution_manifest.json"
+    logical_audit_json = logical_audit_output_dir / audit_json.name
+    logical_audit_md = logical_audit_output_dir / audit_md.name
+    _write_output_bytes(audit_json, _serialized_json(audit), writer=writer)
+    _write_output_bytes(
+        audit_md,
+        _audit_markdown(audit).encode("utf-8"),
+        writer=writer,
+    )
     manifest = manifest_base(tool_id="oel.audit_report.v1", approval_id=approval_id)
     manifest.update(
         {
@@ -350,16 +479,22 @@ def audit_report(
             "semantic_claim_review_performed": False,
         }
     )
-    complete_manifest(manifest, status="completed" if passed else "partial", artifacts=[str(audit_json), str(audit_md)])
-    write_execution_manifest(audit_output_dir, manifest)
+    _complete_output_manifest(
+        manifest,
+        status="completed" if passed else "partial",
+        logical_artifacts=[str(logical_audit_json), str(logical_audit_md)],
+        physical_artifacts=[str(audit_json), str(audit_md)],
+        writer=writer,
+    )
+    write_execution_manifest(audit_output_dir, manifest, writer=writer)
     return {
         "status": audit["status"],
         "packet_id": audit["packet_id"],
         "report_path": str(report_path),
         "packet_path": str(packet_path),
-        "audit_output_dir": str(audit_output_dir),
-        "audit_json_path": str(audit_json),
-        "audit_markdown_path": str(audit_md),
+        "audit_output_dir": str(logical_audit_output_dir),
+        "audit_json_path": str(logical_audit_json),
+        "audit_markdown_path": str(logical_audit_md),
         "manifest_path": str(operation_manifest_path),
         "checks": checks,
         "unknown_evidence_references": unknown_references,
@@ -372,7 +507,11 @@ def audit_report(
 
 
 def _artifact_inventory(
-    inspection: dict[str, Any], *, source_output_dir: Path
+    inspection: dict[str, Any],
+    *,
+    source_output_dir: Path,
+    logical_source_output_dir: Path | None = None,
+    source_reader: Any | None = None,
 ) -> tuple[list[dict[str, Any]], bool]:
     rows: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -388,6 +527,7 @@ def _artifact_inventory(
         ("run_index", source_output_dir / "index.md", "text/markdown", False),
         ("execution_manifest", source_output_dir / "mcp_execution_manifest.json", "application/json", False),
     )
+    logical_root = logical_source_output_dir or source_output_dir
     candidates: list[dict[str, Any]] = []
     for artifact_id, path, media_type, required in fixed_candidates:
         candidates.append(
@@ -408,14 +548,30 @@ def _artifact_inventory(
         raw_path = str(item.get("resolved_path") or item.get("path") or "")
         if not raw_path:
             continue
-        path = Path(raw_path).expanduser().resolve()
-        if not _is_within(path, source_output_dir):
+        logical_path = _logical_source_path(
+            Path(raw_path).expanduser(),
+            physical_root=source_output_dir,
+            logical_root=logical_root,
+        )
+        if logical_path is None:
             continue
-        relative = path.relative_to(source_output_dir).as_posix()
+        path = _physical_source_path(
+            logical_path,
+            physical_root=source_output_dir,
+            logical_root=logical_root,
+        )
+        if path is None:
+            continue
+        relative = logical_path.relative_to(logical_root).as_posix()
         if relative in seen:
             continue
         required = bool(item.get("required", False))
-        exists = path.is_file()
+        exists = _source_is_file(
+            path,
+            physical_root=source_output_dir,
+            logical_root=logical_root,
+            reader=source_reader,
+        )
         if not exists and not required:
             continue
         seen.add(relative)
@@ -424,7 +580,18 @@ def _artifact_inventory(
             artifact_ids,
         )
         artifact_ids.add(artifact_id)
-        artifact_bytes = path.stat().st_size if exists else 0
+        record = (
+            _source_file_record(
+                path,
+                physical_root=source_output_dir,
+                logical_root=logical_root,
+                reader=source_reader,
+                maximum=MAX_REPORT_ARTIFACT_BYTES,
+            )
+            if exists
+            else None
+        )
+        artifact_bytes = int(record["bytes"]) if record is not None else 0
         if artifact_bytes > MAX_REPORT_ARTIFACT_BYTES:
             raise ValueError("An artifact exceeds the MCP report-packet size budget.")
         total_bytes += artifact_bytes
@@ -438,7 +605,7 @@ def _artifact_inventory(
                 "required": required,
                 "exists": exists,
                 "bytes": artifact_bytes,
-                "sha256": _sha256_file(path) if exists else "",
+                "sha256": str(record["sha256"]) if record is not None else "",
             }
         )
     return rows, truncated
@@ -492,16 +659,32 @@ def _artifact_summary(artifacts: list[dict[str, Any]]) -> dict[str, Any]:
 def _evidence_summary(
     *,
     source_output_dir: Path,
+    logical_source_output_dir: Path | None = None,
     artifacts: list[dict[str, Any]],
     queries_complete: bool,
     failure_hints: list[dict[str, Any]],
+    source_reader: Any | None = None,
 ) -> dict[str, Any]:
     source_summary: dict[str, Any] = {}
     source_packet = source_output_dir / "agent_evidence_packet.json"
-    if source_packet.is_file() and source_packet.stat().st_size <= MAX_REPORT_SOURCE_BYTES:
+    logical_root = logical_source_output_dir or source_output_dir
+    if _source_is_file(
+        source_packet,
+        physical_root=source_output_dir,
+        logical_root=logical_root,
+        reader=source_reader,
+    ):
         try:
-            payload = json.loads(source_packet.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+            payload = json.loads(
+                _source_read_bytes(
+                    source_packet,
+                    physical_root=source_output_dir,
+                    logical_root=logical_root,
+                    reader=source_reader,
+                    maximum=MAX_REPORT_SOURCE_BYTES,
+                ).decode("utf-8")
+            )
+        except (OSError, ValueError, UnicodeDecodeError, json.JSONDecodeError):
             payload = {}
         if isinstance(payload, dict):
             raw_summary = dict(payload.get("evidence_summary", {}) or {})
@@ -522,13 +705,32 @@ def _evidence_summary(
     return source_summary
 
 
-def _report_execution_provenance(source_output_dir: Path) -> dict[str, Any]:
+def _report_execution_provenance(
+    source_output_dir: Path,
+    *,
+    logical_root: Path | None = None,
+    reader: Any | None = None,
+) -> dict[str, Any]:
     manifest_path = source_output_dir / "mcp_execution_manifest.json"
-    if not manifest_path.is_file() or manifest_path.stat().st_size > MAX_REPORT_SOURCE_BYTES:
+    logical_root = logical_root or source_output_dir
+    if not _source_is_file(
+        manifest_path,
+        physical_root=source_output_dir,
+        logical_root=logical_root,
+        reader=reader,
+    ):
         return {"available": False}
     try:
-        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        payload = json.loads(
+            _source_read_bytes(
+                manifest_path,
+                physical_root=source_output_dir,
+                logical_root=logical_root,
+                reader=reader,
+                maximum=MAX_REPORT_SOURCE_BYTES,
+            ).decode("utf-8")
+        )
+    except (OSError, ValueError, UnicodeDecodeError, json.JSONDecodeError):
         return {"available": False}
     if not isinstance(payload, dict):
         return {"available": False}
@@ -548,8 +750,9 @@ def _report_execution_provenance(source_output_dir: Path) -> dict[str, Any]:
     return {"available": True, **{key: payload.get(key) for key in allowed if key in payload}}
 
 
-def _load_packet(path: Path) -> dict[str, Any]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
+def _load_packet(path: Path, *, payload: bytes | None = None) -> dict[str, Any]:
+    raw = path.read_bytes() if payload is None else payload
+    payload = json.loads(raw.decode("utf-8"))
     if not isinstance(payload, dict) or payload.get("schema_id") not in {
         REPORT_PACKET_SCHEMA,
         LEGACY_REPORT_PACKET_SCHEMA,
@@ -567,23 +770,43 @@ def _validate_prepare_provenance(
     *,
     packet_path: Path,
     manifest_path: Path | None = None,
+    manifest_bytes: bytes | None = None,
+    source_reader: Any | None = None,
 ) -> dict[str, Any]:
     manifest_path = manifest_path or packet_path.parent / "mcp_execution_manifest.json"
-    if packet.get("schema_id") == LEGACY_REPORT_PACKET_SCHEMA and not manifest_path.is_file():
+    # MCP callers pass the exact preparation-manifest bytes they already
+    # consumed through the path policy.  Do not turn a missing exact read
+    # into a second path-only existence check or reopen; the legacy fallback
+    # remains for direct non-MCP callers that intentionally use this helper.
+    manifest_present = manifest_bytes is not None or (
+        source_reader is None and manifest_path.is_file()
+    )
+    if packet.get("schema_id") == LEGACY_REPORT_PACKET_SCHEMA and not manifest_present:
         return {
             "valid": True,
             "compatibility": "legacy_v1_without_preparation_manifest",
             "manifest_path": "",
             "checks": {"legacy_schema_accepted": True},
         }
-    if not manifest_path.is_file() or manifest_path.stat().st_size > MAX_REPORT_SOURCE_BYTES:
+    if manifest_bytes is None:
+        if source_reader is not None:
+            raise ValueError("The report packet is not accompanied by its bounded preparation manifest.")
+        if not manifest_path.is_file() or manifest_path.stat().st_size > MAX_REPORT_SOURCE_BYTES:
+            raise ValueError("The report packet is not accompanied by its bounded preparation manifest.")
+        manifest_bytes = manifest_path.read_bytes()
+    if len(manifest_bytes) > MAX_REPORT_SOURCE_BYTES:
         raise ValueError("The report packet is not accompanied by its bounded preparation manifest.")
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest = json.loads(manifest_bytes.decode("utf-8"))
     if not isinstance(manifest, dict):
         raise ValueError("The report packet preparation manifest is invalid.")
     source_root = Path(str(packet.get("source_output_dir", ""))).expanduser().resolve()
     expected_source_manifest = str(packet.get("source_execution_manifest_sha256", ""))
-    actual_source_manifest = _optional_file_sha256(source_root / "mcp_execution_manifest.json")
+    actual_source_manifest = _optional_file_sha256(
+        source_root / "mcp_execution_manifest.json",
+        physical_root=source_root,
+        logical_root=source_root,
+        reader=source_reader,
+    )
     checks = {
         "tool_id_matches": manifest.get("tool_id") == "oel.prepare_report_packet.v1",
         "status_complete": manifest.get("status") in {"completed", "partial"},
@@ -604,7 +827,12 @@ def _validate_prepare_provenance(
     return {"valid": True, "manifest_path": str(manifest_path), "checks": checks}
 
 
-def _validate_audit_packet_budget(packet: dict[str, Any], *, packet_path: Path) -> None:
+def _validate_audit_packet_budget(
+    packet: dict[str, Any],
+    *,
+    packet_path: Path,
+    source_reader: Any | None = None,
+) -> None:
     artifacts = list(packet.get("artifacts", []) or [])
     if len(artifacts) > MAX_PACKET_ARTIFACTS:
         raise ValueError("The report packet exceeds the audit artifact-count budget.")
@@ -621,12 +849,30 @@ def _validate_audit_packet_budget(packet: dict[str, Any], *, packet_path: Path) 
             raise ValueError("The report packet contains duplicate or empty artifact identities.")
         seen_ids.add(artifact_id)
         seen_paths.add(relative)
-        target = (source_root / relative).resolve()
-        if not _is_within(target, source_root):
+        target = _physical_source_path(
+            source_root / relative,
+            physical_root=source_root,
+            logical_root=source_root,
+        )
+        if target is None or not _source_path_within(target, source_root):
             raise ValueError("The report packet artifact path escapes its bound source run.")
-        if not target.is_file():
+        if not _source_is_file(
+            target,
+            physical_root=source_root,
+            logical_root=source_root,
+            reader=source_reader,
+        ):
             continue
-        size = target.stat().st_size
+        record = _source_file_record(
+            target,
+            physical_root=source_root,
+            logical_root=source_root,
+            reader=source_reader,
+            maximum=MAX_REPORT_ARTIFACT_BYTES,
+        )
+        if record is None:
+            continue
+        size = int(record["bytes"])
         if size > MAX_REPORT_ARTIFACT_BYTES:
             raise ValueError("An artifact exceeds the MCP report-audit size budget.")
         total_bytes += size
@@ -634,8 +880,23 @@ def _validate_audit_packet_budget(packet: dict[str, Any], *, packet_path: Path) 
             raise ValueError("The artifacts exceed the MCP report-audit aggregate size budget.")
 
 
-def _optional_file_sha256(path: Path) -> str:
-    return _sha256_file(path) if path.is_file() else ""
+def _optional_file_sha256(
+    path: Path,
+    *,
+    physical_root: Path,
+    logical_root: Path,
+    reader: Any | None = None,
+) -> str:
+    if not _source_is_file(path, physical_root=physical_root, logical_root=logical_root, reader=reader):
+        return ""
+    record = _source_file_record(
+        path,
+        physical_root=physical_root,
+        logical_root=logical_root,
+        reader=reader,
+        maximum=MAX_REPORT_SOURCE_BYTES,
+    )
+    return "" if record is None else str(record["sha256"])
 
 
 def _packet_content_hash_valid(packet: dict[str, Any]) -> bool:
@@ -644,17 +905,46 @@ def _packet_content_hash_valid(packet: dict[str, Any]) -> bool:
     return len(expected) == 64 and expected == actual
 
 
-def _verify_packet_artifacts(packet: dict[str, Any], *, packet_path: Path) -> dict[str, Any]:
+def _verify_packet_artifacts(
+    packet: dict[str, Any],
+    *,
+    packet_path: Path,
+    source_reader: Any | None = None,
+) -> dict[str, Any]:
     source_root = Path(str(packet.get("source_output_dir", ""))).expanduser().resolve()
     rows: list[dict[str, Any]] = []
     valid = True
     for raw in list(packet.get("artifacts", []) or []):
         item = dict(raw or {})
         relative = str(item.get("relative_path", ""))
-        target = (source_root / relative).resolve()
-        within = _is_within(target, source_root)
-        exists = within and target.is_file()
-        actual_sha = _sha256_file(target) if exists else ""
+        target = _physical_source_path(
+            source_root / relative,
+            physical_root=source_root,
+            logical_root=source_root,
+        )
+        within = target is not None and _source_path_within(target, source_root)
+        exists = bool(
+            within
+            and target is not None
+            and _source_is_file(
+                target,
+                physical_root=source_root,
+                logical_root=source_root,
+                reader=source_reader,
+            )
+        )
+        record = (
+            _source_file_record(
+                target,
+                physical_root=source_root,
+                logical_root=source_root,
+                reader=source_reader,
+                maximum=MAX_REPORT_ARTIFACT_BYTES,
+            )
+            if exists and target is not None
+            else None
+        )
+        actual_sha = "" if record is None else str(record["sha256"])
         matched = exists and actual_sha == str(item.get("sha256", ""))
         required = bool(item.get("required", False))
         valid = valid and matched
@@ -784,6 +1074,136 @@ def _is_within(path: Path, root: Path) -> bool:
     return True
 
 
+def _source_path_within(path: Path, root: Path) -> bool:
+    """Check containment lexically without following a source symlink."""
+
+    try:
+        _absolute_lexical(path).relative_to(_absolute_lexical(root))
+    except ValueError:
+        return False
+    return True
+
+
+def _logical_source_path(
+    value: Path,
+    *,
+    physical_root: Path,
+    logical_root: Path,
+) -> Path | None:
+    path = Path(value).expanduser()
+    physical = _absolute_lexical(path if path.is_absolute() else physical_root / path)
+    physical_base = _absolute_lexical(physical_root)
+    logical_base = _absolute_lexical(logical_root)
+    try:
+        relative = physical.relative_to(physical_base)
+    except ValueError:
+        try:
+            relative = physical.relative_to(logical_base)
+        except ValueError:
+            return None
+    if not relative.parts or any(part in {"", ".", ".."} for part in relative.parts):
+        return None
+    return logical_base / relative
+
+
+def _physical_source_path(
+    value: Path,
+    *,
+    physical_root: Path,
+    logical_root: Path,
+) -> Path | None:
+    path = Path(value).expanduser()
+    physical_base = _absolute_lexical(physical_root)
+    logical_base = _absolute_lexical(logical_root)
+    if not path.is_absolute():
+        path = physical_base / path
+    path = _absolute_lexical(path)
+    try:
+        relative = path.relative_to(logical_base)
+        return physical_base / relative
+    except ValueError:
+        try:
+            path.relative_to(physical_base)
+        except ValueError:
+            return None
+        return path
+
+
+def _source_is_file(
+    path: Path,
+    *,
+    physical_root: Path,
+    logical_root: Path,
+    reader: Any | None,
+) -> bool:
+    if not _source_path_within(path, physical_root):
+        return False
+    if reader is not None:
+        logical = _logical_source_path(path, physical_root=physical_root, logical_root=logical_root)
+        return logical is not None and bool(reader.is_file(logical))
+    return path.is_file() and not path.is_symlink()
+
+
+def _source_file_record(
+    path: Path,
+    *,
+    physical_root: Path,
+    logical_root: Path,
+    reader: Any | None,
+    maximum: int,
+) -> dict[str, int | str] | None:
+    if not _source_path_within(path, physical_root):
+        return None
+    if reader is not None:
+        logical = _logical_source_path(path, physical_root=physical_root, logical_root=logical_root)
+        if logical is None:
+            return None
+        try:
+            return dict(reader.file_record(logical, max_bytes=maximum))
+        except FileNotFoundError:
+            return None
+    if not path.is_file() or path.is_symlink():
+        return None
+    metadata = path.stat()
+    if int(metadata.st_size) > int(maximum):
+        raise ValueError("An artifact exceeds the MCP report size budget.")
+    return {
+        "bytes": int(metadata.st_size),
+        "sha256": _sha256_file(path),
+        "st_dev": int(metadata.st_dev),
+        "st_ino": int(metadata.st_ino),
+        "mtime_ns": int(metadata.st_mtime_ns),
+        "ctime_ns": int(metadata.st_ctime_ns),
+        "nlink": int(metadata.st_nlink),
+    }
+
+
+def _source_read_bytes(
+    path: Path,
+    *,
+    physical_root: Path,
+    logical_root: Path,
+    reader: Any | None,
+    maximum: int,
+) -> bytes:
+    if not _source_is_file(
+        path,
+        physical_root=physical_root,
+        logical_root=logical_root,
+        reader=reader,
+    ):
+        raise FileNotFoundError(path)
+    if reader is not None:
+        logical = _logical_source_path(path, physical_root=physical_root, logical_root=logical_root)
+        if logical is None:
+            raise PermissionError("Source path is outside the retained report input root.")
+        return reader.read_bytes(logical, max_bytes=maximum)
+    payload = path.read_bytes()
+    if len(payload) > int(maximum):
+        raise ValueError("Authorized source exceeds the MCP report size budget.")
+    return payload
+
+
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -798,12 +1218,97 @@ def _sha256_json(value: Any) -> str:
     ).hexdigest()
 
 
+def _logical_output_dir(
+    physical_output_dir: Path,
+    *,
+    writer: Any | None,
+    logical_output_dir: str | Path | None,
+) -> Path:
+    """Map one producer directory from protected staging to final identity."""
+
+    if writer is None:
+        return Path(logical_output_dir) if logical_output_dir is not None else physical_output_dir
+    relative = _lexical_relative_path(physical_output_dir, Path(writer.path))
+    if relative is None:
+        raise ValueError("The report output directory must be below the protected writer root.")
+    logical_root = Path(logical_output_dir) if logical_output_dir is not None else Path(writer.logical_root)
+    return logical_root / relative
+
+
+def _current_output_writer() -> Any | None:
+    try:
+        from sim.security.output_writes import current_output_writer
+    except ImportError:
+        return None
+    return current_output_writer()
+
+
+def _write_output_bytes(path: Path, payload: bytes, *, writer: Any | None) -> Path:
+    if writer is None:
+        if path.suffix.lower() == ".json":
+            _write_serialized_json(path, payload)
+        else:
+            path.write_bytes(payload)
+        return path
+    relative = _lexical_relative_path(path, Path(writer.path))
+    if relative is None:
+        raise ValueError("The report output path must be below the protected writer root.")
+    written = writer.write_bytes(relative, payload)
+    if _absolute_lexical(written) != _absolute_lexical(path):
+        raise ValueError("The protected writer returned an unexpected physical output path.")
+    return path
+
+
+def _complete_output_manifest(
+    manifest: dict[str, Any],
+    *,
+    status: str,
+    logical_artifacts: list[str],
+    physical_artifacts: list[str],
+    writer: Any | None,
+) -> dict[str, Any]:
+    """Complete a manifest with logical artifact names and physical hash sources."""
+
+    try:
+        return complete_manifest(
+            manifest,
+            status=status,
+            artifacts=logical_artifacts,
+            artifact_files=physical_artifacts,
+        )
+    except TypeError as exc:
+        # Keep direct CLI compatibility with older execution helpers while
+        # refusing to silently degrade protected MCP provenance.
+        if "artifact_files" not in str(exc):
+            raise
+        if writer is not None:
+            raise RuntimeError(
+                "The execution manifest helper lacks logical/physical artifact binding."
+            ) from exc
+        return complete_manifest(manifest, status=status, artifacts=physical_artifacts)
+
+
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     _write_serialized_json(path, _serialized_json(payload))
 
 
 def _serialized_json(payload: dict[str, Any]) -> bytes:
     return (json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n").encode("utf-8")
+
+
+def _absolute_lexical(path: str | Path) -> Path:
+    """Normalize a path without following symlinks."""
+
+    return Path(os.path.abspath(os.fspath(Path(path).expanduser())))
+
+
+def _lexical_relative_path(path: str | Path, root: str | Path) -> Path | None:
+    candidate = _absolute_lexical(path)
+    base = _absolute_lexical(root)
+    try:
+        return candidate.relative_to(base)
+    except ValueError:
+        return None
 
 
 def _write_serialized_json(path: Path, payload: bytes) -> None:

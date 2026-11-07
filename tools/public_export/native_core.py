@@ -43,6 +43,7 @@ PUBLIC_ORBIT_MODULES = frozenset(
         "nrlmsise00_stage",
         "numeric_bytes",
         "ogp",
+        "ogp_python",
         "output",
         "relative",
         "resources",

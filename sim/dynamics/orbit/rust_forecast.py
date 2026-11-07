@@ -10,7 +10,7 @@ def eligible(dynamics, truth, elapsed, env):
         return False
     from sim.dynamics.model import OrbitalAttitudeDynamics
     from sim.dynamics.orbit.propagator import OrbitPropagator
-    from sim.dynamics.orbit.rust_force_plan import _CODES
+    from sim.dynamics.orbit.rust_force_plan import _CODES, native_force_plan_codes
 
     return bool(
         type(dynamics) is OrbitalAttitudeDynamics and type(prop) is OrbitPropagator
@@ -21,6 +21,7 @@ def eligible(dynamics, truth, elapsed, env):
         and dynamics.resource_model is None and dynamics.geometry_area_profile is None
         and not dynamics.use_rectangular_prism_for_aero_srp and dynamics.lift_axis_body is None
         and all(any(plugin is known for known in _CODES) for plugin in prop.plugins)
+        and native_force_plan_codes(prop, env) is not None
         and np.isfinite(dynamics.mu_km3_s2) and dynamics.mu_km3_s2 > 0
         and elapsed > 0 and np.isfinite(elapsed) and np.isfinite(truth.t_s + elapsed)
         and truth.mass_kg > 0 and np.isfinite(truth.mass_kg)
@@ -31,7 +32,7 @@ def eligible(dynamics, truth, elapsed, env):
 
 def _prepare(dynamics, truth, elapsed, env, native):
     from sim.dynamics.orbit.accelerations import OrbitContext
-    from sim.dynamics.orbit.rust_force_plan import _CODES, make_plan
+    from sim.dynamics.orbit.rust_force_plan import _CODES, make_plan, native_force_plan_codes
     from sim.rust_orbit_backend import native_harmonic_degree_limit
 
     prop = dynamics.orbit_propagator
@@ -55,6 +56,8 @@ def _prepare(dynamics, truth, elapsed, env, native):
         x = np.r_[truth.position_eci_km, truth.velocity_eci_km_s]
         orbit_context = OrbitContext(dynamics.mu_km3_s2, truth.mass_kg,
                                      dynamics.area_m2, dynamics.cd, dynamics.cr)
+        if native_force_plan_codes(prop, local_env) is None:
+            return None
         if 1 in codes:
             from sim.dynamics.orbit.propagator import spherical_harmonics_plugin
             if local_env.get("_compiled_spherical_harmonics_terms") is None:

@@ -1,8 +1,8 @@
 # Public Flight Software Authoring
 
 The OEL Public FSW Authoring Kit is the dependency-clean path for creating and
-exercising a custom Python complete-stack flight-software candidate against
-OEL's typed simulation boundary. It provides editable ADCS and RPO starters,
+exercising a custom Python, C, C++, or Rust complete-stack flight-software
+candidate against OEL's typed simulation boundary. It provides editable ADCS and RPO starters,
 safe manifest inspection, explicit trusted-import validation, component tests,
 one deterministic serial smoke run, and content-bound receipts.
 
@@ -21,18 +21,19 @@ The public kit owns these operations:
 | `inspect` | Read-only; does not import candidate code | Normalized identity, hashes, paths, handling metadata |
 | `plan` | Read-only | Content-bound work order, effects, resource posture, and approval requirements |
 | `validate` | Imports only with explicit trust | Schema, path, direct-import truth-firewall, lifecycle, plugin, and serial-smoke checks |
-| `test` | Executes the declared component suite | Bounded pytest result tied to the exact candidate identity |
+| `build` | Executes trusted native build scripts | Offline CMake/Cargo build receipt and executable identity |
+| `test` | Executes the declared component suite | Bounded pytest, CTest, or Cargo result tied to the exact candidate identity |
 | `smoke` | Executes one deterministic serial scenario | Run manifest, ordinary OEL artifacts, and review store |
 | `verify-receipt` | Read-only | Current candidate and artifact identity check |
 
-Only `python_stack` candidates are accepted. Candidate paths must remain inside
+Python `python_stack` and native `native_stack` candidates are accepted. Candidate paths must remain inside
 one authorized workspace, symbolic-link inputs are refused, outputs must be new
 or empty, component tests are time-bounded, and the workflow does not use the
 network or hosted AI.
 
 The private FSWDK remains the strict workflow superset for Controller Bench,
 comparison campaigns, tuning, qualification and baseline promotion, packaged
-review evidence, external-process candidates, cFS/SIL, and program-specific
+review evidence, cFS/SIL, and program-specific
 integration.
 
 ## First Candidate
@@ -64,10 +65,11 @@ sandbox and do not make hostile Python safe.
 
 ## Candidate Contract
 
-A public `oel.fsw_authoring.candidate.v1` manifest declares:
+Python `oel.fsw_authoring.candidate.v1` and native
+`oel.fsw_authoring.candidate.v2` manifests declare:
 
 - a stable candidate identity and revision;
-- one Python module and complete-stack class;
+- one Python module/class, or native source plus a content-bound executable;
 - the public `oel.fsw.boundary.v1` onboard contract;
 - a compatible public hardware profile and task period;
 - one component-test directory and one deterministic smoke scenario;
@@ -110,3 +112,43 @@ expose hidden truth or private orchestration.
 Agents should plan before an effectful operation, show the operator the source
 trust and effect boundary, use a fresh output directory, and summarize saved
 OEL evidence rather than inferring qualification from a successful command.
+
+## C, C++, and Rust candidates
+
+Native source authoring uses the same bounded inspect/build/validate/test/smoke
+workflow. For example, from the authorized workspace:
+
+```bash
+oel fsw doctor
+oel fsw init my_native_adcs --language c --template adcs
+oel fsw inspect fsw_candidates/my_native_adcs/candidate.yaml
+oel fsw plan fsw_candidates/my_native_adcs/candidate.yaml build
+oel fsw build fsw_candidates/my_native_adcs/candidate.yaml --trusted-build
+oel fsw validate fsw_candidates/my_native_adcs/candidate.yaml
+oel fsw test fsw_candidates/my_native_adcs/candidate.yaml
+oel fsw smoke fsw_candidates/my_native_adcs/candidate.yaml
+```
+
+Use `--language cpp` or `--language rust`, and `--template rpo` for the
+corresponding editable starter. All native builds require CMake and a C
+compiler; C++ also needs a C++ compiler, Rust also needs Cargo and rustc. The
+Rust SDK shares the C runtime. Dependencies are optional for Python-only users;
+`doctor` reports the detected executables without installing anything.
+
+Builds execute reviewed build scripts and record compiler/source/binary identity.
+Build directories and logs remain beside their receipt; remove them only when
+no retained evidence needs the executable. Edits require rebuild/revalidation.
+Native validation is non-executing; native tests and smoke execute trusted code.
+The generic local stdio adapter and SDKs are public; cFS/SIL and the broader
+FSWDK verification workflows retain their Pro boundary.
+
+Read the [native stdio contract](contracts/fsw-native-stdio-contract.md) for wire
+records, checkpoint declarations, timing, failure behavior, SDK coverage, and
+platform qualification limits. Native support currently has macOS arm64
+implementation evidence; Windows/Linux require native acceptance runs.
+
+Public-local MCP scaffolding accepts the optional `language` field. Native
+builds use `oel.fsw.build_candidate.v1`, with independent source-trust and execute
+approvals. Existing Python commands and candidate-v1 manifests retain their
+behavior. The native build tool exposes fixed local toolchain operations,
+without a general-purpose shell or remote deployment facility.

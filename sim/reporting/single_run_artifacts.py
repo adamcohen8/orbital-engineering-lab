@@ -7,8 +7,8 @@ import json
 import os
 import re
 import stat
+from contextlib import nullcontext
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +22,12 @@ from sim.reporting.ground_station_access_reports import write_ground_station_acc
 from sim.reporting.output_index import write_output_index
 from sim.reporting.review_store import write_single_run_review_store
 from sim.runtime_support import _resolve_rocket_stack, _resolve_satellite_isp_s
+from sim.security.output_writes import (
+    bind_output_writer,
+    current_output_writer,
+    rewrite_staged_paths,
+    staged_output_file,
+)
 from sim.utils.io import sha256_file, write_json
 
 
@@ -44,6 +50,53 @@ class SingleRunArtifactContext:
     object_state_frames: dict[str, str]
     object_propagation: dict[str, Any] | None = None
     extra_artifacts: dict[str, Any] | None = None
+
+
+def _writer_logical_path(path: str | Path, writer: Any | None = None) -> Path:
+    """Map a producer path to the writer's retained logical namespace.
+
+    A protected execution may hand the engine either its logical output root or
+    the private path-facing staging root.  Both names describe the same output
+    tree; this helper keeps artifact metadata on the logical name while the
+    writer controls the physical destination.
+    """
+
+    active = writer or current_output_writer()
+    raw = Path(path).expanduser()
+    if not raw.is_absolute():
+        raw = Path.cwd() / raw
+    if active is None:
+        return raw
+    logical_root = Path(active.logical_root).expanduser()
+    physical_root = Path(active.root).expanduser()
+    for candidate, mapped_root in ((logical_root, logical_root), (physical_root, logical_root)):
+        try:
+            return mapped_root / raw.relative_to(candidate)
+        except ValueError:
+            continue
+    raise ValueError(f"Output path {raw} is outside the protected writer roots.")
+
+
+def _invoke_path_writer(function: Any, *, output_dir: Path, **kwargs: Any) -> Any:
+    """Run a legacy path-facing producer in private staging when protected.
+
+    Several optional report producers still accept only a filesystem path.  A
+    private staging directory lets those producers retain their CLI behavior
+    while the final publication uses the already-open descriptor writer.
+    """
+
+    active = current_output_writer()
+    if active is None:
+        return function(output_dir=output_dir, **kwargs)
+    staging = active.create_staging(prefix=".oel-report-")
+    try:
+        with bind_output_writer(None):
+            result = function(output_dir=staging.path, **kwargs)
+        active.publish_staging(staging)
+        return rewrite_staged_paths(result, staging.path, Path(active.logical_root))
+    finally:
+        if not staging._closed:
+            staging.remove_tree()
 
 
 def format_single_run_summary(summary: dict[str, Any]) -> str:
@@ -164,6 +217,8 @@ def write_single_run_artifacts(
     if context.cfg.simulator.central_body != "earth":
         from sim.reporting.planetary import write_artifacts
         return write_artifacts(payload, context)
+    writer = current_output_writer()
+    output_dir = _writer_logical_path(context.outdir, writer)
     summary = payload.setdefault("summary", {})
     orbital_analysis: dict[str, Any] = {}
     if bool(context.cfg.outputs.orbital_analysis.enabled):
@@ -252,15 +307,22 @@ def write_single_run_artifacts(
                 for item in orbital_analysis.get("directed_links", [])
             ],
         }
-    previous_owned_artifacts = _previous_owned_artifacts(context.outdir)
+    previous_owned_artifacts = _previous_owned_artifacts(output_dir)
     source_path = getattr(context.cfg, "source_path", None)
     if source_path is not None:
-        summary["config_source_path"] = str(Path(source_path).resolve())
+        summary_source_path = Path(source_path).resolve()
+        if writer is not None:
+            summary_source_path = _writer_logical_path(source_path, writer)
+        summary["config_source_path"] = str(summary_source_path)
     config_data = context.cfg.to_dict()
+    if writer is not None:
+        config_outputs = config_data.get("outputs")
+        if isinstance(config_outputs, dict) and config_outputs.get("output_dir"):
+            config_outputs["output_dir"] = str(_writer_logical_path(config_outputs["output_dir"], writer))
     config_json = json.dumps(config_data, sort_keys=True, separators=(",", ":"), allow_nan=False)
     config_sha256 = hashlib.sha256(config_json.encode("utf-8")).hexdigest()
     summary["config_sha256"] = config_sha256
-    summary["generated_utc"] = datetime.now(timezone.utc).isoformat()
+    summary["generated_utc"] = os.environ.get("OEL_GENERATED_UTC", "").strip()
     summary["review_detail"] = str(context.cfg.outputs.review.detail)
     _add_relative_range_summary(summary=summary, context=context)
     trajectory_only = all(
@@ -283,29 +345,35 @@ def write_single_run_artifacts(
             try:
                 from sim.interchange.adapters.planning import emit_mission_recovery_scenario_patches
 
-                emission = emit_mission_recovery_scenario_patches(
-                    mission_recovery,
-                    source_scenario=source_path,
-                    output_dir=context.outdir / "scenario_patches",
+                emission = _invoke_path_writer(
+                    lambda *, output_dir, **_: emit_mission_recovery_scenario_patches(
+                        mission_recovery,
+                        source_scenario=source_path,
+                        output_dir=output_dir,
+                    ),
+                    output_dir=output_dir / "scenario_patches",
                 )
             except (OSError, ValueError) as exc:
                 emission = {"status": "not_emitted", "reason": str(exc), "selection_required": True}
             mission_recovery["scenario_patch_emission"] = emission
-    plot_outputs = _plot_outputs(
-        cfg=context.cfg,
-        t_s=context.t_s,
-        truth_hist=context.truth_hist,
-        target_reference_orbit_truth=context.target_reference_orbit_truth,
-        belief_hist=context.belief_hist,
-        thrust_hist=context.thrust_hist,
-        desired_attitude_hist=context.desired_attitude_hist,
-        knowledge_hist=context.knowledge_hist,
-        knowledge_measurement_hist=context.knowledge_measurement_hist,
-        rocket_metrics=context.rocket_metrics if context.rocket_metrics else None,
-        reentry_metrics=context.reentry_metrics,
-        bridge_hist=context.bridge_hist,
-        ground_station_access=dict(payload.get("ground_station_access", {}) or {}),
-        outdir=context.outdir,
+    plot_outputs = _invoke_path_writer(
+        lambda *, output_dir, **_: _plot_outputs(
+            cfg=context.cfg,
+            t_s=context.t_s,
+            truth_hist=context.truth_hist,
+            target_reference_orbit_truth=context.target_reference_orbit_truth,
+            belief_hist=context.belief_hist,
+            thrust_hist=context.thrust_hist,
+            desired_attitude_hist=context.desired_attitude_hist,
+            knowledge_hist=context.knowledge_hist,
+            knowledge_measurement_hist=context.knowledge_measurement_hist,
+            rocket_metrics=context.rocket_metrics if context.rocket_metrics else None,
+            reentry_metrics=context.reentry_metrics,
+            bridge_hist=context.bridge_hist,
+            ground_station_access=dict(payload.get("ground_station_access", {}) or {}),
+            outdir=output_dir,
+        ),
+        output_dir=output_dir,
     )
     if orbital_analysis:
         plot_outputs = dict(plot_outputs)
@@ -317,42 +385,57 @@ def write_single_run_artifacts(
             plot_path = str(dict(item.get("artifacts", {}) or {}).get("margin_plot_png") or "")
             if plot_path:
                 plot_outputs[f"directed_link:{item.get('analysis_id')}"] = plot_path
-    mission_recovery_plot = _write_mission_recovery_trade_space_plot(
-        cfg=context.cfg,
-        mission_recovery=mission_recovery,
-        outdir=context.outdir,
+    mission_recovery_plot = _invoke_path_writer(
+        lambda *, output_dir, **_: _write_mission_recovery_trade_space_plot(
+            cfg=context.cfg,
+            mission_recovery=mission_recovery,
+            outdir=output_dir,
+        ),
+        output_dir=output_dir,
     )
     if mission_recovery_plot:
         plot_outputs = dict(plot_outputs)
         plot_outputs["mission_recovery_trade_space"] = mission_recovery_plot
-    animation_outputs = _animate_outputs(
-        cfg=context.cfg,
-        t_s=context.t_s,
-        truth_hist=context.truth_hist,
-        thrust_hist=context.thrust_hist,
-        target_reference_orbit_truth=context.target_reference_orbit_truth,
-        outdir=context.outdir,
+    animation_outputs = _invoke_path_writer(
+        lambda *, output_dir, **_: _animate_outputs(
+            cfg=context.cfg,
+            t_s=context.t_s,
+            truth_hist=context.truth_hist,
+            thrust_hist=context.thrust_hist,
+            target_reference_orbit_truth=context.target_reference_orbit_truth,
+            outdir=output_dir,
+        ),
+        output_dir=output_dir,
     )
     summary["plot_outputs"] = plot_outputs
     summary["animation_outputs"] = animation_outputs
-    access_report_paths, access_report_views = write_ground_station_access_reports(
-        outdir=context.outdir,
-        ground_station_access=dict(payload.get("ground_station_access", {}) or {}),
-        ground_station_access_summary=dict(payload.get("ground_station_access_summary", {}) or {}),
-        t_s=context.t_s,
-        initial_jd_utc=context.cfg.simulator.initial_jd_utc,
+    access_report_paths, access_report_views = _invoke_path_writer(
+        lambda *, output_dir, **_: write_ground_station_access_reports(
+            outdir=output_dir,
+            ground_station_access=dict(payload.get("ground_station_access", {}) or {}),
+            ground_station_access_summary=dict(payload.get("ground_station_access_summary", {}) or {}),
+            t_s=context.t_s,
+            initial_jd_utc=context.cfg.simulator.initial_jd_utc,
+        ),
+        output_dir=output_dir,
     )
     if access_report_paths:
         summary["ground_station_access_report_epoch_utc"] = access_report_views.get("epoch_utc")
         summary["ground_station_access_report_epoch_jd_utc"] = access_report_views.get("epoch_jd_utc")
         summary["ground_station_access_report_outputs"] = access_report_paths
         payload["ground_station_access_report_views"] = access_report_views
-    bridge_outputs, bridge_summary = _write_private_bridge_artifacts(outdir=context.outdir, bridge_hist=context.bridge_hist)
+    bridge_outputs, bridge_summary = _invoke_path_writer(
+        lambda *, output_dir, **_: _write_private_bridge_artifacts(
+            outdir=output_dir,
+            bridge_hist=context.bridge_hist,
+        ),
+        output_dir=output_dir,
+    )
     if bridge_outputs:
         summary["bridge_extension_outputs"] = bridge_outputs
         summary["bridge_extension_summary"] = bridge_summary
 
-    effective_config_path = context.outdir / "effective_config.json"
+    effective_config_path = output_dir / "effective_config.json"
     write_json(str(effective_config_path), config_data)
     summary["effective_config_path"] = str(effective_config_path)
     artifacts: dict[str, Any] = {
@@ -366,11 +449,21 @@ def write_single_run_artifacts(
         }
     if payload.get("ground_segment"):
         from sim.ground_segment.artifacts import write_ground_artifacts
-        artifacts.update(write_ground_artifacts(context.outdir, payload["ground_segment"]))
+        artifacts.update(
+            _invoke_path_writer(
+                lambda *, output_dir, **_: write_ground_artifacts(output_dir, payload["ground_segment"]),
+                output_dir=output_dir,
+            )
+        )
     if payload.get("spacecraft_resources"):
         from sim.spacecraft_resources.artifacts import write_resource_artifacts
 
-        artifacts.update(write_resource_artifacts(context.outdir, payload["spacecraft_resources"]))
+        artifacts.update(
+            _invoke_path_writer(
+                lambda *, output_dir, **_: write_resource_artifacts(output_dir, payload["spacecraft_resources"]),
+                output_dir=output_dir,
+            )
+        )
     if bool(context.cfg.outputs.stats.get("save_csv", False)):
         artifacts["history_csv"] = str(_write_history_csv(context=context))
     if bool(context.cfg.outputs.stats.get("save_history_npz", False)):
@@ -380,13 +473,13 @@ def write_single_run_artifacts(
             payload["history_binary_outputs"] = history_outputs
             artifacts["history_npz"] = str(history_outputs["npz"])
     else:
-        stale_history = context.outdir / "master_run_history.npz"
-        if stale_history.exists():
+        stale_history = output_dir / "master_run_history.npz"
+        if writer is None and stale_history.exists():
             stale_history.unlink()
     if bool(context.cfg.outputs.stats.get("save_json", True)):
-        artifacts["summary_json"] = str(context.outdir / "master_run_summary.json")
+        artifacts["summary_json"] = str(output_dir / "master_run_summary.json")
     if bool(context.cfg.outputs.stats.get("save_full_log", True)):
-        artifacts["run_log_json"] = str(context.outdir / "master_run_log.json")
+        artifacts["run_log_json"] = str(output_dir / "master_run_log.json")
     if plot_outputs:
         artifacts["plots"] = plot_outputs
     if animation_outputs:
@@ -395,16 +488,17 @@ def write_single_run_artifacts(
         artifacts["ground_station_access_reports"] = access_report_paths
     if bridge_outputs:
         artifacts["bridge_extensions"] = bridge_outputs
-    _prune_stale_owned_artifacts(
-        output_dir=context.outdir,
-        previous=previous_owned_artifacts,
-        current=_artifact_file_paths(artifacts),
-    )
-    artifacts["output_index_md"] = str(context.outdir / "index.md")
+    if writer is None:
+        _prune_stale_owned_artifacts(
+            output_dir=output_dir,
+            previous=previous_owned_artifacts,
+            current=_artifact_file_paths(artifacts),
+        )
+    artifacts["output_index_md"] = str(output_dir / "index.md")
     if bool(context.cfg.outputs.review.enabled):
         artifacts["review_store"] = {
-            "sqlite": str(context.outdir / "review" / "run.sqlite"),
-            "schema_json": str(context.outdir / "review" / "schema.json"),
+            "sqlite": str(output_dir / "review" / "run.sqlite"),
+            "schema_json": str(output_dir / "review" / "schema.json"),
         }
     review_outputs = _write_review_store(
         payload=payload,
@@ -422,7 +516,7 @@ def write_single_run_artifacts(
     else:
         artifacts.pop("review_store", None)
     index_path = write_output_index(
-        outdir=context.outdir,
+        outdir=output_dir,
         workflow="single_run",
         title=str(context.cfg.scenario_name or "single_run"),
         summary=summary,
@@ -432,12 +526,12 @@ def write_single_run_artifacts(
     payload["output_index_md"] = str(index_path)
     artifacts["output_index_md"] = str(index_path)
     if bool(context.cfg.outputs.stats.get("save_json", True)):
-        write_json(str(context.outdir / "master_run_summary.json"), summary)
+        write_json(str(output_dir / "master_run_summary.json"), summary)
     if bool(context.cfg.outputs.stats.get("save_full_log", True)):
-        write_json(str(context.outdir / "master_run_log.json"), payload)
+        write_json(str(output_dir / "master_run_log.json"), payload)
     if bool(context.cfg.outputs.stats.get("print_summary", True)):
         print(format_single_run_summary(summary))
-    _write_owned_artifact_inventory(context.outdir, _artifact_file_paths(artifacts))
+    _write_owned_artifact_inventory(output_dir, _artifact_file_paths(artifacts))
     return payload
 
 
@@ -528,54 +622,74 @@ def _unlink_regular_child_nofollow(root: Path, relative: Path) -> None:
 
 
 def _write_owned_artifact_inventory(output_dir: Path, paths: set[Path]) -> None:
-    inventory = output_dir / ".oel_run_artifacts.json"
-    root = output_dir.resolve()
+    writer = current_output_writer()
+    logical_output_dir = _writer_logical_path(output_dir, writer)
+    inventory = logical_output_dir / ".oel_run_artifacts.json"
+    root = logical_output_dir
     owned = []
     for path in sorted(paths):
         try:
-            relative = path.resolve().relative_to(root)
+            logical_path = _writer_logical_path(path, writer)
+            relative = logical_path.relative_to(root)
         except ValueError:
             continue
-        if path.is_file() and not path.is_symlink():
-            owned.append({"path": relative.as_posix(), "sha256": sha256_file(path)})
-    inventory.write_text(json.dumps({"version": 2, "paths": owned}, indent=2) + "\n", encoding="utf-8")
+        if writer is None:
+            if logical_path.is_file() and not logical_path.is_symlink():
+                owned.append({"path": relative.as_posix(), "sha256": sha256_file(logical_path)})
+        else:
+            try:
+                writer_relative = logical_path.relative_to(Path(writer.logical_root))
+                digest = writer.sha256(writer_relative)
+            except (FileNotFoundError, OSError, ValueError):
+                continue
+            owned.append({"path": relative.as_posix(), "sha256": digest})
+    serialized = json.dumps({"version": 2, "paths": owned}, indent=2) + "\n"
+    if writer is None:
+        inventory.parent.mkdir(parents=True, exist_ok=True)
+        inventory.write_text(serialized, encoding="utf-8")
+    else:
+        with staged_output_file(inventory) as staged:
+            staged.write_text(serialized, encoding="utf-8")
 
 
 def _write_history_csv(*, context: SingleRunArtifactContext) -> Path:
-    path = context.outdir / "master_run_history.csv"
+    active_writer = current_output_writer()
+    path = _writer_logical_path(context.outdir / "master_run_history.csv", active_writer)
     state_columns = (
         "x_eci_km", "y_eci_km", "z_eci_km", "vx_eci_km_s", "vy_eci_km_s", "vz_eci_km_s",
         "quat_w", "quat_x", "quat_y", "quat_z", "omega_x_body_rad_s", "omega_y_body_rad_s",
         "omega_z_body_rad_s", "mass_kg",
     )
     fieldnames = ["sample_index", "time_s", "object_id", *state_columns]
-    context.outdir.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", newline="") as stream:
-        writer = csv.DictWriter(stream, fieldnames=fieldnames)
-        writer.writeheader()
-        times = np.asarray(context.t_s, dtype=float).reshape(-1)
-        for object_id, raw in sorted(context.truth_hist.items()):
-            history = np.asarray(raw, dtype=float)
-            if history.ndim != 2:
-                continue
-            for sample_index in range(min(times.size, history.shape[0])):
-                row: dict[str, Any] = {
-                    "sample_index": sample_index,
-                    "time_s": float(times[sample_index]),
-                    "object_id": object_id,
-                }
-                row.update(
-                    {
-                        column: float(history[sample_index, index])
-                        for index, column in enumerate(state_columns[: history.shape[1]])
+    stream_context = staged_output_file(path) if active_writer is not None else nullcontext(path)
+    with stream_context as write_path:
+        with write_path.open("w", encoding="utf-8", newline="") as stream:
+            csv_writer = csv.DictWriter(stream, fieldnames=fieldnames)
+            csv_writer.writeheader()
+            times = np.asarray(context.t_s, dtype=float).reshape(-1)
+            for object_id, raw in sorted(context.truth_hist.items()):
+                history = np.asarray(raw, dtype=float)
+                if history.ndim != 2:
+                    continue
+                for sample_index in range(min(times.size, history.shape[0])):
+                    row: dict[str, Any] = {
+                        "sample_index": sample_index,
+                        "time_s": float(times[sample_index]),
+                        "object_id": object_id,
                     }
-                )
-                writer.writerow(row)
+                    row.update(
+                        {
+                            column: float(history[sample_index, index])
+                            for index, column in enumerate(state_columns[: history.shape[1]])
+                        }
+                    )
+                    csv_writer.writerow(row)
     return path
 
 
 def _write_history_npz(*, context: SingleRunArtifactContext) -> dict[str, Any]:
-    path = context.outdir / "master_run_history.npz"
+    active_writer = current_output_writer()
+    path = _writer_logical_path(context.outdir / "master_run_history.npz", active_writer)
     arrays: dict[str, np.ndarray] = {"time_s": np.asarray(context.t_s, dtype=float)}
     manifest: dict[str, Any] = {
         "format": "oel.single_run_history_npz",
@@ -665,7 +779,11 @@ def _write_history_npz(*, context: SingleRunArtifactContext) -> dict[str, Any]:
 
     manifest_json = json.dumps(manifest, sort_keys=True)
     arrays["manifest_json"] = np.asarray(manifest_json)
-    np.savez_compressed(path, **arrays)
+    if active_writer is None:
+        np.savez_compressed(path, **arrays)
+    else:
+        with staged_output_file(path) as staged:
+            np.savez_compressed(staged, **arrays)
     return {
         "npz": str(path),
         "format": manifest["format"],
@@ -690,6 +808,8 @@ def _write_review_store(
     review_cfg = context.cfg.outputs.review
     if not bool(review_cfg.enabled):
         review_dir = context.outdir / "review"
+        if current_output_writer() is not None:
+            return {}
         for name in ("run.sqlite", "run.sqlite.tmp", "schema.json"):
             path = review_dir / name
             if path.is_file() and not path.is_symlink():
@@ -709,7 +829,7 @@ def _write_review_store(
         if bool(review_cfg.strict):
             raise
         staged_db = context.outdir / "review" / "run.sqlite.tmp"
-        if staged_db.is_file() and not staged_db.is_symlink():
+        if current_output_writer() is None and staged_db.is_file() and not staged_db.is_symlink():
             staged_db.unlink()
         status = f"failed:{type(exc).__name__}: {exc}"
         payload.setdefault("summary", {})["review_store_status"] = status

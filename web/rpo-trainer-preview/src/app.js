@@ -32,6 +32,13 @@ import {
   sandboxEllipticLinearCoastStates,
   sandboxTargetStateAt,
 } from "./sandbox-projection.js";
+import {
+  advanceFrameTiming,
+  createFrameTimingState,
+  MAX_PENDING_SIMULATION_S,
+  reconcileFrameTimingExecution,
+  resetFrameTimingState,
+} from "./frame-timing.js";
 
 const ORBIT_PERIOD_S = (2 * Math.PI) / MEAN_MOTION;
 const MAX_STEPS_PER_FRAME = 32;
@@ -133,6 +140,7 @@ const el = {
   topRangeMetric: document.querySelector("#topRangeMetric"),
   topSpeedMetric: document.querySelector("#topSpeedMetric"),
   topDvMetric: document.querySelector("#topDvMetric"),
+  topTimingMetric: document.querySelector("#topTimingMetric"),
   hudLine: document.querySelector("#hudLine"),
   coachHint: document.querySelector("#coachHint"),
   commandLine: document.querySelector("#commandLine"),
@@ -410,6 +418,8 @@ const state = {
   finalReason: "",
   lastFrameMs: 0,
   stepAccumulatorS: 0,
+  frameTiming: createFrameTimingState(),
+  timingResetToken: 0,
   cameraRuleMode: "full_trajectory",
   primerStage: 0,
   primerTimeS: 0,
@@ -847,6 +857,12 @@ function clearControlPulses() {
   touchPulses.clear();
 }
 
+function resetSimulationTiming() {
+  resetFrameTimingState(state.frameTiming);
+  state.stepAccumulatorS = 0;
+  state.timingResetToken += 1;
+}
+
 function resetState(seed = presets.behind) {
   clearControlPulses();
   clearOperatorBurnCinematic();
@@ -860,7 +876,7 @@ function resetState(seed = presets.behind) {
   state.stageDv = 0;
   state.passed = false;
   state.finalReason = "";
-  state.stepAccumulatorS = 0;
+  resetSimulationTiming();
   state.operatorBurnIndex = 0;
   el.debriefPanel.classList.add("hidden");
   setLeaderboardFormVisible(false);
@@ -879,7 +895,9 @@ function showLevelSelector(options = {}) {
   state.mode = "selector";
   state.running = false;
   state.passed = false;
-  state.stepAccumulatorS = 0;
+  resetSimulationTiming();
+  el.topTimingMetric.textContent = "";
+  el.topTimingMetric.classList.remove("timing-warning");
   keys.clear();
   touch.clear();
   clearControlPulses();
@@ -1087,7 +1105,7 @@ function showSandboxSetup(options = {}) {
   state.mode = "sandboxSetup";
   state.running = false;
   state.passed = false;
-  state.stepAccumulatorS = 0;
+  resetSimulationTiming();
   keys.clear();
   touch.clear();
   clearControlPulses();
@@ -1363,7 +1381,7 @@ function startArcadeSession() {
   state.arcadeTransition = null;
   state.passed = false;
   state.finalReason = "";
-  state.stepAccumulatorS = 0;
+  resetSimulationTiming();
   el.debriefPanel.classList.add("hidden");
   setLeaderboardFormVisible(false);
   syncArcadeSnapshot();
@@ -1714,6 +1732,32 @@ function speedFooterText(controls = currentControls()) {
   const selected = currentSpeedMultiple();
   const effective = effectiveSpeedMultiple(controls);
   return effective === selected ? `${selected.toFixed(0)}x` : `${effective.toFixed(0)}x ${sandbox3d.interacting() ? "Camera" : "Burn"} (${selected.toFixed(0)}x Coast)`;
+}
+
+function timingSecondsText(value) {
+  const seconds = Math.max(Number(value) || 0, 0);
+  if (seconds >= 3600) return `${(seconds / 3600).toFixed(1)}h`;
+  if (seconds >= 100) return `${seconds.toFixed(0)}s`;
+  if (seconds >= 10) return `${seconds.toFixed(1)}s`;
+  return `${seconds.toFixed(2)}s`;
+}
+
+function timingRateText(value) {
+  const rate = Math.max(Number(value) || 0, 0);
+  return rate >= 100 ? `${rate.toFixed(0)}x` : `${rate.toFixed(1)}x`;
+}
+
+function simulationTimingStatusText() {
+  const timing = state.frameTiming;
+  const pending = Math.max(Number(state.stepAccumulatorS || 0), 0);
+  const droppedNow = Math.max(Number(timing.droppedSimulationThisFrameS || 0), 0);
+  const droppedTotal = Math.max(Number(timing.droppedSimulationS || 0), 0);
+  const status = `Rate ${timingRateText(timing.actualRateMultiple)} · Pending ${timingSecondsText(pending)}`;
+  if (droppedTotal <= 1.0e-9) return status;
+  if (droppedNow > 1.0e-9) {
+    return `${status} · Drop ${timingSecondsText(droppedNow)} now/${timingSecondsText(droppedTotal)} total`;
+  }
+  return `${status} · Dropped ${timingSecondsText(droppedTotal)} total`;
 }
 
 function refreshInputState() {
@@ -2528,6 +2572,12 @@ function updateDebugState() {
     },
     controls: currentControls(),
     sim: { ...state.sim },
+    timing: {
+      ...state.frameTiming,
+      pendingSimulationS: state.stepAccumulatorS,
+      maxPendingSimulationS: MAX_PENDING_SIMULATION_S,
+      maxStepsPerFrame: MAX_STEPS_PER_FRAME,
+    },
     arcade: state.arcadeSnapshot
       ? {
           score: state.arcadeSnapshot.score,
@@ -2563,6 +2613,8 @@ function updateHud() {
     el.topRangeMetric.textContent = `INFO ${stepText}`;
     el.topSpeedMetric.textContent = `INFO ${stage.title}`;
     el.topDvMetric.textContent = "";
+    el.topTimingMetric.textContent = "";
+    el.topTimingMetric.classList.remove("timing-warning");
     el.hudLine.textContent = `${stepText}   ${stage.title}`;
     el.coachHint.textContent = currentCoachHint();
     el.commandLine.textContent = "";
@@ -2604,6 +2656,11 @@ function updateHud() {
   el.speedMetric.textContent = speedText;
   el.dvMetric.textContent = dvText;
   el.timeMetric.textContent = timeText;
+  el.topTimingMetric.textContent = simulationTimingStatusText();
+  el.topTimingMetric.classList.toggle(
+    "timing-warning",
+    Number(state.frameTiming.droppedSimulationS || 0) > 1.0e-9,
+  );
   if (state.mode === "arcade") {
     const metricGap = "\u00a0".repeat(state.activeView === "mobile" ? 3 : 6);
     const timeLabel = state.activeView === "mobile" ? "Time" : "Time Remaining";
@@ -3676,10 +3733,10 @@ function bucketRangeKm(value) {
 
 function frame(nowMs) {
   const cameraAdjusting = sandbox3d.interacting();
-  if (cameraAdjusting !== Boolean(state.cameraWasAdjusting)) state.stepAccumulatorS = 0;
   state.cameraWasAdjusting = cameraAdjusting;
   if (!state.lastFrameMs) state.lastFrameMs = nowMs;
-  const elapsedS = Math.min((nowMs - state.lastFrameMs) / 1000, 0.2);
+  const wallElapsedS = Math.max((nowMs - state.lastFrameMs) / 1000, 0);
+  const elapsedS = Math.min(wallElapsedS, 0.2);
   state.lastFrameMs = nowMs;
   if (state.mode === "selector") {
     updateDebugState();
@@ -3699,25 +3756,42 @@ function frame(nowMs) {
   if (operatorModeActive() && !state.passed) {
     updateOperatorBurnCinematic(nowMs, shouldRun ? elapsedS * currentSpeedMultiple() : 0);
   }
-  if (shouldRun && !state.passed) {
-    state.stepAccumulatorS += elapsedS * effectiveSpeedMultiple(controls);
-  } else {
-    state.stepAccumulatorS = 0;
-  }
-  let steps = 0;
+  // The timing helper below owns accumulation, bounding, and accounting.
+  // Keep the pending fraction across frames instead of discarding it when the
+  // bounded per-frame work budget is reached.
   const stepDtS = currentStepDtS(controls);
-  if (shouldRun && pendingPulse && hasManeuverInput(controls) && state.stepAccumulatorS < stepDtS) {
-    state.stepAccumulatorS = stepDtS;
+  let pendingSimulationS = state.stepAccumulatorS;
+  if (shouldRun && !state.passed && pendingPulse && hasManeuverInput(controls) && pendingSimulationS < stepDtS) {
+    pendingSimulationS = stepDtS;
   }
-  while (state.stepAccumulatorS >= stepDtS && steps < MAX_STEPS_PER_FRAME) {
+  const timingPlan = advanceFrameTiming(state.frameTiming, {
+    pendingSimulationS,
+    elapsedS,
+    wallElapsedS,
+    speedMultiple: effectiveSpeedMultiple(controls),
+    stepDtS,
+    maxStepsPerFrame: MAX_STEPS_PER_FRAME,
+    maxPendingSimulationS: MAX_PENDING_SIMULATION_S,
+    shouldRun: shouldRun && !state.passed,
+  });
+  state.stepAccumulatorS = timingPlan.pendingSimulationS;
+  const timingResetToken = state.timingResetToken;
+  let actualSteps = 0;
+  for (let steps = 0; steps < timingPlan.steps; steps += 1) {
+    if (state.passed || state.timingResetToken !== timingResetToken) break;
     step(stepDtS, shouldRun);
-    state.stepAccumulatorS -= stepDtS;
-    steps += 1;
+    actualSteps += 1;
+    if (state.passed || state.timingResetToken !== timingResetToken) break;
   }
-  if (steps >= MAX_STEPS_PER_FRAME) {
-    state.stepAccumulatorS = 0;
+  if (state.timingResetToken === timingResetToken) {
+    const execution = reconcileFrameTimingExecution(state.frameTiming, {
+      plannedSteps: timingPlan.steps,
+      actualSteps,
+      stepDtS,
+    });
+    state.stepAccumulatorS = execution.pendingSimulationS;
   }
-  if (steps > 0 || pendingPulse) clearControlPulses();
+  if (timingPlan.steps > 0 || pendingPulse) clearControlPulses();
   updateGhost();
   draw();
   queueFrame(frame);
@@ -3738,7 +3812,7 @@ function togglePause() {
     state.arcadeSession.continueNextRound();
     state.speedIndex = speedOptionIndex(1);
     state.cameraRuleMode = "full_trajectory";
-    state.stepAccumulatorS = 0;
+    resetSimulationTiming();
     state.arcadeTransition = null;
     el.debriefPanel.classList.add("hidden");
     syncArcadeSnapshot();

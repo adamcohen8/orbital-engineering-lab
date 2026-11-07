@@ -209,16 +209,68 @@ identity-bound baseline lifecycle run, a serial bounded Monte Carlo campaign,
 completed-run inspection, and Pro report-packet assembly. The campaign reuses
 OEL's checked-in deterministic engine and per-iteration checkpoints.
 
-The quote binds declared limits for operation count, cases, wall and CPU time,
-peak memory, storage, maximum artifact size, and parallel workers. OA adapters
-may additionally bind input bytes, observations, arc duration, propagation
-steps, estimator evaluations, batch evaluations, and stations. Execution
-records actual consumption and checks it during the operation graph. It cannot
-expand a resource or spending authorization. A cap overrun fails closed. An interruption after a valid
+The plan resource envelope binds limits for operation count, cases, wall and
+CPU time, peak memory, storage, maximum artifact size, and parallel workers.
+The optional metric-specific bounds on each operation add `max_cpu_time_s`,
+`max_work_units`, `max_peak_memory_mb`, and
+`max_retained_output_bytes`. Existing typed work bounds
+`max_propagation_steps`, `max_estimator_evaluations`, and
+`max_batch_evaluations` are assessed as separate cumulative metrics; their
+unlike units are never added together. CPU time, generic work, typed work,
+and cases are cumulative across the operation graph. Peak memory is a
+conservative upper bound over every
+dependency-respecting concurrent set capped by `max_parallel_workers`:
+operations that are transitively related cannot overlap, while independent
+operations may overlap. The bound does not invent an execution schedule from
+wall-time maxima, because an operation can finish earlier than its declared
+maximum and release a worker for a dependent operation.
+
+Input-byte accounting is the sum of unique externally supplied content
+digests, so two references to the same digest count once. A direct dependency
+reference is excluded only when its producer operation, dependency edge,
+output reference, kind, schema, producer identity, and semantic role all match;
+its retained bytes are accounted for separately. A reference with
+`metadata.input_bytes` must also carry its exact lowercase
+`metadata.content_sha256`. Retained-output accounting sums
+`metadata.retained_bytes` (or the compatibility spelling
+`metadata.retained_output_bytes`) across outputs and requires each producing
+operation to declare a per-operation `max_retained_output_bytes` bound. The
+plan may provide typed work caps, `max_work_units`, or
+`max_retained_output_bytes` caps; when the latter is absent, the existing
+`max_storage_mb` cap limits the retained total. `max_arc_duration_s` is a
+per-operation maximum and is checked as such; it is not added to a cumulative
+work metric. Input metadata used to establish typed work is retained per
+operation because the same input can be processed repeatedly.
+
+Observation and station limits follow their input identity semantics. When a
+content identity and count can be resolved, repeated references to that exact
+content contribute once to the plan-wide input count. When identity cannot be
+resolved, the count remains attached to each operation/reference rather than
+being silently deduplicated. This keeps `max_observations` and `max_stations`
+conservative without treating unlike quantities as work units.
+
+These estimates are declarations, not host measurements. The planning result
+and its review expose `resource_accounting.metrics`, where each metric is
+explicitly marked `assessed` or `unassessed`, includes its accounting basis,
+and lists any blocking issue codes. A metric is assessed only when its
+declarations are complete. A partial declaration, invalid number, missing
+content identity, conflicting byte count, or missing per-operation output
+bound produces a blocker. An explicit plan cap without the metadata needed to
+assess that metric also produces a blocker. Preflight never substitutes wall
+time for CPU time, infers work from cases, guesses memory, deduplicates
+without a content digest, or invents output sizes. Existing per-operation
+input bounds remain in force alongside the plan totals. A cap overrun fails
+closed. An interruption after a valid
 campaign checkpoint produces an immutable incomplete attempt receipt and may
 resume against the same plan, quote, approval, and spending cap. Generic
 execution failure is terminal. Failed, interrupted, partial, and
 evidence-incomplete attempts return no successful study evidence.
+
+Envelope declarations are checked against the local policy independently from
+the accounted operation totals. Thus a declared cap above local policy remains
+a blocker even when the operation estimates happen to be small; accounted
+usage is then checked separately against both the plan cap and the applicable
+policy bound.
 
 This package is explicitly excluded from the public export. The public
 capability catalog exposes Pro descriptors but still marks their executors

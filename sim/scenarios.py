@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Iterable, Mapping
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -15,8 +17,23 @@ def dump_scenario_yaml(data: Mapping[str, Any]) -> str:
     return yaml.safe_dump(dict(data), sort_keys=False, allow_unicode=False)
 
 
+def _float_value(value: Any, *, field_name: str) -> float:
+    if isinstance(value, bool):
+        raise ValueError(f"{field_name} must be numeric, not a boolean.")
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{field_name} must be a finite number.") from exc
+    if not math.isfinite(parsed):
+        raise ValueError(f"{field_name} must be a finite number.")
+    return parsed
+
+
 def _float_list(value: Iterable[Any], *, length: int, field_name: str) -> list[float]:
-    out = [float(item) for item in value]
+    out = [
+        _float_value(item, field_name=f"{field_name}[{index}]")
+        for index, item in enumerate(value)
+    ]
     if len(out) != int(length):
         raise ValueError(f"{field_name} must contain exactly {length} numeric values.")
     return out
@@ -436,9 +453,10 @@ class ScenarioArtifact:
         return dump_scenario_yaml(self.to_artifact_dict())
 
     def write(self, path: str | Path) -> Path:
+        from sim.security.output_writes import write_output_text
+
         target = Path(path).expanduser()
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(self.to_yaml_text(), encoding="utf-8")
+        write_output_text(target, self.to_yaml_text())
         return target
 
     def to_config(self) -> Any:
@@ -525,18 +543,27 @@ class ScenarioBuilder:
         attitude_substep_s: float | None = None,
     ) -> ScenarioBuilder:
         simulator = self._root.setdefault("simulator", {})
-        simulator["duration_s"] = float(duration_s)
-        simulator["dt_s"] = float(dt_s)
+        simulator["duration_s"] = _float_value(duration_s, field_name="simulator.duration_s")
+        simulator["dt_s"] = _float_value(dt_s, field_name="simulator.dt_s")
         if initial_jd_utc is not None:
-            simulator["initial_jd_utc"] = float(initial_jd_utc)
+            simulator["initial_jd_utc"] = _float_value(
+                initial_jd_utc,
+                field_name="simulator.initial_jd_utc",
+            )
         if orbit_substep_s is not None:
             dynamics = simulator.setdefault("dynamics", {})
             orbit = dynamics.setdefault("orbit", {})
-            orbit["orbit_substep_s"] = float(orbit_substep_s)
+            orbit["orbit_substep_s"] = _float_value(
+                orbit_substep_s,
+                field_name="simulator.dynamics.orbit.orbit_substep_s",
+            )
         if attitude_substep_s is not None:
             dynamics = simulator.setdefault("dynamics", {})
             attitude = dynamics.setdefault("attitude", {})
-            attitude["attitude_substep_s"] = float(attitude_substep_s)
+            attitude["attitude_substep_s"] = _float_value(
+                attitude_substep_s,
+                field_name="simulator.dynamics.attitude.attitude_substep_s",
+            )
         return self
 
     def outputs(
@@ -591,7 +618,7 @@ class ScenarioBuilder:
         )
         spec_values = dict(specs or {})
         if mass_kg is not None:
-            spec_values["mass_kg"] = float(mass_kg)
+            spec_values["mass_kg"] = _float_value(mass_kg, field_name="objects[].specs.mass_kg")
         entry: dict[str, Any] = {
             "kind": "satellite",
             "enabled": bool(enabled),
@@ -667,14 +694,20 @@ class ScenarioBuilder:
             raise ValueError("station_id must be non-empty.")
         station: dict[str, Any] = {
             "id": sid,
-            "lat_deg": float(lat_deg),
-            "lon_deg": float(lon_deg),
-            "alt_km": float(alt_km),
-            "min_elevation_deg": float(min_elevation_deg),
+            "lat_deg": _float_value(lat_deg, field_name="ground_stations[].lat_deg"),
+            "lon_deg": _float_value(lon_deg, field_name="ground_stations[].lon_deg"),
+            "alt_km": _float_value(alt_km, field_name="ground_stations[].alt_km"),
+            "min_elevation_deg": _float_value(
+                min_elevation_deg,
+                field_name="ground_stations[].min_elevation_deg",
+            ),
             "enabled": bool(enabled),
         }
         if max_range_km is not None:
-            station["max_range_km"] = float(max_range_km)
+            station["max_range_km"] = _float_value(
+                max_range_km,
+                field_name="ground_stations[].max_range_km",
+            )
         stations = self._root.setdefault("ground_stations", [])
         if not isinstance(stations, list):
             raise TypeError("ground_stations is not a list.")
@@ -705,7 +738,7 @@ class ScenarioBuilder:
         return self
 
     def to_dict(self) -> dict[str, Any]:
-        return _merge_dict(self._root, {})
+        return deepcopy(self._root)
 
     def artifact(self) -> ScenarioArtifact:
         return ScenarioArtifact.from_dict(self.to_dict())

@@ -8,10 +8,41 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any
 
+from sim.platform_compat import canonicalize_platform_compatibility_root as _canonicalize_platform_compatibility_root
 from sim.review.generated_artifacts import clear_generated_review_artifacts
+from sim.security.output_writes import (
+    current_output_writer,
+    mkdir_output,
+    read_output_bytes,
+    sha256_output,
+    staged_output_file,
+)
 from sim.utils.io import sha256_file
 
 WORKFLOW_REVIEW_SCHEMA_VERSION = "0.1"
+
+
+def _lexical_path(value: str | Path, *, base: Path | None = None) -> Path:
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = (base or Path.cwd()) / path
+    if any(part in {"", ".", ".."} for part in path.parts[1:]):
+        raise ValueError(f"Workflow path contains traversal components: {path}")
+    return _canonicalize_platform_compatibility_root(Path(os.path.abspath(os.fspath(path))))
+
+
+def _reject_symlink_components(path: Path, *, label: str) -> None:
+    path = _canonicalize_platform_compatibility_root(path)
+    if any(component.is_symlink() for component in (path, *path.parents)):
+        raise ValueError(f"{label} contains a symbolic link: {path}")
+
+
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
 
 KNOWN_WORKFLOW_TABLE_COLUMNS: dict[str, list[str]] = {
     "bench_runs": ["variant_name", "case_name", "passed", "failure_count", "output_dir"],
@@ -81,9 +112,12 @@ def write_workflow_review(
 ) -> dict[str, str]:
     """Write the common review doorway for a completed non-single-run workflow."""
 
-    outdir = Path(output_dir).expanduser().resolve()
+    outdir = _lexical_path(output_dir)
+    _reject_symlink_components(outdir, label="Workflow output directory")
+    outdir = outdir.resolve()
     review_dir = outdir / "review"
-    review_dir.mkdir(parents=True, exist_ok=True)
+    mkdir_output(outdir)
+    mkdir_output(review_dir)
 
     artifact_rows = _artifact_rows(artifacts or {}, output_dir=outdir)
     missing_artifacts = [row["path"] for row in artifact_rows if not bool(row["path_exists"])]
@@ -100,13 +134,15 @@ def write_workflow_review(
     schema_tmp = review_dir / "schema.json.tmp"
     saved_views_tmp = review_dir / "saved_views.json.tmp"
 
+    generated_utc = os.environ.get("OEL_GENERATED_UTC", "").strip()
+
     manifest = {
         "version": 1,
         "review_schema_version": WORKFLOW_REVIEW_SCHEMA_VERSION,
         "workflow_type": str(workflow_type or "workflow"),
         "title": str(title or scenario_name or workflow_type or "workflow"),
         "scenario_name": str(scenario_name or title or workflow_type or "workflow"),
-        "generated_utc": os.environ.get("OEL_GENERATED_UTC", "").strip(),
+        "generated_utc": generated_utc,
         "status": str(status or "complete"),
         "summary": _jsonable(dict(summary or {})),
         "artifacts": artifact_rows,
@@ -118,6 +154,18 @@ def write_workflow_review(
         "schema_json": "review/schema.json" if table_rows else "",
         "saved_views_json": "review/saved_views.json" if query_rows else "",
     }
+    if current_output_writer() is not None:
+        return _write_protected_review(
+            manifest=manifest,
+            artifact_rows=artifact_rows,
+            table_rows=table_rows,
+            query_rows=query_rows,
+            workflow_type=str(workflow_type or "workflow"),
+            manifest_path=manifest_path,
+            db_path=db_path,
+            schema_path=schema_path,
+            saved_views_path=saved_views_path,
+        )
     for tmp in (manifest_tmp, db_tmp, schema_tmp, saved_views_tmp):
         _unlink_if_exists(tmp)
     try:
@@ -151,6 +199,50 @@ def write_workflow_review(
     finally:
         for tmp in (manifest_tmp, db_tmp, schema_tmp, saved_views_tmp):
             _unlink_if_exists(tmp)
+
+    outputs = {"workflow_manifest_json": str(manifest_path)}
+    if table_rows:
+        outputs.update({"sqlite": str(db_path), "schema_json": str(schema_path)})
+    if query_rows:
+        outputs["saved_views_json"] = str(saved_views_path)
+    return outputs
+
+
+def _write_protected_review(
+    *,
+    manifest: dict[str, Any],
+    artifact_rows: list[dict[str, Any]],
+    table_rows: dict[str, list[dict[str, Any]]],
+    query_rows: list[dict[str, str]],
+    workflow_type: str,
+    manifest_path: Path,
+    db_path: Path,
+    schema_path: Path,
+    saved_views_path: Path,
+) -> dict[str, str]:
+    """Publish review files through the bound writer, preserving logical paths."""
+
+    if table_rows:
+        with staged_output_file(db_path) as db_stage:
+            _write_workflow_sqlite(
+                db_path=db_stage,
+                manifest=manifest,
+                artifact_rows=artifact_rows,
+                tables=table_rows,
+            )
+            schema = _schema_from_db(db_stage, workflow_type=workflow_type)
+        with staged_output_file(schema_path) as schema_stage:
+            schema_stage.write_text(json.dumps(schema, indent=2, sort_keys=True), encoding="utf-8")
+    if query_rows:
+        with staged_output_file(saved_views_path) as saved_views_stage:
+            saved_views_stage.write_text(
+                json.dumps({"views": query_rows}, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+    # Publish the manifest last so readers never observe references to an
+    # incomplete database/schema/view set.
+    with staged_output_file(manifest_path) as manifest_stage:
+        manifest_stage.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
 
     outputs = {"workflow_manifest_json": str(manifest_path)}
     if table_rows:
@@ -355,22 +447,38 @@ def _schema_from_db(db_path: Path, *, workflow_type: str) -> dict[str, Any]:
 
 
 def _artifact_rows(artifacts: dict[str, Any], *, output_dir: Path) -> list[dict[str, Any]]:
+    writer = current_output_writer()
     rows: list[dict[str, Any]] = []
     for key, value in _flatten_items(artifacts):
         path_text = str(value or "").strip()
         if not path_text:
             continue
-        candidate = Path(path_text).expanduser()
-        resolved = candidate.resolve() if candidate.is_absolute() else (output_dir / candidate).resolve()
-        exists = resolved.is_file()
+        candidate = _lexical_path(path_text, base=output_dir)
+        _reject_symlink_components(candidate, label=f"Workflow artifact {key!r}")
+        resolved = candidate.resolve()
+        if writer is None and not _is_relative_to(resolved, output_dir.resolve()):
+            raise ValueError(
+                f"Workflow artifact {key!r} must remain inside the output directory: {path_text}"
+            )
+        if writer is not None:
+            try:
+                payload = read_output_bytes(resolved)
+            except FileNotFoundError:
+                exists = False
+                payload = b""
+            else:
+                exists = True
+        else:
+            payload = b""
+            exists = resolved.is_file()
         rows.append(
             {
                 "artifact_key": str(key),
                 "artifact_type": _artifact_type(key, path_text),
                 "path": _relative_path(path_text, output_dir=output_dir),
                 "path_exists": exists,
-                "size_bytes": int(resolved.stat().st_size) if exists else 0,
-                "sha256": sha256_file(resolved) if exists else "",
+                "size_bytes": len(payload) if writer is not None and exists else int(resolved.stat().st_size) if exists else 0,
+                "sha256": sha256_output(resolved) if writer is not None and exists else sha256_file(resolved) if exists else "",
             }
         )
     return rows
@@ -478,10 +586,10 @@ def _artifact_type(key: str, path_text: str) -> str:
 
 
 def _relative_path(path_text: str, *, output_dir: Path) -> str:
-    path = Path(path_text)
-    resolved = path.resolve() if path.is_absolute() else (output_dir / path).resolve()
+    path = _lexical_path(path_text, base=output_dir)
+    _reject_symlink_components(path, label="Workflow artifact")
+    resolved = path.resolve()
     try:
         return resolved.relative_to(output_dir.resolve()).as_posix()
-    except ValueError:
-        pass
-    return str(path_text)
+    except ValueError as exc:
+        raise ValueError(f"Workflow artifact must remain inside the output directory: {path_text}") from exc

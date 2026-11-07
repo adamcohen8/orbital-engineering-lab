@@ -16,6 +16,8 @@ _DEFAULT_BORESIGHT_BODY = np.array([1.0, 0.0, 0.0])
 
 def _unit(v: np.ndarray, eps: float = 1e-12) -> np.ndarray:
     x = np.array(v, dtype=float).reshape(3)
+    if not np.all(np.isfinite(x)):
+        raise ValueError("Vector must contain finite values.")
     n = float(np.linalg.norm(x))
     if n <= eps:
         raise ValueError("Vector magnitude is zero; cannot normalize.")

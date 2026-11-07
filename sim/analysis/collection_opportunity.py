@@ -37,6 +37,7 @@ from sim.analysis.trajectory_targeting import PropagationSettings
 from sim.dynamics.orbit.eclipse import resolve_srp_geometry, srp_shadow_factor
 from sim.dynamics.orbit.frames import FrameContext, eci_to_ecef_rotation_context
 from sim.frame_time import TimeScale, epoch_julian_date, parse_epoch
+from sim.utils.vector_math import dot3, norm3
 
 COLLECTION_OPPORTUNITY_PROBLEM_SCHEMA = "oel.collection_opportunity_problem.v1"
 COLLECTION_OPPORTUNITY_EVIDENCE_SCHEMA = "oel.collection_opportunity_evidence.v1"
@@ -282,7 +283,7 @@ def _frame_context(problem: CollectionOpportunityProblem) -> FrameContext:
 def _angle_rate(left: np.ndarray, right: np.ndarray, duration_s: float) -> float:
     if duration_s <= 0.0:
         return 0.0
-    angle = math.acos(float(np.clip(np.asarray(left) @ np.asarray(right), -1.0, 1.0)))
+    angle = math.atan2(norm3(np.cross(left, right)), dot3(left, right))
     return angle / duration_s
 
 

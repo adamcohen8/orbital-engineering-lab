@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import platform
 import uuid
 from dataclasses import dataclass, field, replace
@@ -305,7 +306,10 @@ class RunManifest:
             validate_state_phase(manifest.state, manifest.phase)
         except InvalidTransitionError as exc:
             raise MalformedRunStateError("Run manifest state and phase are inconsistent.") from exc
-        expected = sha256_json(manifest.unsigned_dict())
+        try:
+            expected = sha256_json(manifest.unsigned_dict())
+        except (TypeError, ValueError) as exc:
+            raise MalformedRunStateError("Run manifest contains non-canonical JSON values.") from exc
         if manifest.manifest_sha256 != expected:
             raise MalformedRunStateError("Run manifest digest does not match its canonical content.")
         if manifest.is_terminal and not manifest.terminal_at:
@@ -441,11 +445,20 @@ class ExecutionOwner:
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise MalformedRunStateError("Execution-owner state is missing required fields.") from exc
-        if owner.pid < 1 or owner.status not in {"active", "exited"}:
+        if isinstance(value.get("pid"), bool) or owner.pid < 1 or owner.status not in {"active", "exited"}:
             raise MalformedRunStateError("Execution-owner pid or status is invalid.")
-        if owner.heartbeat_interval_s <= 0 or owner.stale_after_s <= owner.heartbeat_interval_s:
+        if (
+            not math.isfinite(owner.heartbeat_interval_s)
+            or not math.isfinite(owner.stale_after_s)
+            or owner.heartbeat_interval_s <= 0
+            or owner.stale_after_s <= owner.heartbeat_interval_s
+        ):
             raise MalformedRunStateError("Execution-owner heartbeat timing is invalid.")
-        if owner.owner_sha256 != sha256_json(owner.unsigned_dict()):
+        try:
+            expected = sha256_json(owner.unsigned_dict())
+        except (TypeError, ValueError) as exc:
+            raise MalformedRunStateError("Execution-owner contains non-canonical JSON values.") from exc
+        if owner.owner_sha256 != expected:
             raise MalformedRunStateError("Execution-owner digest does not match its canonical content.")
         return owner
 

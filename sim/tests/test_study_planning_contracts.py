@@ -17,6 +17,7 @@ from sim.study_planning import (
     preflight_study_plan,
     verify_bound_plan,
 )
+from sim.study_planning.cli import _load_object
 from sim.study_planning.config_validation import validate_config_path
 from sim.study_planning.contracts import (
     STUDY_COMPLAINT_RESOLUTION_SCHEMA_ID,
@@ -79,6 +80,7 @@ def test_request_plan_and_review_are_content_bound_and_not_authorized() -> None:
     assert review["operations"] == result["plan"]["operations"]
     assert review["acceptance_criteria"] == result["plan"]["acceptance_criteria"]
     assert review["claims"] == result["plan"]["claims"]
+    assert review["resource_accounting"] == result["resource_accounting"]
     assert review["commercial_status"]["oel_execution_amount"] == 0
     assert review["user_review_required"] is True
     assert review["execution_authorized"] is False
@@ -96,6 +98,24 @@ def test_closed_contract_rejects_unknown_fields_and_dependency_cycles() -> None:
     cyclic["operations"][0]["depends_on"] = ["execute"]
     with pytest.raises(StudyContractError, match="acyclic"):
         _bind_plan(request, cyclic)
+
+
+def test_malformed_resource_envelope_returns_a_contract_error() -> None:
+    request = bind_study_request(_load("passive_request.json"))
+    malformed = _load("passive_plan.json")
+    malformed["resource_envelope"] = None
+    with pytest.raises(StudyContractError, match="resource_envelope"):
+        _bind_plan(request, malformed)
+
+
+def test_planning_cli_rejects_symlinked_json_documents(tmp_path: Path) -> None:
+    target = tmp_path / "request.json"
+    target.write_text(json.dumps(_load("passive_request.json")), encoding="utf-8")
+    alias = tmp_path / "alias.json"
+    alias.symlink_to(target)
+
+    with pytest.raises(ValueError, match="Could not safely read planning document"):
+        _load_object(alias)
 
 
 def test_manifest_digest_binds_access_policy_and_executor_bindings() -> None:

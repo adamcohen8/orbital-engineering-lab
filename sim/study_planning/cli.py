@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from sim.project_version import installed_project_version, source_project_version
+from sim.utils.io import SafeReadError, read_regular_file_nofollow
 
 from .capabilities import discovery_capability_catalog, public_capability_catalog
 from .config_validation import validate_config_path
@@ -18,9 +19,19 @@ from .manifest import PLANNER_VERSION, build_capability_manifest
 from .preflight import preflight_study_plan
 from .schemas import SCHEMAS
 
+_MAX_PLANNING_DOCUMENT_BYTES = 16 * 1024 * 1024
+
 
 def _load_object(path: Path) -> dict[str, Any]:
-    value = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        content = read_regular_file_nofollow(
+            path,
+            min_bytes=1,
+            max_bytes=_MAX_PLANNING_DOCUMENT_BYTES,
+        )
+    except SafeReadError as exc:
+        raise ValueError(f"Could not safely read planning document {path}: {exc}") from exc
+    value = json.loads(content)
     if not isinstance(value, dict):
         raise ValueError(f"Expected a JSON object in {path.name!r}.")
     return value

@@ -10,6 +10,8 @@ oel io formats
 
 These workflows use local input files and explicitly supplied dependencies or
 kernels; they do not fetch external catalogs, observations or kernels.
+Use the separate experimental [data acquisition layer](data-acquisition.md)
+to retrieve authorized sources or register licensed files before importing them.
 
 The IO package is separate from simulation execution. A serializer cannot start
 a simulation or perform an orbit fit. Derived products consume saved evidence:
@@ -35,7 +37,7 @@ read/write directions and required options.
 | `oem-kvn`, `oem-xml` | OEM 2.0/3.0 Cartesian PV, optional acceleration in message-preserving conversion, complete Cartesian covariance | Select one continuous segment for trajectory use. PV conversion rejects acceleration loss. No implicit ephemeris replay. |
 | `opm-kvn`, `opm-xml` | OPM 2.0/3.0 state, covariance, physical parameters and maneuver blocks | Imported maneuver blocks can become an explicit non-executing plan. Exporting a message never executes a maneuver. |
 | `omm-kvn`, `omm-xml` | OMM 2.0/3.0 mean elements and supported ancillary fields | One object per message. Materialization preserves mean elements and selects OGP. |
-| `gp-json`, `gp-csv` | Multi-record GP catalogs, including nine-digit catalog identifiers | The named `celestrak-gp` profile supplies only CelesTrak's documented Earth/TEME/UTC/SGP4 omissions. Other conventions must be explicit. |
+| `gp-json`, `gp-csv` | Multi-record GP catalogs, including nine-digit catalog identifiers | Named `celestrak-gp` and `spacetrack-gp` profiles supply their documented Earth/TEME/UTC/SGP4 omissions. Other conventions must be explicit. |
 | `tle` | Checksum-validated input and standard two-line output | Output rejects unrepresentable catalog IDs, epochs and field widths. An osculating state cannot be relabeled as a TLE. |
 | `tdm-kvn`, `tdm-xml` | TDM 2.0 native AZEL/RADEC, range, Doppler, frequency and phase records within the advertised keyword profile | Retains native observables and correction metadata. Parsing does not reduce radiometric data or declare it ready for instantaneous geometric OD. The existing reduced-geometric OD profile remains separate. |
 | `cdm-kvn`, `cdm-xml` | Two-object CDM 1.0, full 6x6 RTN covariance and supported metadata | No extended drag/SRP/thrust covariance. A generated assessment CDM retains educational Pc and declared-at-TCA covariance limits. |

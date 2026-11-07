@@ -23,6 +23,7 @@ from sim.dynamics.orbit.frames import (
     normalize_frame_model,
 )
 from sim.utils.geodesy import ecef_to_geodetic_altitude_km, ecef_to_geodetic_deg_km
+from sim.utils.vector_math import dot3
 
 AtmosphereModelName = Literal[
     "exponential", "ussa1976", "msis86", "nrlmsise00", "jacchia70", "jb2006", "jb2008", "harris_priester"
@@ -161,21 +162,35 @@ def _compiled_ecef_to_geodetic_deg_km():
     return ecef_to_geodetic_deg_km_kernel
 
 
+def _validated_eci_position(r_eci_km: np.ndarray) -> np.ndarray:
+    """Normalize one ECI position and reject non-finite coordinates early."""
+
+    try:
+        position = np.asarray(r_eci_km, dtype=float).reshape(3)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("r_eci_km must contain exactly three finite values") from exc
+    if not np.all(np.isfinite(position)):
+        raise ValueError("r_eci_km must contain exactly three finite values")
+    return position
+
+
 def _radial_altitude_km_from_eci(r_eci_km: np.ndarray) -> float:
-    if isinstance(r_eci_km, np.ndarray) and r_eci_km.dtype == np.float64 and r_eci_km.shape == (3,):
-        r_vec = r_eci_km
-    else:
-        r_vec = np.asarray(r_eci_km, dtype=float).reshape(3)
-    r2 = float(np.dot(r_vec, r_vec))
+    r_vec = _validated_eci_position(r_eci_km)
+    return _radial_altitude_from_validated_position(r_vec)
+
+
+def _radial_altitude_from_validated_position(r_vec: np.ndarray) -> float:
+    r2 = dot3(r_vec, r_vec)
     if r2 <= 0.0:
         return 0.0
     return max(0.0, math.sqrt(r2) - EARTH_RADIUS_KM)
 
 
 def _ecef_from_eci_for_atmosphere(r_eci_km: np.ndarray, t_s: float, env: dict) -> np.ndarray:
+    r_vec = _validated_eci_position(r_eci_km)
     prepared = env.get("_prepared_density_frame")
     if prepared is not None:
-        return prepared.rotation(float(t_s)) @ np.asarray(r_eci_km, dtype=float).reshape(3)
+        return prepared.rotation(float(t_s)) @ r_vec
     frame_model = str(env.get("density_frame_model", env.get("drag_frame_model", "simple"))).strip().lower()
     eop_path = env.get("density_eop_path", env.get("drag_eop_path"))
     if env.get("_rust_numeric_backend") == "rust" and not _is_eop_frame_model(frame_model):
@@ -187,9 +202,9 @@ def _ecef_from_eci_for_atmosphere(r_eci_km: np.ndarray, t_s: float, env: dict) -
             earth_rotation_rad_s=7.2921159e-5,
         )
         if rotation is not None:
-            return rotation @ np.asarray(r_eci_km, dtype=float).reshape(3)
+            return rotation @ r_vec
     return eci_to_ecef_harmonic(
-        r_eci_km,
+        r_vec,
         float(t_s),
         jd_utc_start=env.get("jd_utc_start"),
         frame_model=frame_model,
@@ -289,20 +304,30 @@ def _altitude_lat_lon_deg_from_eci(
 
 
 def density_exponential(r_eci_km: np.ndarray, t_s: float, env: dict | None = None) -> float:
+    r_vec = _validated_eci_position(r_eci_km)
+    alt_km = _radial_altitude_from_validated_position(r_vec)
+    if env is None or _EXPONENTIAL_ENV_KEYS.isdisjoint(env):
+        ceiling_km = 1000.0
+        rho_ref = 1.225
+        reference_altitude_km = 0.0
+        scale_height_km = 8.5
+    else:
+        ceiling_km = float(env.get("exponential_ceiling_altitude_km", 1000.0))
+        rho_ref = float(env.get("exponential_reference_density_kg_m3", 1.225))
+        reference_altitude_km = float(env.get("exponential_reference_altitude_km", 0.0))
+        scale_height_km = float(env.get("exponential_scale_height_km", 8.5))
+    if not math.isfinite(ceiling_km) or ceiling_km < 0.0:
+        raise ValueError("exponential_ceiling_altitude_km must be finite and nonnegative.")
+    if not math.isfinite(rho_ref) or rho_ref < 0.0:
+        raise ValueError("exponential_reference_density_kg_m3 must be finite and nonnegative.")
+    if not math.isfinite(reference_altitude_km):
+        raise ValueError("exponential_reference_altitude_km must be finite.")
+    if not math.isfinite(scale_height_km) or scale_height_km <= 0.0:
+        raise ValueError("exponential_scale_height_km must be finite and positive.")
     if env is not None and env.get("_rust_numeric_backend") == "rust":
         from sim.rust_environment_backend import try_exponential_density, try_radial_exponential_density
-        if env is None or _EXPONENTIAL_ENV_KEYS.isdisjoint(env):
-            ceiling_km = 1000.0
-            rho_ref = 1.225
-            reference_altitude_km = 0.0
-            scale_height_km = 8.5
-        else:
-            ceiling_km = float(env.get("exponential_ceiling_altitude_km", 1000.0))
-            rho_ref = float(env.get("exponential_reference_density_kg_m3", 1.225))
-            reference_altitude_km = float(env.get("exponential_reference_altitude_km", 0.0))
-            scale_height_km = float(env.get("exponential_scale_height_km", 8.5))
         native = try_radial_exponential_density(
-            r_eci_km,
+            r_vec,
             radius_km=EARTH_RADIUS_KM,
             reference_density_kg_m3=rho_ref,
             reference_altitude_km=reference_altitude_km,
@@ -312,7 +337,7 @@ def density_exponential(r_eci_km: np.ndarray, t_s: float, env: dict | None = Non
         if native is not None:
             return native
         native = try_exponential_density(
-            _radial_altitude_km_from_eci(r_eci_km),
+            alt_km,
             reference_density_kg_m3=rho_ref,
             reference_altitude_km=reference_altitude_km,
             scale_height_km=scale_height_km,
@@ -320,24 +345,8 @@ def density_exponential(r_eci_km: np.ndarray, t_s: float, env: dict | None = Non
         )
         if native is not None:
             return native
-    alt_km = _radial_altitude_km_from_eci(r_eci_km)
-    if env is None or _EXPONENTIAL_ENV_KEYS.isdisjoint(env):
-        if alt_km > 1000.0:
-            return 0.0
-        return 1.225 * math.exp(-alt_km / 8.5)
-
-    ceiling_km = float(env.get("exponential_ceiling_altitude_km", 1000.0))
     if alt_km > ceiling_km:
         return 0.0
-    rho_ref = float(env.get("exponential_reference_density_kg_m3", 1.225))
-    reference_altitude_km = float(env.get("exponential_reference_altitude_km", 0.0))
-    scale_height_km = float(env.get("exponential_scale_height_km", 8.5))
-    if not math.isfinite(rho_ref) or rho_ref < 0.0:
-        raise ValueError("exponential_reference_density_kg_m3 must be finite and nonnegative.")
-    if not math.isfinite(reference_altitude_km):
-        raise ValueError("exponential_reference_altitude_km must be finite.")
-    if not math.isfinite(scale_height_km) or scale_height_km <= 0.0:
-        raise ValueError("exponential_scale_height_km must be finite and positive.")
     return rho_ref * math.exp(-(alt_km - reference_altitude_km) / scale_height_km)
 
 

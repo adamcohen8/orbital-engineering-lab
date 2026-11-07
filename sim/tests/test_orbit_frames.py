@@ -502,6 +502,16 @@ def test_transform_state_applies_rotating_frame_velocity_term() -> None:
     np.testing.assert_allclose(roundtrip_v, v_eci, rtol=0.0, atol=1e-9)
 
 
+@pytest.mark.parametrize("transform", [transform_position, transform_state])
+def test_runtime_frame_transforms_reject_unknown_identical_labels(transform) -> None:
+    ctx = frame_context_from_mapping({"model": "simple_gmst"})
+    with pytest.raises(ValueError, match="Unsupported runtime frame"):
+        if transform is transform_position:
+            transform(np.zeros(3), "bogus", "bogus", t_s=0.0, context=ctx)
+        else:
+            transform(np.zeros(3), np.zeros(3), "bogus", "bogus", t_s=0.0, context=ctx)
+
+
 @pytest.mark.parametrize("elapsed_s", [0.0, 10.0, 420.0, 86400.0])
 def test_simple_frame_station_speed_has_no_julian_date_quantization(elapsed_s: float) -> None:
     from sim.dynamics.orbit.frames import PreparedFrameEvaluator, eci_to_ecef_rotation_derivative_context

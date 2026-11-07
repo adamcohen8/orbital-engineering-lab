@@ -76,10 +76,17 @@ def try_configure_environment_de440_body(
     starts = np.asarray(row_starts_jd_tdb, dtype=np.float64).reshape(-1)
     ends = np.asarray(row_ends_jd_tdb, dtype=np.float64).reshape(-1)
     arrays = [np.asarray(value, dtype=np.float64).reshape(-1) for value in (x_rows, y_rows, z_rows)]
-    if starts.shape != ends.shape or any(not np.all(np.isfinite(value)) for value in (starts, ends, *arrays)):
-        raise ValueError("DE440 context body inputs must be finite and have matching row metadata")
+    coeff_count_value, segments_value, span_value = _validate_de440_table(
+        starts,
+        ends,
+        arrays,
+        coeff_count=coeff_count,
+        segments=segments,
+        span_days=span_days,
+        label="DE440 context body",
+    )
     setter(
-        int(body_index), starts.tolist(), ends.tolist(), int(coeff_count), int(segments), float(span_days),
+        int(body_index), starts.tolist(), ends.tolist(), coeff_count_value, segments_value, span_value,
         *(value.tolist() for value in arrays),
     )
     return True
@@ -283,6 +290,38 @@ def _batch(value: Any, width: int, label: str) -> np.ndarray:
     return result
 
 
+def _validate_de440_table(
+    starts: np.ndarray,
+    ends: np.ndarray,
+    arrays: list[np.ndarray],
+    *,
+    coeff_count: int,
+    segments: int,
+    span_days: float,
+    label: str,
+) -> tuple[int, int, float]:
+    """Validate the flattened DE440 table ABI before crossing the FFI."""
+
+    if starts.shape != ends.shape:
+        raise ValueError(f"{label} row metadata must have matching shapes")
+    if any(not np.all(np.isfinite(value)) for value in (starts, ends, *arrays)):
+        raise ValueError(f"{label} inputs must be finite")
+    try:
+        coeff_count_value = int(coeff_count)
+        segments_value = int(segments)
+        span_value = float(span_days)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{label} metadata must be numeric") from exc
+    if coeff_count_value <= 0 or segments_value <= 0 or not np.isfinite(span_value) or span_value <= 0.0:
+        raise ValueError(f"{label} metadata must have positive coefficient count, segments, and span")
+    if coeff_count_value != coeff_count or segments_value != segments:
+        raise ValueError(f"{label} coefficient count and segments must be integers")
+    expected = starts.size * coeff_count_value * segments_value
+    if any(value.size != expected for value in arrays):
+        raise ValueError(f"{label} coefficient arrays have an invalid flattened shape")
+    return coeff_count_value, segments_value, span_value
+
+
 def try_radial_exponential_density_batch(
     positions_km: Any,
     *,
@@ -391,15 +430,24 @@ def try_de440_chebyshev_batch(
     starts = np.asarray(row_starts_jd_tdb, dtype=np.float64).reshape(-1)
     ends = np.asarray(row_ends_jd_tdb, dtype=np.float64).reshape(-1)
     arrays = [np.asarray(value, dtype=np.float64).reshape(-1) for value in (x_rows, y_rows, z_rows)]
-    if starts.shape != ends.shape or any(not np.all(np.isfinite(value)) for value in (times, starts, ends, *arrays)):
-        raise ValueError("DE440 batch inputs must be finite and have matching row metadata")
+    if not np.all(np.isfinite(times)):
+        raise ValueError("DE440 query epochs must be finite")
+    coeff_count_value, segments_value, span_value = _validate_de440_table(
+        starts,
+        ends,
+        arrays,
+        coeff_count=coeff_count,
+        segments=segments,
+        span_days=span_days,
+        label="DE440 batch",
+    )
     result = native(
         times.tolist(),
         starts.tolist(),
         ends.tolist(),
-        int(coeff_count),
-        int(segments),
-        float(span_days),
+        coeff_count_value,
+        segments_value,
+        span_value,
         *(array.tolist() for array in arrays),
     )
     return np.asarray(result, dtype=np.float64).reshape(-1, 3) / 1.0e3

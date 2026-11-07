@@ -51,6 +51,10 @@ class ReviewPlotArtifact:
     truncated: bool
     spec: ReviewPlotSpec
     qa: dict[str, Any] = field(default_factory=dict)
+    # ``path`` remains the physical path used by the renderer and QA pass.
+    # Protected MCP callers may render into private staging while publishing
+    # the logical path in manifests and response payloads before hashing.
+    logical_path: Path | None = None
 
 
 EvidencePlotRecipe = ReviewPlotRecipe
@@ -289,9 +293,19 @@ def save_review_plot(
     *,
     path: str | Path | None = None,
     record: bool = True,
+    writer: Any | None = None,
+    logical_output_dir: str | Path | None = None,
 ) -> ReviewPlotArtifact:
     result = workspace.query(spec.sql, max_rows=max(int(spec.max_rows), 1))
-    return _save_review_plot_from_result(workspace, spec, result=result, path=path, record=record)
+    return _save_review_plot_from_result(
+        workspace,
+        spec,
+        result=result,
+        path=path,
+        record=record,
+        writer=writer,
+        logical_output_dir=logical_output_dir,
+    )
 
 
 def _dry_run_from_result(spec: ReviewPlotSpec, result: ReviewQueryResult) -> dict[str, Any]:
@@ -312,12 +326,48 @@ def _save_review_plot_from_result(
     result: ReviewQueryResult,
     path: str | Path | None = None,
     record: bool = True,
+    writer: Any | None = None,
+    logical_output_dir: str | Path | None = None,
+    _staging_call: bool = False,
 ) -> ReviewPlotArtifact:
     _validate_plot_spec(spec, result)
     spec = _replace_spec(spec, style_name=_normalize_style_alias(spec.style_name))
     artifact_id = _normalize_artifact_id(spec.artifact_id or _default_artifact_id(spec))
     extension = _normalize_extension(spec.file_format)
+    active_writer = writer or _current_output_writer()
+    if writer is None and active_writer is not None and not _staging_call:
+        if path is None:
+            raise ValueError("A protected review plot render requires an explicit logical path.")
+        logical_target = Path(path)
+        from sim.security.output_writes import staged_output_file
+
+        with staged_output_file(logical_target) as staged_path:
+            artifact = _save_review_plot_from_result(
+                workspace,
+                spec,
+                result=result,
+                path=staged_path,
+                record=False,
+                logical_output_dir=logical_target.parent,
+                _staging_call=True,
+            )
+        artifact = replace(
+            artifact,
+            path=logical_target,
+            relative_path=_relative_to_output(workspace, logical_target),
+            logical_path=logical_target,
+        )
+        if record:
+            record_generated_artifact(
+                workspace,
+                artifact,
+                writer=active_writer,
+                logical_output_dir=Path(active_writer.logical_root),
+            )
+        return artifact
     if path is None:
+        if writer is not None:
+            raise ValueError("A protected review plot render requires an explicit staging path.")
         figures_dir = workspace.output_dir / "review" / "figures"
         out_path = _unique_path(figures_dir / f"{artifact_id}.{extension}")
         artifact_id = _normalize_artifact_id(out_path.stem)
@@ -325,6 +375,11 @@ def _save_review_plot_from_result(
     else:
         out_path = Path(path)
         out_path.parent.mkdir(parents=True, exist_ok=True)
+    logical_path = _logical_artifact_path(
+        out_path,
+        writer=writer,
+        logical_output_dir=logical_output_dir,
+    )
     scenario_name = _scenario_name(workspace)
     plot_metadata = artifact_metadata(scenario_name=scenario_name, artifact_id=artifact_id)
 
@@ -378,14 +433,20 @@ def _save_review_plot_from_result(
     artifact = ReviewPlotArtifact(
         artifact_id=artifact_id,
         path=out_path,
-        relative_path=_relative_to_output(workspace, out_path),
+        relative_path=_relative_to_output(workspace, logical_path),
         row_count=result.row_count,
         truncated=result.truncated,
         spec=spec,
         qa=qa,
+        logical_path=logical_path,
     )
     if record:
-        record_generated_artifact(workspace, artifact)
+        record_generated_artifact(
+            workspace,
+            artifact,
+            writer=writer,
+            logical_output_dir=logical_output_dir,
+        )
     return artifact
 
 
@@ -394,15 +455,38 @@ def record_generated_artifact(
     artifact: ReviewPlotArtifact,
     *,
     review_store_identity: dict[str, Any] | None = None,
+    writer: Any | None = None,
+    logical_output_dir: str | Path | None = None,
 ) -> None:
+    writer = writer or _current_output_writer()
     index_path = workspace.output_dir / "review" / "generated_artifacts.json"
-    index_path.parent.mkdir(parents=True, exist_ok=True)
+    index_relative: Path | None = None
+    if writer is not None:
+        logical_root = Path(logical_output_dir) if logical_output_dir is not None else Path(writer.logical_root)
+        index_relative = _lexical_relative_path(index_path, logical_root)
+        if index_relative is None:
+            raise ValueError("A protected generated-artifact index must be below the logical output root.")
+    else:
+        index_path.parent.mkdir(parents=True, exist_ok=True)
     existing: list[dict[str, Any]] = []
-    if index_path.exists():
+    if writer is None and index_path.is_file():
         try:
             data = json.loads(index_path.read_text(encoding="utf-8"))
             if isinstance(data, dict):
                 existing = [dict(item) for item in list(data.get("artifacts", []) or []) if isinstance(item, dict)]
+        except Exception:
+            existing = []
+    elif writer is not None:
+        assert index_relative is not None
+        try:
+            # The descriptor-bound record and read keep this merge on the
+            # writer-owned inode even if the visible output path is replaced.
+            writer.file_record(index_relative)
+            data = json.loads(writer.read_bytes(index_relative).decode("utf-8"))
+            if isinstance(data, dict):
+                existing = [dict(item) for item in list(data.get("artifacts", []) or []) if isinstance(item, dict)]
+        except FileNotFoundError:
+            existing = []
         except Exception:
             existing = []
     spec = artifact.spec
@@ -447,17 +531,22 @@ def record_generated_artifact(
             "extra": dict(spec.extra or {}),
         }
     )
-    index_path.write_text(json.dumps({"artifacts": existing}, indent=2) + "\n", encoding="utf-8")
-    _refresh_output_index_generated_artifacts(workspace.output_dir, existing)
+    encoded = (json.dumps({"artifacts": existing}, indent=2) + "\n").encode("utf-8")
+    if writer is None:
+        index_path.write_bytes(encoded)
+    else:
+        assert index_relative is not None
+        _write_protected_file(writer, index_relative, encoded)
+    _refresh_output_index_generated_artifacts(workspace.output_dir, existing, writer=writer)
 
 
 def _refresh_output_index_generated_artifacts(
     output_dir: Path,
     artifacts: list[dict[str, Any]],
+    *,
+    writer: Any | None = None,
 ) -> None:
     index_path = output_dir / "index.md"
-    if not index_path.is_file():
-        return
     start = "<!-- OEL_REVIEW_GENERATED_ARTIFACTS_START -->"
     end = "<!-- OEL_REVIEW_GENERATED_ARTIFACTS_END -->"
     rows = [start, "## Review-Generated Artifacts", ""]
@@ -469,14 +558,34 @@ def _refresh_output_index_generated_artifacts(
         rows.append(f"- `{artifact_id}`: [`{relative}`]({relative})")
     rows.extend([end, ""])
     section = "\n".join(rows)
-    text = index_path.read_text(encoding="utf-8")
+    if writer is None:
+        if not index_path.is_file():
+            return
+        text = index_path.read_text(encoding="utf-8")
+    else:
+        logical_root = Path(writer.logical_root)
+        relative = _lexical_relative_path(index_path, logical_root)
+        if relative is None:
+            return
+        try:
+            writer.file_record(relative)
+            text = writer.read_bytes(relative).decode("utf-8")
+        except FileNotFoundError:
+            return
     if start in text and end in text:
         prefix, remainder = text.split(start, 1)
         _old, suffix = remainder.split(end, 1)
         updated = prefix.rstrip() + "\n\n" + section + suffix.lstrip("\n")
     else:
         updated = text.rstrip() + "\n\n" + section
-    index_path.write_text(updated, encoding="utf-8")
+    if writer is None:
+        index_path.write_text(updated, encoding="utf-8")
+        return
+    logical_root = Path(writer.logical_root)
+    relative = _lexical_relative_path(index_path, logical_root)
+    if relative is None:
+        return
+    _write_protected_file(writer, relative, updated.encode("utf-8"), update=True)
 
 
 def _review_store_identity(workspace: ReviewWorkspace) -> dict[str, Any]:
@@ -577,19 +686,19 @@ def _draw_ric_rectangular_2d(plt: Any, result: ReviewQueryResult, spec: ReviewPl
     for axis, (x_column, y_column, title, x_label, y_label) in zip(axes, planes, strict=True):
         for index, (group, rows) in enumerate(sorted(grouped.items())):
             points = [
-                (float(row[x_column]), float(row[y_column]))
+                (_finite_float(row.get(x_column)), _finite_float(row.get(y_column)))
                 for row in rows
-                if row.get(x_column) is not None and row.get(y_column) is not None
             ]
-            if not points:
+            finite_points = [point for point in points if point[0] is not None and point[1] is not None]
+            if not finite_points:
                 continue
-            x_values = [point[0] for point in points]
-            y_values = [point[1] for point in points]
+            x_values = [point[0] if None not in point else np.nan for point in points]
+            y_values = [point[1] if None not in point else np.nan for point in points]
             color = palette[index % len(palette)]
             axis.plot(x_values, y_values, linewidth=1.8, color=color, label=group, zorder=3)
             axis.scatter(
-                [x_values[0]],
-                [y_values[0]],
+                [finite_points[0][0]],
+                [finite_points[0][1]],
                 marker="o",
                 s=44,
                 color="#22C55E",
@@ -599,8 +708,8 @@ def _draw_ric_rectangular_2d(plt: Any, result: ReviewQueryResult, spec: ReviewPl
                 zorder=6,
             )
             axis.scatter(
-                [x_values[-1]],
-                [y_values[-1]],
+                [finite_points[-1][0]],
+                [finite_points[-1][1]],
                 marker="X",
                 s=56,
                 color="#F97316",
@@ -654,15 +763,14 @@ def _draw_directed_link_margin(plt: Any, result: ReviewQueryResult, spec: Review
     palette = ("#38BDF8", "#F97316", "#A78BFA", "#22C55E", "#EAB308", "#EC4899")
     for index, (group, rows) in enumerate(sorted(grouped.items())):
         points = [
-            (float(row["time_s"]), float(row["margin_db"]), bool(row["available"]))
+            (_finite_float(row.get("time_s")), _finite_float(row.get("margin_db")), bool(row["available"]))
             for row in rows
-            if row.get("time_s") is not None and row.get("margin_db") is not None
         ]
-        if not points:
+        if not any(point[0] is not None and point[1] is not None for point in points):
             continue
         x_values = np.asarray([point[0] for point in points], dtype=float)
         y_values = np.asarray([point[1] for point in points], dtype=float)
-        available = np.asarray([point[2] for point in points], dtype=bool)
+        available = np.asarray([point[2] and point[0] is not None and point[1] is not None for point in points], dtype=bool)
         color = palette[index % len(palette)]
         ax.plot(x_values, y_values, color=color, linewidth=1.8, label=group, zorder=3)
         ax.fill_between(
@@ -722,13 +830,21 @@ def _draw_series(
     *,
     label: str = "",
 ) -> None:
-    pairs = [
-        (row.get(x_column), row.get(y_column))
-        for row in rows
-        if row.get(x_column) is not None and row.get(y_column) is not None
-    ]
+    pairs = []
+    for row in rows:
+        x_value = row.get(x_column)
+        y_value = _finite_float(row.get(y_column))
+        if not _is_plottable_x(x_value):
+            if plot_type != "scatter" and pairs:
+                pairs.append((pairs[-1][0], np.nan))
+            continue
+        if y_value is None:
+            if plot_type != "scatter":
+                pairs.append((x_value, np.nan))
+            continue
+        pairs.append((x_value, y_value))
     x_values = [item[0] for item in pairs]
-    y_values = [float(item[1]) for item in pairs]
+    y_values = [item[1] for item in pairs]
     if plot_type == "scatter":
         ax.scatter(x_values, y_values, s=20, label=label or None)
     else:
@@ -741,17 +857,29 @@ def _draw_bar(ax: Any, rows: list[dict[str, Any]], spec: ReviewPlotSpec) -> None
     width = 0.8 / max(series_count, 1)
     centers = np.arange(len(labels), dtype=float)
     for series_index, y_column in enumerate(spec.y_columns):
-        values = [float(row[y_column]) if row.get(y_column) is not None else np.nan for row in rows]
+        values = [
+            _finite_float(row.get(y_column)) if _finite_float(row.get(y_column)) is not None else np.nan
+            for row in rows
+        ]
         offsets = centers - 0.4 + width * (series_index + 0.5)
         ax.bar(offsets, values, width=width, label=y_column if series_count > 1 else None)
     ax.set_xticks(centers, labels)
+    # Bars use numeric centers to support grouped series, but the axis remains
+    # categorical.  Keep the presentation formatter from replacing labels
+    # with the internal center indices.
+    ax._oel_categorical_x = True
     if len(labels) > 8:
         ax.tick_params(axis="x", labelrotation=35)
 
 
 def _draw_histogram(ax: Any, rows: list[dict[str, Any]], spec: ReviewPlotSpec) -> None:
     for y_column in spec.y_columns:
-        values = [float(row.get(y_column)) for row in rows if row.get(y_column) is not None]
+        values = [
+            finite
+            for row in rows
+            for finite in [_finite_float(row.get(y_column))]
+            if finite is not None
+        ]
         ax.hist(values, bins="auto", alpha=0.72, label=y_column if len(spec.y_columns) > 1 else None)
 
 
@@ -759,8 +887,12 @@ def _draw_heatmap(ax: Any, rows: list[dict[str, Any]], spec: ReviewPlotSpec) -> 
     x_column = spec.x_column
     y_column = spec.group_column
     value_column = spec.y_columns[0]
-    x_labels = _ordered_unique(str(row.get(x_column)) for row in rows if row.get(x_column) is not None)
-    y_labels = _ordered_unique(str(row.get(y_column)) for row in rows if row.get(y_column) is not None)
+    x_labels = _ordered_unique(
+        str(row.get(x_column)) for row in rows if _is_plottable_x(row.get(x_column))
+    )
+    y_labels = _ordered_unique(
+        str(row.get(y_column)) for row in rows if _is_plottable_x(row.get(y_column))
+    )
     x_index = {value: idx for idx, value in enumerate(x_labels)}
     y_index = {value: idx for idx, value in enumerate(y_labels)}
     matrix = [[float("nan") for _ in x_labels] for _ in y_labels]
@@ -768,12 +900,19 @@ def _draw_heatmap(ax: Any, rows: list[dict[str, Any]], spec: ReviewPlotSpec) -> 
         x_value = row.get(x_column)
         y_value = row.get(y_column)
         z_value = row.get(value_column)
-        if x_value is None or y_value is None or z_value is None:
+        if not _is_plottable_x(x_value) or not _is_plottable_x(y_value) or z_value is None:
             continue
-        matrix[y_index[str(y_value)]][x_index[str(x_value)]] = float(z_value)
+        finite_z = _finite_float(z_value)
+        if finite_z is None:
+            continue
+        matrix[y_index[str(y_value)]][x_index[str(x_value)]] = finite_z
     image = ax.imshow(matrix, aspect="auto")
     ax.set_xticks(range(len(x_labels)), x_labels)
     ax.set_yticks(range(len(y_labels)), y_labels)
+    # ``imshow`` uses numeric pixel centers while both displayed axes are
+    # categorical review dimensions.
+    ax._oel_categorical_x = True
+    ax._oel_categorical_y = True
     if len(x_labels) > 6:
         ax.tick_params(axis="x", labelrotation=35)
     ax.figure.colorbar(image, ax=ax, label=spec.y_label or value_column)
@@ -782,6 +921,10 @@ def _draw_heatmap(ax: Any, rows: list[dict[str, Any]], spec: ReviewPlotSpec) -> 
 def _validate_plot_spec(spec: ReviewPlotSpec, result: ReviewQueryResult) -> None:
     if result.row_count <= 0:
         raise ValueError("The review query returned no rows to plot.")
+    if int(spec.max_rows) <= 0:
+        raise ValueError("max_rows must be a positive integer.")
+    if int(spec.dpi) <= 0:
+        raise ValueError("dpi must be a positive integer.")
     columns = set(result.columns)
     if spec.x_column not in columns:
         if _normalize_plot_type(spec.plot_type) != "histogram" or spec.x_column:
@@ -809,8 +952,43 @@ def _validate_plot_spec(spec: ReviewPlotSpec, result: ReviewQueryResult) -> None
                 f"y_column '{column}' must contain numeric values. "
                 f"Numeric columns: {', '.join(numeric_columns(result)) or '(none)'}."
             )
-    if _normalize_plot_type(spec.plot_type) == "heatmap" and not spec.group_column:
+        if not any(_finite_float(row.get(column)) is not None for row in result.rows):
+            raise ValueError(f"y_column '{column}' must contain at least one finite numeric value.")
+    plot_type = _normalize_plot_type(spec.plot_type)
+    if plot_type == "heatmap" and not spec.group_column:
         raise ValueError("Heatmap plots require a group_column for the y-axis category.")
+    if plot_type == "heatmap":
+        x_values = {
+            str(row.get(spec.x_column))
+            for row in result.rows
+            if _is_plottable_x(row.get(spec.x_column))
+        }
+        y_values = {
+            str(row.get(spec.group_column))
+            for row in result.rows
+            if _is_plottable_x(row.get(spec.group_column))
+        }
+        finite_cells = any(
+            _is_plottable_x(row.get(spec.x_column))
+            and _is_plottable_x(row.get(spec.group_column))
+            and _finite_float(row.get(spec.y_columns[0])) is not None
+            for row in result.rows
+        )
+        if not x_values or not y_values or not finite_cells:
+            raise ValueError(
+                "Heatmap plots require at least one non-null x category, y category, "
+                "and finite value."
+            )
+    elif plot_type != "histogram":
+        for y_column in spec.y_columns:
+            if not any(
+                _is_plottable_x(row.get(spec.x_column))
+                and _finite_float(row.get(y_column)) is not None
+                for row in result.rows
+            ):
+                raise ValueError(
+                    f"y_column '{y_column}' has no finite value paired with a plottable x value."
+                )
     if spec.renderer_id == "ric_rectangular_2d":
         required = {"r_radial_km", "i_intrack_km", "c_crosstrack_km"}
         missing = sorted(required - columns)
@@ -943,6 +1121,22 @@ def _quote_identifier(value: str) -> str:
     return '"' + str(value).replace('"', '""') + '"'
 
 
+def _finite_float(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if np.isfinite(number) else None
+
+
+def _is_plottable_x(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, (bool, int, float, np.integer, np.floating)):
+        return _finite_float(value) is not None
+    return True
+
+
 def _ordered_unique(values: Sequence[str] | Any) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []
@@ -1005,6 +1199,65 @@ def _relative_to_output(workspace: ReviewWorkspace, path: Path) -> str:
         return path.relative_to(workspace.output_dir).as_posix()
     except ValueError:
         return str(path)
+
+
+def _logical_artifact_path(
+    path: Path,
+    *,
+    writer: Any | None,
+    logical_output_dir: str | Path | None,
+) -> Path:
+    """Resolve a physical staging path to its persisted logical path."""
+
+    if writer is None:
+        if logical_output_dir is None:
+            return Path(path)
+        return Path(logical_output_dir) / Path(path).name
+    relative = _lexical_relative_path(path, Path(writer.path))
+    if relative is None:
+        raise ValueError("The review artifact path must be below the protected writer root.")
+    logical_root = Path(logical_output_dir) if logical_output_dir is not None else Path(writer.logical_root)
+    return logical_root / relative
+
+
+def _current_output_writer() -> Any | None:
+    try:
+        from sim.security.output_writes import current_output_writer
+    except ImportError:
+        return None
+    return current_output_writer()
+
+
+def _absolute_lexical(path: str | Path) -> Path:
+    """Normalize a path without following symlinks."""
+
+    return Path(os.path.abspath(os.fspath(Path(path).expanduser())))
+
+
+def _lexical_relative_path(path: str | Path, root: str | Path) -> Path | None:
+    candidate = _absolute_lexical(path)
+    base = _absolute_lexical(root)
+    try:
+        return candidate.relative_to(base)
+    except ValueError:
+        return None
+
+
+def _write_protected_file(
+    writer: Any,
+    relative: Path,
+    payload: bytes,
+    *,
+    update: bool = False,
+) -> Path:
+    """Write an index through the descriptor-bound writer."""
+
+    if update:
+        return writer.update_existing_bytes(relative, payload)
+    try:
+        return writer.write_bytes(relative, payload)
+    except FileExistsError:
+        return writer.update_existing_bytes(relative, payload)
 
 
 def _needs_legend(spec: ReviewPlotSpec) -> bool:

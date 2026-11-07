@@ -370,6 +370,178 @@ pub fn relative_mpc_cost_batch(
     Ok(costs)
 }
 
+/// Validate the packed reaction-wheel boundary before entering the detached
+/// native loop.  Keep this separate from the PyO3 adapter so the invariants
+/// are unit-testable without importing Python or relying on an installed
+/// extension wheel.
+fn validate_reaction_wheel_inputs(
+    wheels: usize,
+    g: &[f64],
+    maximum_torque: &[f64],
+    maximum_momentum: &[f64],
+    maximum_speed: &[f64],
+    viscous: &[f64],
+    coulomb: &[f64],
+    inertia: &[f64],
+    old_motor: &[f64],
+    omega: &[f64],
+    command: &[f64],
+    dt_s: f64,
+    torque_tau_s: f64,
+) -> Result<(), &'static str> {
+    let dimensions_match = wheels > 0
+        && g.len() == wheels.checked_mul(3).unwrap_or(usize::MAX)
+        && [
+            maximum_torque,
+            maximum_momentum,
+            maximum_speed,
+            viscous,
+            coulomb,
+            inertia,
+            old_motor,
+            omega,
+            command,
+        ]
+        .iter()
+        .all(|values| values.len() == wheels);
+    if !dimensions_match {
+        return Err("wheel dimensions are inconsistent");
+    }
+    if !dt_s.is_finite()
+        || dt_s < 0.0
+        || !torque_tau_s.is_finite()
+        || torque_tau_s < 0.0
+        || !finite(g)
+        || maximum_torque
+            .iter()
+            .chain(maximum_momentum)
+            .chain(maximum_speed)
+            .any(|x| !x.is_finite() || *x < 0.0)
+        || viscous
+            .iter()
+            .chain(coulomb)
+            .any(|x| !x.is_finite() || *x < 0.0)
+        || inertia.iter().any(|x| !x.is_finite() || *x <= 0.0)
+        || old_motor
+            .iter()
+            .chain(omega)
+            .chain(command)
+            .any(|x| !x.is_finite())
+    {
+        return Err("wheel limits and timestep are invalid");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_reaction_wheel_inputs;
+
+    fn valid_inputs() -> (
+        Vec<f64>,
+        Vec<f64>,
+        Vec<f64>,
+        Vec<f64>,
+        Vec<f64>,
+        Vec<f64>,
+        Vec<f64>,
+        Vec<f64>,
+        Vec<f64>,
+        Vec<f64>,
+    ) {
+        let one = || vec![0.1];
+        (
+            vec![1.0, 0.0, 0.0],
+            one(),
+            vec![1.0],
+            vec![3.0],
+            vec![1.0e-5],
+            vec![1.0e-6],
+            vec![0.001],
+            vec![0.0],
+            vec![0.2],
+            one(),
+        )
+    }
+
+    #[test]
+    fn reaction_wheel_validation_accepts_finite_physical_inputs() {
+        let (g, maximum_torque, maximum_momentum, maximum_speed, viscous, coulomb, inertia,
+            old_motor, omega, command) = valid_inputs();
+        assert!(validate_reaction_wheel_inputs(
+            1, &g, &maximum_torque, &maximum_momentum, &maximum_speed, &viscous, &coulomb,
+            &inertia, &old_motor, &omega, &command, 0.1, 0.3,
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn reaction_wheel_validation_rejects_malformed_boundary_inputs() {
+        let (g, maximum_torque, maximum_momentum, maximum_speed, viscous, coulomb, inertia,
+            old_motor, omega, command) = valid_inputs();
+        let check = |g: &[f64], maximum_torque: &[f64], maximum_momentum: &[f64],
+                     maximum_speed: &[f64], viscous: &[f64], coulomb: &[f64], inertia: &[f64],
+                     old_motor: &[f64], omega: &[f64], command: &[f64], dt_s: f64,
+                     torque_tau_s: f64| {
+            validate_reaction_wheel_inputs(
+                1, g, maximum_torque, maximum_momentum, maximum_speed, viscous, coulomb,
+                inertia, old_motor, omega, command, dt_s, torque_tau_s,
+            )
+        };
+        assert!(check(
+            &g, &maximum_torque, &maximum_momentum, &maximum_speed, &viscous, &coulomb,
+            &inertia, &old_motor, &omega, &command, -0.1, 0.3,
+        )
+        .is_err());
+        assert!(check(
+            &g, &maximum_torque, &maximum_momentum, &maximum_speed, &viscous, &coulomb,
+            &inertia, &old_motor, &omega, &command, 0.1, -0.3,
+        )
+        .is_err());
+
+        let mut malformed = g.clone();
+        malformed[0] = f64::NAN;
+        assert!(check(
+            &malformed, &maximum_torque, &maximum_momentum, &maximum_speed, &viscous, &coulomb,
+            &inertia, &old_motor, &omega, &command, 0.1, 0.3,
+        )
+        .is_err());
+        let mut malformed = maximum_torque.clone();
+        malformed[0] = f64::INFINITY;
+        assert!(check(
+            &g, &malformed, &maximum_momentum, &maximum_speed, &viscous, &coulomb, &inertia,
+            &old_motor, &omega, &command, 0.1, 0.3,
+        )
+        .is_err());
+        let mut malformed = viscous.clone();
+        malformed[0] = f64::NAN;
+        assert!(check(
+            &g, &maximum_torque, &maximum_momentum, &maximum_speed, &malformed, &coulomb,
+            &inertia, &old_motor, &omega, &command, 0.1, 0.3,
+        )
+        .is_err());
+        let mut malformed = omega.clone();
+        malformed[0] = f64::NAN;
+        assert!(check(
+            &g, &maximum_torque, &maximum_momentum, &maximum_speed, &viscous, &coulomb,
+            &inertia, &old_motor, &malformed, &command, 0.1, 0.3,
+        )
+        .is_err());
+        let mut malformed = inertia.clone();
+        malformed[0] = 0.0;
+        assert!(check(
+            &g, &maximum_torque, &maximum_momentum, &maximum_speed, &viscous, &coulomb,
+            &malformed, &old_motor, &omega, &command, 0.1, 0.3,
+        )
+        .is_err());
+        assert!(check(
+            &g[..2], &maximum_torque, &maximum_momentum, &maximum_speed, &viscous, &coulomb,
+            &inertia, &old_motor, &omega, &command, 0.1, 0.3,
+        )
+        .is_err());
+    }
+}
+
 #[cfg(feature = "python")]
 mod python {
     use super::*;
@@ -675,21 +847,25 @@ mod python {
         let old_motor = take();
         let omega = take();
         let command = take();
-        // Limits are prepared by the Python owner; reject malformed direct
-        // callers before using clamp (which requires ordered, non-NaN bounds).
-        if !dt_s.is_finite()
-            || !torque_tau_s.is_finite()
-            || maximum_torque
-                .iter()
-                .chain(maximum_momentum)
-                .chain(maximum_speed)
-                .any(|x| x.is_nan() || *x < 0.0)
-            || inertia.iter().any(|x| !x.is_finite() || *x <= 0.0)
-        {
-            return Err(PyValueError::new_err(
-                "wheel limits and timestep are invalid",
-            ));
-        }
+        // Limits are prepared by the Python owner, but this public native
+        // boundary must still reject malformed direct callers before using
+        // clamp (which requires ordered, non-NaN bounds).
+        validate_reaction_wheel_inputs(
+            wheels,
+            g,
+            maximum_torque,
+            maximum_momentum,
+            maximum_speed,
+            viscous,
+            coulomb,
+            inertia,
+            old_motor,
+            omega,
+            command,
+            dt_s,
+            torque_tau_s,
+        )
+        .map_err(PyValueError::new_err)?;
         let output = py.detach(|| {
             let alpha = if dt_s <= 0.0 || torque_tau_s <= 0.0 {
                 1.0

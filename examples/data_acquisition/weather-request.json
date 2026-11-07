@@ -1,0 +1,5 @@
+{
+  "schema": "oel.data-acquisition.v1",
+  "provider": "celestrak",
+  "product": "space_weather"
+}

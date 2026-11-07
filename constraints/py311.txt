@@ -22,9 +22,11 @@ python-dateutil==2.9.0.post0
 pyyaml==6.0.3
 ruff==0.15.14
 scipy==1.17.1
-setuptools==83.0.0
+setuptools==84.1.0
 sgp4==2.27
 six==1.17.0
 tqdm==4.69.1
-oel-rust-orbit==0.18.3
-oel-rust-game==0.5.0
+oel-rust-orbit==0.18.4
+oel-rust-game==0.5.1
+
+filelock==4.2.1

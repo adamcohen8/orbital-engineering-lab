@@ -9,9 +9,10 @@ from pathlib import Path
 from threading import Event
 from typing import Any
 
+from integrations.oel_mcp.approval_grants import OperationConflictError, UnknownOperationOutcome
 from integrations.oel_mcp.base_handlers import BaseOELMCPHandlers
 from integrations.oel_mcp.protocol import SERVER_INFO, tool_definitions
-from integrations.oel_mcp.recovery import recovery_details
+from integrations.oel_mcp.recovery import reconciliation_error_data, recovery_details
 from integrations.oel_mcp.resources import (
     PublishedResource,
     build_public_resource_catalog,
@@ -92,6 +93,8 @@ def build_sdk_server(handlers: BaseOELMCPHandlers) -> Any:
         except (TypeError, ValueError, PermissionError) as exc:
             recovery = recovery_details(exc)
             raise MCPError(-32602, str(exc), data={"recovery": recovery} if recovery else None) from exc
+        except (UnknownOperationOutcome, OperationConflictError) as exc:
+            raise MCPError(-32602, str(exc), data=reconciliation_error_data(exc)) from exc
         except Exception as exc:
             raise MCPError(-32603, "Internal server error without local diagnostic details.") from exc
         content: list[Any] = [TextContent(text=json.dumps(payload, sort_keys=True))]

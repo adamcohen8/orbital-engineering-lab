@@ -17,6 +17,21 @@ from sim.core.models import Command, StateBelief
 
 
 class TestAttitudeActuatorDevices(unittest.TestCase):
+    def test_reaction_wheel_rejects_nonfinite_axes(self):
+        actuator = AttitudeActuator(
+            reaction_wheels=ReactionWheelLimits(
+                max_torque_nm=np.ones(3),
+                max_momentum_nms=np.ones(3),
+                wheel_axes_body=np.array(
+                    [[np.nan, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+                    dtype=float,
+                ),
+            )
+        )
+
+        with self.assertRaisesRegex(ValueError, "finite"):
+            actuator.apply(Command.zero(), limits={}, dt_s=0.0)
+
     def test_magnetorquer_uses_b_cross_m_physical_torque(self):
         actuator = AttitudeActuator(magnetorquers=MagnetorquerLimits(max_dipole_a_m2=np.array([10.0, 10.0, 10.0])))
         command = Command(

@@ -56,12 +56,16 @@ The exact declared host admission matrix is Windows 11 or Server 2022 x64,
 Ubuntu 22.04 or 24.04 x64, and macOS 14+ on arm64 or x64. Maintained evidence
 rows are Windows Server 2022 x64, Ubuntu 22.04 x64, and macOS 15 arm64/Intel.
 These are distinct from package admission and from separately qualified
-external integrations.
+external integrations. On other Linux x64/arm64 hosts, doctor emits a
+qualification warning and attempts runtime checks. A passing doctor result
+reports local functional readiness only; it does not add a maintained evidence
+row or expand signed-bundle host admission.
 
 | Profile | Python | Windows | Linux | macOS |
 | --- | --- | --- | --- | --- |
 | Core CLI/YAML/API/review | 3.10-3.14 | Supported matrix target | Supported matrix target | Supported matrix target |
 | Dev/test | 3.10-3.14 | Supported matrix target | Supported matrix target | Supported matrix target |
+| Acquisition OS credential backend | 3.10-3.14 | Experimental; separate backend evidence required | Experimental; Secret Service session required | Experimental; Keychain round-trip evidence required |
 | Trainer | 3.10 functional only; 3.11-3.14 patched dependency baseline | Supported matrix target | Supported matrix target | Supported matrix target |
 | Numba acceleration | 3.10-3.14 | Where approved constraints resolve | Where approved constraints resolve | Where approved constraints resolve |
 | OEL-native validation | 3.10-3.14 | Supported matrix target | Supported matrix target | Supported matrix target |
@@ -145,6 +149,11 @@ versions. The aggregate `cross-platform` profile therefore omits Numba on Intel
 macOS; deterministic serial execution remains available. The dedicated
 `.[accel]` and convenience `.[full]` profiles retain Numba as an explicit,
 separately qualified capability and are not universal Intel macOS profiles.
+
+For a Linux CPU-only ML or `full` environment, follow the
+[CPU-only Torch installation sequence](installation.md#cpu-only-linux-ml-environments)
+before adding the OEL profile. Selecting a CPU wheel does not expand the
+qualified host matrix.
 
 ## SGP4 Dependency Transition Gate
 

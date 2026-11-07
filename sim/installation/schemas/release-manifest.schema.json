@@ -45,7 +45,12 @@
     "claims": {"type": "array", "items": {"type": "string"}},
     "non_claims": {"type": "array", "items": {"type": "string"}},
     "license": {"type": "object"},
-    "supply_chain": {"type": "object"},
+    "supply_chain": {
+      "type": "object",
+      "properties": {
+        "installation_integrity": {"$ref": "#/$defs/installationIntegrity"}
+      }
+    },
     "signature": {"$ref": "#/$defs/signature"}
   },
   "$defs": {
@@ -58,6 +63,84 @@
         "key_id": {"type": "string", "minLength": 1},
         "value": {"type": "string", "minLength": 1}
       }
+    },
+    "hashRow": {
+      "type": "object",
+      "required": ["path", "bytes", "sha256"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "install_path": {"type": "string", "minLength": 1},
+        "bytes": {"type": "integer", "minimum": 0},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "executable": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "installationIntegrity": {
+      "oneOf": [
+        {"$ref": "#/$defs/expandedInstallationIntegrity"},
+        {
+          "type": "object",
+          "required": ["schema_version", "bytes", "sha256", "data"],
+          "properties": {
+            "schema_version": {"const": "oel.installation-integrity.xz.v1"},
+            "bytes": {"type": "integer", "minimum": 1, "maximum": 33554432},
+            "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "data": {"type": "string", "minLength": 4, "maxLength": 4194304, "pattern": "^[A-Za-z0-9+/]*={0,2}$"}
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "expandedInstallationIntegrity": {
+      "type": "object",
+      "required": ["schema_version", "profile", "source", "runtime", "runtime_profiles", "digest"],
+      "properties": {
+        "schema_version": {"const": "oel.installation-integrity.v1"},
+        "profile": {"type": "string", "minLength": 1},
+        "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "source": {
+          "type": "object",
+          "required": ["schema_version", "exclusions", "files", "digest"],
+          "properties": {
+            "schema_version": {"const": "oel.source-inventory.v1"},
+            "exclusions": {"type": "object"},
+            "files": {"type": "array", "items": {"$ref": "#/$defs/hashRow"}},
+            "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+          },
+          "additionalProperties": false
+        },
+        "runtime": {
+          "type": "object",
+          "required": ["schema_version", "wheels", "layout", "digest"],
+          "properties": {
+            "schema_version": {"const": "oel.runtime-inventory.v1"},
+            "profile": {"type": "string", "minLength": 1},
+            "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "wheels": {"type": "array", "items": {"type": "object"}},
+            "layout": {"type": "object"}
+          },
+          "additionalProperties": false
+        },
+        "runtime_profiles": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {"$ref": "#/$defs/runtimeInventory"}
+        }
+      },
+      "additionalProperties": false
+    },
+    "runtimeInventory": {
+      "type": "object",
+      "required": ["schema_version", "profile", "wheels", "layout", "digest"],
+      "properties": {
+        "schema_version": {"const": "oel.runtime-inventory.v1"},
+        "profile": {"type": "string", "minLength": 1},
+        "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "wheels": {"type": "array", "items": {"type": "object"}},
+        "layout": {"type": "object"}
+      },
+      "additionalProperties": false
     }
   }
 }

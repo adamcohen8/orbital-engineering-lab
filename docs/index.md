@@ -19,7 +19,9 @@ public simulation core.
 7. [Scenario YAML](scenario-yaml.md)
 8. [Python API](python-api.md)
 9. [Modular Data IO And Review Exports](data-io.md)
+   [Acquire Authorized Data And Register Licensed Files](data-acquisition.md).
 10. [Known Limitations](known-limitations.md)
+
 
 ## Evaluator Or Buyer
 
@@ -67,6 +69,7 @@ Start here when you already know the kind of work you want to run.
 | Migrate a scenario config explicitly | [Scenario Config Migrations](config-migrations.md) |
 | Install in an air-gapped environment | [Offline Installation](offline-installation.md) |
 | Import local data, compose scenario objects, or export saved evidence | [Modular Data IO](data-io.md) |
+| Retrieve catalog/environment data or register licensed files | [Local Data Acquisition](data-acquisition.md) |
 | Inspect completed outputs | [Review Store Contract](review-store.md) |
 | Analyze whole-Earth coverage or directed links | [Coverage And Link Scenario Analysis](coverage-link-scenario-analysis.md) |
 | Make custom tables or plots from a run | [Custom Analysis](custom-analysis.md) |

@@ -100,13 +100,13 @@ The validator accepts standalone single-round packets shaped like:
 ```json
 {
   "schema_version": 1,
-  "challenge_id": "pursuit-arcade-local-v1",
+  "challenge_id": "rpo_arcade_pursuit",
   "username": "ORBITACE",
   "email": "optional@example.edu",
   "client_build_hash": "web-build-id",
   "physics_version": "web-two-body-v2",
   "scoring_version": "pursuit-v1",
-  "config_hash": "613a0af6",
+  "config_hash": "8f4352c7",
   "seed": 4242,
   "final_tick": 1200,
   "input_events": [

@@ -19,10 +19,22 @@ from sim.knowledge.object_tracking import (
 from sim.numeric_backend import normalize_numeric_backend
 
 
-def _knowledge_ekf_diag(value: Any, default: list[float]) -> np.ndarray:
-    arr = np.array(value if value is not None else default, dtype=float).reshape(-1)
-    if arr.size != 6:
+def _knowledge_ekf_diag(
+    value: Any,
+    default: list[float],
+    *,
+    field_name: str = "knowledge.estimation.ekf diagonal",
+) -> np.ndarray:
+    """Resolve one EKF diagonal without hiding malformed explicit input."""
+
+    if value is None:
         return np.array(default, dtype=float)
+    try:
+        arr = np.asarray(value, dtype=float).reshape(-1)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must contain six finite nonnegative values.") from exc
+    if arr.size != 6 or not np.all(np.isfinite(arr)) or np.any(arr < 0.0):
+        raise ValueError(f"{field_name} must contain six finite nonnegative values.")
     return arr
 
 
@@ -44,12 +56,24 @@ def _build_knowledge_base(
     observer_id: str, agent_cfg: Any, dt_s: float, rng: np.random.Generator
 ) -> ObjectKnowledgeBase | None:
     knowledge = dict(agent_cfg.knowledge or {})
-    targets = list(knowledge.get("targets", []) or [])
+    raw_targets = knowledge.get("targets", [])
+    if raw_targets is None:
+        return None
+    if isinstance(raw_targets, (str, bytes)) or not isinstance(raw_targets, (list, tuple)):
+        raise ValueError(f"objects.{observer_id}.knowledge.targets must be a list of object IDs.")
+    targets = list(raw_targets)
     if not targets:
         return None
+    if any(isinstance(target_id, (dict, list, tuple, set)) or not str(target_id).strip() for target_id in targets):
+        raise ValueError(f"objects.{observer_id}.knowledge.targets must contain non-empty object IDs.")
     noise = dict(knowledge.get("sensor_error", {}) or {})
     estimation = dict(knowledge.get("estimation", {}) or {})
     ekf_cfg = dict(estimation.get("ekf", knowledge.get("ekf", {})) or {})
+    ekf_path = (
+        f"objects.{observer_id}.knowledge.estimation.ekf"
+        if "ekf" in estimation
+        else f"objects.{observer_id}.knowledge.ekf"
+    )
     numeric_backend = normalize_numeric_backend(
         estimation.get(
             "numeric_backend",
@@ -87,14 +111,17 @@ def _build_knowledge_base(
                     process_noise_diag=_knowledge_ekf_diag(
                         ekf_cfg.get("process_noise_diag"),
                         [1e-8, 1e-8, 1e-8, 1e-10, 1e-10, 1e-10],
+                        field_name=f"{ekf_path}.process_noise_diag",
                     ),
                     meas_noise_diag=_knowledge_ekf_diag(
                         ekf_cfg.get("meas_noise_diag"),
                         [1e-6, 1e-6, 1e-6, 1e-10, 1e-10, 1e-10],
+                        field_name=f"{ekf_path}.meas_noise_diag",
                     ),
                     init_cov_diag=_knowledge_ekf_diag(
                         ekf_cfg.get("init_cov_diag"),
                         [1.0, 1.0, 1.0, 1e-2, 1e-2, 1e-2],
+                        field_name=f"{ekf_path}.init_cov_diag",
                     ),
                     initial_state_eci_km_s=(
                         None if initial_track_state is None else np.array(initial_track_state, dtype=float).reshape(6)

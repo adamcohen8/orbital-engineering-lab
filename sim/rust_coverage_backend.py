@@ -62,18 +62,35 @@ def _unpack_flags(values: bytes, shape: tuple[int, ...] | None = None) -> np.nda
     return result if shape is None else result.reshape(shape)
 
 
+def _tile_rows(value: np.ndarray, label: str) -> np.ndarray:
+    rows = np.asarray(value, dtype=np.float64)
+    if rows.ndim != 2 or rows.shape[1] != 3:
+        raise ValueError(f"{label} must have shape (samples, 3)")
+    if not np.all(np.isfinite(rows)):
+        raise ValueError(f"{label} must contain only finite values")
+    return np.ascontiguousarray(rows)
+
+
 def try_surface_targets_tile(
     observers: np.ndarray, targets: np.ndarray, normals: np.ndarray,
     boresights: np.ndarray, half_angle_rad: float, max_range_km: float | None,
     angular_tolerance_rad: float, range_tolerance_km: float,
 ) -> np.ndarray | None:
+    observer_rows = _tile_rows(observers, "observers")
+    target_rows = _tile_rows(targets, "targets")
+    normal_rows = _tile_rows(normals, "normals")
+    boresight_rows = _tile_rows(boresights, "boresights")
+    if normal_rows.shape != target_rows.shape:
+        raise ValueError("normals must match targets with shape (cells, 3)")
+    if boresight_rows.shape != observer_rows.shape:
+        raise ValueError("boresights must match observers with shape (samples, 3)")
     native = getattr(_extension(), "coverage_surface_targets_tile_bytes", None)
     if native is None:
         return None
-    samples, cells = len(observers), len(targets)
+    samples, cells = observer_rows.shape[0], target_rows.shape[0]
     raw = native(
-        _pack_f64(observers), _pack_f64(targets), _pack_f64(normals),
-        _pack_f64(boresights), float(half_angle_rad), max_range_km,
+        _pack_f64(observer_rows), _pack_f64(target_rows), _pack_f64(normal_rows),
+        _pack_f64(boresight_rows), float(half_angle_rad), max_range_km,
         float(angular_tolerance_rad), float(range_tolerance_km),
     )
     if len(raw) != samples * cells:
@@ -89,14 +106,27 @@ def try_rich_reasons_tile(
     min_sun: float | None, max_sun: float | None,
     angular_tol: float, range_tol: float,
 ) -> np.ndarray | None:
+    kinds = {"axisymmetric_hard_cone": 0, "rectangular_hard_fov": 1, "pushbroom_hard_fov": 2}
+    observer_rows = _tile_rows(observers, "observers")
+    target_rows = _tile_rows(targets, "targets")
+    normal_rows = _tile_rows(normals, "normals")
+    rotation_rows = np.asarray(rotations, dtype=np.float64)
+    if rotation_rows.shape != (observer_rows.shape[0], 3, 3) or not np.all(np.isfinite(rotation_rows)):
+        raise ValueError("rotations must be finite with shape (samples, 3, 3)")
+    if normal_rows.shape != target_rows.shape:
+        raise ValueError("normals must match targets with shape (cells, 3)")
+    sun_rows = None if suns is None else _tile_rows(suns, "suns")
+    if sun_rows is not None and sun_rows.shape != observer_rows.shape:
+        raise ValueError("suns must match observers with shape (samples, 3)")
+    if pattern_kind not in kinds:
+        raise ValueError(f"unsupported coverage pattern kind {pattern_kind!r}")
     native = getattr(_extension(), "coverage_rich_cell_reasons_tile_bytes", None)
     if native is None:
         return None
-    kinds = {"axisymmetric_hard_cone": 0, "rectangular_hard_fov": 1, "pushbroom_hard_fov": 2}
-    samples, cells = len(observers), len(targets)
+    samples, cells = observer_rows.shape[0], target_rows.shape[0]
     raw = native(
-        _pack_f64(observers), _pack_f64(targets), _pack_f64(normals),
-        _pack_f64(rotations), None if suns is None else _pack_f64(suns),
+        _pack_f64(observer_rows), _pack_f64(target_rows), _pack_f64(normal_rows),
+        _pack_f64(rotation_rows), None if sun_rows is None else _pack_f64(sun_rows),
         kinds[pattern_kind], float(x_angle), float(y_angle), max_range,
         max_off_nadir, max_incidence, min_sun, max_sun,
         float(angular_tol), float(range_tol),
@@ -214,6 +244,25 @@ def surface_targets_ecef(
         raise ValueError("target_ecef_km must have shape (targets, 3)")
     if normals.shape != targets.shape:
         raise ValueError("target_outward_normal_ecef must match target_ecef_km")
+    if not np.all(np.isfinite(targets)):
+        raise ValueError("target_ecef_km must be finite with shape (targets, 3).")
+    if not np.all(np.isfinite(normals)):
+        raise ValueError(
+            "target_outward_normal_ecef must be finite and match target_ecef_km."
+        )
+    if not np.all(np.isfinite(observer)) or not np.all(np.isfinite(boresight)):
+        raise ValueError("Observer and boresight vectors must be finite.")
+    boresight_norm = float(np.linalg.norm(boresight))
+    if abs(boresight_norm - 1.0) > 1.0e-10:
+        raise ValueError("boresight_ecef must be a unit vector within 1e-10.")
+    normal_norms = np.linalg.norm(normals, axis=1)
+    if np.any(np.abs(normal_norms - 1.0) > 1.0e-10):
+        raise ValueError("Target outward normals must be unit vectors within 1e-10.")
+    # Keep direct adapter callers on the same documented physical boundary as
+    # evaluate_surface_targets_ecef before loading or dispatching to native code.
+    from sim.analysis.observer_target_geometry import _validate_wgs84_surface_targets
+
+    _validate_wgs84_surface_targets(targets, normals)
     native = _extension()
     byte_function = getattr(native, "coverage_surface_targets_ecef_bytes", None)
     if byte_function is not None:

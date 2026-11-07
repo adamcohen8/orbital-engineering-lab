@@ -683,10 +683,10 @@ class OrbitPropagator:
         """
         if self.numeric_backend != "rust" or self.integrator != "rk4" or self.model != "two_body" or self.state_frame != "eci":
             return None
-        from sim.dynamics.orbit.rust_force_plan import force_codes, make_plan
+        from sim.dynamics.orbit.rust_force_plan import make_plan, native_force_plan_codes
         from sim.rust_orbit_backend import _command, _state, native_harmonic_degree_limit
 
-        if force_codes(self, env) is None:
+        if native_force_plan_codes(self, env) is None:
             return None
         if spherical_harmonics_plugin in self.plugins:
             if env.get("_compiled_spherical_harmonics_terms") is None:
@@ -716,10 +716,10 @@ class OrbitPropagator:
         """
         if self.numeric_backend != "rust" or self.integrator != "rk4" or self.model != "two_body" or self.state_frame != "eci":
             return None
-        from sim.dynamics.orbit.rust_force_plan import force_codes, make_plan
+        from sim.dynamics.orbit.rust_force_plan import make_plan, native_force_plan_codes
         from sim.rust_orbit_backend import _command, _state, native_harmonic_degree_limit
 
-        if force_codes(self, env) is None:
+        if native_force_plan_codes(self, env) is None:
             return None
         if spherical_harmonics_plugin in self.plugins:
             if env.get("_compiled_spherical_harmonics_terms") is None:
@@ -799,6 +799,21 @@ class OrbitPropagator:
         env: dict,
         ctx: OrbitContext,
     ) -> np.ndarray:
+        try:
+            x_eci = np.asarray(x_eci, dtype=float).reshape(6)
+            command_accel_eci_km_s2 = np.asarray(command_accel_eci_km_s2, dtype=float).reshape(3)
+            dt_s = float(dt_s)
+            t_s = float(t_s)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("Orbit propagation requires a six-element state, three-element command, and numeric times.") from exc
+        if not np.isfinite(x_eci).all():
+            raise ValueError("Orbit propagation state must be finite.")
+        if not np.isfinite(command_accel_eci_km_s2).all():
+            raise ValueError("Orbit propagation command acceleration must be finite.")
+        if not math.isfinite(dt_s):
+            raise ValueError("Orbit propagation dt_s must be finite.")
+        if not math.isfinite(t_s):
+            raise ValueError("Orbit propagation t_s must be finite.")
         backend = str(self.numeric_backend).strip().lower()
         if backend not in {"python", "rust"}:
             raise ValueError(f"Unknown orbit numeric backend {self.numeric_backend!r}")
@@ -836,8 +851,8 @@ class OrbitPropagator:
                 [next(code for known, code in codes if plugin is known) for plugin in self.plugins]
                 if zonal_only else []
             )
-            from sim.dynamics.orbit.rust_force_plan import force_codes as native_force_codes
-            native_plan = native_force_codes(self, env) is not None
+            from sim.dynamics.orbit.rust_force_plan import native_force_plan_codes
+            native_plan = native_force_plan_codes(self, env) is not None
             if native_plan and any(plugin is spherical_harmonics_plugin for plugin in self.plugins):
                 from sim.rust_orbit_backend import native_harmonic_degree_limit
 

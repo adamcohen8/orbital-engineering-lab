@@ -56,6 +56,14 @@ class PlotQualityPolicy:
             raise ValueError("minimum_footer_font_size_pt must be positive and no larger than the text minimum.")
         if not 0.0 <= self.categorical_rotation_deg <= self.categorical_max_rotation_deg <= 90.0:
             raise ValueError("categorical tick rotations must satisfy 0 <= initial <= maximum <= 90 degrees.")
+        for name, value in (
+            ("collision_padding_px", self.collision_padding_px),
+            ("canvas_margin_px", self.canvas_margin_px),
+        ):
+            if not math.isfinite(float(value)) or float(value) < 0.0:
+                raise ValueError(f"{name} must be finite and nonnegative.")
+        if self.max_inside_legend_entries < 0:
+            raise ValueError("max_inside_legend_entries cannot be negative.")
 
 
 STRICT_AGENT_PLOT_QUALITY = PlotQualityPolicy()
@@ -176,6 +184,10 @@ def apply_stable_axis_format(
 
     axis = ax.xaxis if axis_name == "x" else ax.yaxis
     if not bool(axis.get_visible()):
+        return None
+    if axis_name == "x" and _is_colorbar_axes(ax):
+        return None
+    if bool(getattr(ax, f"_oel_categorical_{axis_name}", False)):
         return None
     if str(getattr(ax, "name", "") or "").lower() == "3d":
         return None
@@ -329,6 +341,12 @@ def _draw_figure(fig: Any) -> None:
     if canvas is None or not callable(getattr(canvas, "draw", None)):
         raise TypeError("Plot quality checks require a Matplotlib figure with a drawable canvas.")
     canvas.draw()
+
+
+def _is_colorbar_axes(ax: Any) -> bool:
+    """Identify Matplotlib's auxiliary colorbar axes."""
+
+    return str(getattr(ax, "get_label", lambda: "")() or "") == "<colorbar>" or hasattr(ax, "_colorbar")
 
 
 def _collect_text_boxes(fig: Any, renderer: Any) -> list[_TextBox]:
@@ -500,7 +518,13 @@ def _ambiguous_numeric_tick_label_issues(fig: Any) -> list[PlotQualityIssue]:
             get_converter = getattr(axis, "get_converter", None)
             converter = get_converter() if callable(get_converter) else getattr(axis, "converter", None)
             scale_name = ax.get_xscale() if axis_name == "x" else ax.get_yscale()
-            if converter is not None or scale_name != "linear":
+            if (
+                (axis_name == "x" and _is_colorbar_axes(ax))
+                or
+                bool(getattr(ax, f"_oel_categorical_{axis_name}", False))
+                or converter is not None
+                or scale_name != "linear"
+            ):
                 continue
             values = ax.get_xticks() if axis_name == "x" else ax.get_yticks()
             labels = ax.get_xticklabels() if axis_name == "x" else ax.get_yticklabels()

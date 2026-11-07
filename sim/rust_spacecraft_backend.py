@@ -13,6 +13,8 @@ from typing import Any
 
 import numpy as np
 
+from sim.dynamics.orbit.environment import EARTH_RADIUS_KM
+
 
 def _extension():
     try:
@@ -115,6 +117,10 @@ def earth_radiation(position: Any, sun_position: Any, order: int):
 
     position_array = _finite_array(position, (3,), "position")
     sun_array = _finite_array(sun_position, (3,), "sun_position")
+    if isinstance(order, (bool, np.bool_)) or not isinstance(order, (int, np.integer)) or not 4 <= order <= 64:
+        raise ValueError("Earth-radiation quadrature order must be an integer in [4, 64]")
+    if float(np.linalg.norm(position_array)) <= EARTH_RADIUS_KM:
+        raise ValueError("spacecraft resources require position above the Earth surface")
     extension = _extension()
     function = getattr(extension, "resource_earth_radiation", None)
     if function is None:
@@ -131,6 +137,8 @@ def earth_radiation(position: Any, sun_position: Any, order: int):
         illumination = np.asarray(illumination, dtype=np.float64)
     if len(rays) != len(weights) or len(rays) != len(illumination):
         raise RuntimeError("Rust Earth-radiation kernel returned inconsistent lengths")
+    if not np.all(np.isfinite(rays)) or not np.all(np.isfinite(weights)) or not np.all(np.isfinite(illumination)):
+        raise RuntimeError("Rust Earth-radiation kernel returned non-finite values")
     return rays, weights, illumination
 
 
@@ -145,6 +153,12 @@ def advance(model, start, end, environment: dict, dt_s: float) -> dict[str, floa
         raise ValueError("resource timestep must be finite and positive")
     old = start.resource_state if start.resource_state is not None else model.initial_state()
     position = (np.asarray(start.position_eci_km, dtype=float) + np.asarray(end.position_eci_km, dtype=float)) / 2.0
+    # Validate the public adapter inputs before eclipse geometry resolution.
+    # The fused native path must preserve the same direct API errors as the
+    # general Earth-radiation path for invalid finite vectors.
+    position = _finite_array(position, (3,), "position")
+    if "sun_pos_eci_km" in environment:
+        _finite_array(environment["sun_pos_eci_km"], (3,), "sun_position")
     q0 = np.asarray(start.attitude_quat_bn, dtype=float)
     q1 = np.asarray(end.attitude_quat_bn, dtype=float)
     q = q0 + (q1 if float(np.dot(q0, q1)) >= 0.0 else -q1)

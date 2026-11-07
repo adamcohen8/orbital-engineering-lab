@@ -34,14 +34,23 @@ class GroundSite:
     alt_km: float = 0.0
 
     def __post_init__(self) -> None:
-        if not all(
-            np.isfinite(float(value))
-            for value in (self.lat_rad, self.lon_rad, self.alt_km, self.min_elevation_rad)
-        ):
-            raise ValueError("ground-site coordinates and elevation mask must be finite")
-        if not -0.5 * np.pi <= self.lat_rad <= 0.5 * np.pi:
+        normalized: dict[str, float] = {}
+        for field_name in ("lat_rad", "lon_rad", "alt_km", "min_elevation_rad"):
+            value = getattr(self, field_name)
+            if isinstance(value, (bool, np.bool_)):
+                raise ValueError("ground-site coordinates and elevation mask must be finite numeric values")
+            try:
+                parsed = float(value)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError("ground-site coordinates and elevation mask must be finite numeric values") from exc
+            if not np.isfinite(parsed):
+                raise ValueError("ground-site coordinates and elevation mask must be finite numeric values")
+            normalized[field_name] = parsed
+        for field_name, value in normalized.items():
+            object.__setattr__(self, field_name, value)
+        if not -0.5 * np.pi <= normalized["lat_rad"] <= 0.5 * np.pi:
             raise ValueError("ground-site latitude must be within [-pi/2, pi/2]")
-        if not 0.0 <= self.min_elevation_rad <= 0.5 * np.pi:
+        if not 0.0 <= normalized["min_elevation_rad"] <= 0.5 * np.pi:
             raise ValueError("ground-site minimum elevation must be within [0, pi/2]")
 
 
@@ -57,22 +66,53 @@ class AccessConfig:
     numeric_backend: str = "rust"
 
     def __post_init__(self) -> None:
-        if not np.isfinite(float(self.update_cadence_s)) or float(self.update_cadence_s) <= 0.0:
+        if type(self.require_ground_visibility) is not bool:
+            raise ValueError("require_ground_visibility must be a boolean.")
+        if isinstance(self.update_cadence_s, (bool, np.bool_)):
             raise ValueError("update_cadence_s must be positive and finite.")
-        if self.max_range_km is not None and (
-            not np.isfinite(float(self.max_range_km)) or float(self.max_range_km) <= 0.0
-        ):
-            raise ValueError("max_range_km must be positive and finite when provided.")
-        if self.fov_half_angle_rad is not None and (
-            not np.isfinite(float(self.fov_half_angle_rad))
-            or not 0.0 <= float(self.fov_half_angle_rad) <= np.pi
-        ):
-            raise ValueError("fov_half_angle_rad must be finite and within [0, pi].")
-        if self.solid_angle_sr is not None and (
-            not np.isfinite(float(self.solid_angle_sr))
-            or not 0.0 <= float(self.solid_angle_sr) <= 4.0 * np.pi
-        ):
-            raise ValueError("solid_angle_sr must be finite and within [0, 4*pi].")
+        try:
+            update_cadence_s = float(self.update_cadence_s)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("update_cadence_s must be positive and finite.") from exc
+        if not np.isfinite(update_cadence_s) or update_cadence_s <= 0.0:
+            raise ValueError("update_cadence_s must be positive and finite.")
+        object.__setattr__(self, "update_cadence_s", update_cadence_s)
+        if self.max_range_km is not None:
+            if isinstance(self.max_range_km, (bool, np.bool_)):
+                raise ValueError("max_range_km must be positive and finite when provided.")
+            try:
+                max_range_km = float(self.max_range_km)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError("max_range_km must be positive and finite when provided.") from exc
+            if not np.isfinite(max_range_km) or max_range_km <= 0.0:
+                raise ValueError("max_range_km must be positive and finite when provided.")
+            object.__setattr__(self, "max_range_km", max_range_km)
+        if self.fov_half_angle_rad is not None and self.solid_angle_sr is not None:
+            raise ValueError(
+                "fov_half_angle_rad and solid_angle_sr are mutually exclusive; configure exactly one."
+            )
+        if self.fov_half_angle_rad is not None:
+            if isinstance(self.fov_half_angle_rad, (bool, np.bool_)):
+                raise ValueError("fov_half_angle_rad must be finite and within [0, pi].")
+            try:
+                fov_half_angle_rad = float(self.fov_half_angle_rad)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError("fov_half_angle_rad must be finite and within [0, pi].") from exc
+            if not np.isfinite(fov_half_angle_rad) or not 0.0 <= fov_half_angle_rad <= np.pi:
+                raise ValueError("fov_half_angle_rad must be finite and within [0, pi].")
+            object.__setattr__(self, "fov_half_angle_rad", fov_half_angle_rad)
+        if self.solid_angle_sr is not None:
+            if isinstance(self.solid_angle_sr, (bool, np.bool_)):
+                raise ValueError("solid_angle_sr must be finite and within [0, 4*pi].")
+            try:
+                solid_angle_sr = float(self.solid_angle_sr)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError("solid_angle_sr must be finite and within [0, 4*pi].") from exc
+            if not np.isfinite(solid_angle_sr) or not 0.0 <= solid_angle_sr <= 4.0 * np.pi:
+                raise ValueError("solid_angle_sr must be finite and within [0, 4*pi].")
+            object.__setattr__(self, "solid_angle_sr", solid_angle_sr)
+        if self.require_ground_visibility and self.ground_site is None:
+            raise ValueError("ground visibility requires a configured ground_site.")
         if self.require_ground_visibility and (
             self.frame_context is None or self.frame_context.jd_utc_start is None
         ):
@@ -116,7 +156,9 @@ class AccessModel:
                 self.cfg.frame_context,
             )
         los = target - observer
-        rng = np.linalg.norm(los)
+        rng = float(np.linalg.norm(los))
+        if not np.isfinite(rng):
+            raise ValueError("access observer and target separation must be finite.")
         if self.cfg.max_range_km is not None and rng > self.cfg.max_range_km:
             return False, "range"
 

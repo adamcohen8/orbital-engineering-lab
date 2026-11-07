@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "oel.fsw_authoring.candidate.v2",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "candidate_id",
+    "revision",
+    "kind",
+    "source",
+    "interfaces",
+    "claims",
+    "verification",
+    "handling",
+    "native"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "oel.fsw_authoring.candidate.v2"
+    },
+    "candidate_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{1,63}$"
+    },
+    "revision": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80
+    },
+    "kind": {
+      "const": "native_stack"
+    },
+    "source": {
+      "type": "object",
+      "required": [
+        "root",
+        "revision_id",
+        "language"
+      ],
+      "properties": {
+        "root": {
+          "type": "string",
+          "minLength": 1
+        },
+        "revision_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "language": {
+          "enum": [
+            "c",
+            "cpp",
+            "rust"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "interfaces": {
+      "type": "object",
+      "required": [
+        "onboard_contract",
+        "hardware_profile",
+        "task_period_s"
+      ],
+      "properties": {
+        "onboard_contract": {
+          "const": "oel.fsw.boundary.v1"
+        },
+        "hardware_profile": {
+          "type": "string",
+          "minLength": 1
+        },
+        "task_period_s": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "claims": {
+      "type": "object",
+      "required": [
+        "intended_use"
+      ],
+      "properties": {
+        "intended_use": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      },
+      "additionalProperties": false
+    },
+    "verification": {
+      "type": "object",
+      "required": [
+        "component_suite",
+        "smoke_case"
+      ],
+      "properties": {
+        "component_suite": {
+          "type": "string",
+          "minLength": 1
+        },
+        "smoke_case": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "handling": {
+      "type": "object",
+      "required": [
+        "classification",
+        "hosted_ai_allowed"
+      ],
+      "properties": {
+        "classification": {
+          "enum": [
+            "public",
+            "private",
+            "customer"
+          ]
+        },
+        "hosted_ai_allowed": {
+          "type": "boolean"
+        },
+        "owner": {
+          "type": "string",
+          "maxLength": 200
+        }
+      },
+      "additionalProperties": false
+    },
+    "native": {
+      "type": "object",
+      "required": [
+        "checkpointable",
+        "timeout_s"
+      ],
+      "properties": {
+        "checkpointable": {
+          "type": "boolean"
+        },
+        "timeout_s": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 60
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

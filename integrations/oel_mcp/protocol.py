@@ -4,7 +4,9 @@ import json
 import sys
 from typing import Any, TextIO
 
+from integrations.oel_mcp.approval_grants import OperationConflictError, UnknownOperationOutcome
 from integrations.oel_mcp.base_handlers import BaseOELMCPHandlers
+from integrations.oel_mcp.recovery import reconciliation_error_data
 
 MCP_PROTOCOL_VERSION = "2025-06-18"
 SERVER_INFO = {"name": "oel-mcp", "version": "0.2.0-pre-v2"}
@@ -48,6 +50,8 @@ class OELMCPServer:
                 return _error(request_id, -32601, f"Method not found: {method}")
         except (TypeError, ValueError, PermissionError) as exc:
             return _error(request_id, -32602, str(exc))
+        except (UnknownOperationOutcome, OperationConflictError) as exc:
+            return _error(request_id, -32602, str(exc), data=reconciliation_error_data(exc))
         except Exception:
             return _error(request_id, -32603, "Internal server error without local diagnostic details.")
         return {"jsonrpc": "2.0", "id": request_id, "result": result}
@@ -72,5 +76,8 @@ def tool_definitions(handlers: BaseOELMCPHandlers) -> list[dict[str, Any]]:
     return [contract.mcp_definition() for contract in handlers.contracts.values()]
 
 
-def _error(request_id: Any, code: int, message: str) -> dict[str, Any]:
-    return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
+def _error(request_id: Any, code: int, message: str, *, data: dict[str, Any] | None = None) -> dict[str, Any]:
+    error: dict[str, Any] = {"code": code, "message": message}
+    if data is not None:
+        error["data"] = data
+    return {"jsonrpc": "2.0", "id": request_id, "error": error}

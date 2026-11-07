@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 import pytest
 
@@ -108,3 +110,21 @@ def test_cdm_rejects_extended_covariance_and_non_psd_covariance() -> None:
     bad = _cdm().replace("CT_T = 100.0", "CT_T = -100.0", 1)
     with pytest.raises(CcsdsCdmError, match="not positive semidefinite"):
         parse_cdm_kvn(bad)
+
+
+def test_cdm_validation_rejects_nonfinite_programmatic_scalars_and_states() -> None:
+    message = parse_cdm_kvn(_cdm())
+    invalid_scalar = replace(
+        message,
+        relative=replace(message.relative, miss_distance_m=float("nan")),
+    )
+    with pytest.raises(CcsdsCdmError, match="MISS_DISTANCE.*finite"):
+        serialize_cdm_kvn(invalid_scalar)
+
+    first = message.objects[0]
+    invalid_state = replace(
+        message,
+        objects=(replace(first, state_eci_km_km_s=(float("nan"), *first.state_eci_km_km_s[1:])), message.objects[1]),
+    )
+    with pytest.raises(CcsdsCdmError, match="state.*finite"):
+        serialize_cdm_kvn(invalid_state)

@@ -306,7 +306,7 @@ pub fn rich_cell_reasons(
         ];
         let horizontal = sensor[0].atan2(sensor[2]);
         let vertical = sensor[1].atan2(sensor[2]);
-        let off_axis = sensor[2].clamp(-1.0, 1.0).acos();
+        let off_axis = sensor[0].hypot(sensor[1]).atan2(sensor[2]);
         let pattern = if pattern_kind == 0 {
             off_axis <= x_angle + angular_tol
         } else {

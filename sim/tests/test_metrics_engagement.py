@@ -9,6 +9,29 @@ from sim.metrics.engagement import compute_engagement_metrics
 
 
 class TestEngagementMetrics(unittest.TestCase):
+    def test_min_separation_ignores_invalid_samples_but_keeps_finite_tail(self):
+        t_s = np.array([0.0, 1.0, 2.0], dtype=float)
+        target_truth = np.zeros((3, 14), dtype=float)
+        target_truth[:, 13] = 100.0
+        chaser_truth = target_truth.copy()
+        chaser_truth[:, 0] = [np.nan, 2.0, 8.0]
+        zeros = np.zeros((3, 3), dtype=float)
+        runtime = np.zeros(3, dtype=float)
+        skipped = np.zeros(3, dtype=bool)
+        log = SimLog(
+            t_s=t_s,
+            truth_by_object={"target": target_truth, "chaser": chaser_truth},
+            belief_by_object={"target": target_truth[:, :6], "chaser": chaser_truth[:, :6]},
+            applied_thrust_by_object={"target": zeros, "chaser": zeros},
+            applied_torque_by_object={"target": zeros, "chaser": zeros},
+            controller_runtime_ms_by_object={"target": runtime, "chaser": runtime},
+            controller_skipped_by_object={"target": skipped, "chaser": skipped},
+        )
+
+        metrics = compute_engagement_metrics(log)
+
+        self.assertAlmostEqual(metrics.min_separation_km, 2.0, places=9)
+
     def test_keepout_time_uses_pairwise_separation(self):
         t_s = np.array([0.0, 1.0, 2.0], dtype=float)
         target_truth = np.array(

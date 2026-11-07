@@ -170,6 +170,53 @@ def test_resource_estimate_uses_configured_load_threshold(
     assert governor.pressure_reasons(snapshot) == ["load/core 1.00 > 0.10"]
 
 
+@pytest.mark.parametrize("field", [
+    "min_available_memory_mb",
+    "hard_min_available_memory_mb",
+    "max_load_per_cpu",
+])
+def test_resource_governor_rejects_negative_pressure_thresholds(tmp_path: Path, field: str) -> None:
+    root = _single_target_config(tmp_path / field, duration_s=2.0)
+    root["outputs"]["resource_limits"] = {field: -1.0}
+    cfg = scenario_config_from_dict(root)
+
+    with pytest.raises(ValueError, match="nonnegative"):
+        ResourceGovernor(cfg)
+
+
+@pytest.mark.parametrize("field", [
+    "min_available_memory_mb",
+    "hard_min_available_memory_mb",
+    "max_load_per_cpu",
+])
+def test_resource_governor_rejects_boolean_pressure_thresholds(tmp_path: Path, field: str) -> None:
+    root = _single_target_config(tmp_path / field, duration_s=2.0)
+    root["outputs"]["resource_limits"] = {field: False}
+    cfg = scenario_config_from_dict(root)
+
+    with pytest.raises(ValueError, match="not boolean"):
+        ResourceGovernor(cfg)
+
+
+def test_resource_governor_honors_zero_max_wait(tmp_path: Path) -> None:
+    root = _single_target_config(tmp_path / "zero_wait", duration_s=2.0)
+    root["outputs"]["resource_limits"] = {"resource_max_wait_s": 0.0}
+    cfg = scenario_config_from_dict(root)
+
+    governor = ResourceGovernor(cfg)
+
+    assert governor.max_wait_s == 0.0
+
+
+def test_resource_governor_rejects_zero_pause_seconds(tmp_path: Path) -> None:
+    root = _single_target_config(tmp_path / "zero_pause", duration_s=2.0)
+    root["outputs"]["resource_limits"] = {"resource_pause_seconds": 0.0}
+    cfg = scenario_config_from_dict(root)
+
+    with pytest.raises(ValueError, match="positive and finite"):
+        ResourceGovernor(cfg)
+
+
 def test_resource_estimate_reports_sensitivity_shape(tmp_path: Path) -> None:
     root = _single_target_config(tmp_path / "sensitivity", duration_s=12.0)
     root["analysis"] = {

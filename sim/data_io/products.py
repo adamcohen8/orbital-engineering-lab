@@ -189,6 +189,17 @@ def tdm_from_measurements(rows, *, station_id: str, object_id: str):
         else:
             rows = rows["rows"]
 
+    # Generic row bundles are accepted for backwards compatibility, but an
+    # explicitly supplied source identity must agree with the caller's
+    # requested TDM participants.  Otherwise a mixed or foreign bundle could
+    # be relabelled by the generated header without any execution or parser
+    # error.  Hand-authored rows used by the public API may omit these fields.
+    for row in rows:
+        if row.get("station_id") not in (None, station_id):
+            raise DataIOError("Measurement row station identity does not match the requested station.")
+        if row.get("object_id") not in (None, object_id):
+            raise DataIOError("Measurement row object identity does not match the requested object.")
+
     if not rows:
         raise DataIOError("No synthetic measurement rows supplied.")
     ordered = sorted(rows, key=lambda row: (parse_time(row["epoch_utc"]).tai_seconds, row["observable"]))

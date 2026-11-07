@@ -9,6 +9,7 @@ from typing import Any, Mapping
 
 import yaml
 
+from .manifests import write_json_document
 from .materialization import canonical_scenario_digest
 from .provenance import canonical_json_bytes, sha256_file
 from .validation import load_interchange_document, validate_document, validate_product
@@ -28,6 +29,7 @@ def compare_handoff(
     manifest_path: str | Path | None = None,
     run_output_dir: str | Path | None = None,
     output_path: str | Path | None = None,
+    writer: Any | None = None,
 ) -> dict[str, Any]:
     """Compare producer semantics with a materialized scenario and optional run.
 
@@ -154,8 +156,7 @@ def compare_handoff(
     packet["comparison_id"] = _comparison_id(packet)
     if output_path is not None:
         target = Path(output_path).expanduser().resolve()
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(json.dumps(packet, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        write_json_document(packet, target, writer=writer, overwrite=True)
     return packet
 
 

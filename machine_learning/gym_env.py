@@ -382,7 +382,11 @@ def _enabled_satellite_ids_from_scenario_dict(scenario_dict: dict[str, Any]) -> 
     candidate_ids = list(objects) if objects else ["chaser", "target"]
     for agent_id in candidate_ids:
         agent_cfg = dict((objects.get(agent_id) if objects else scenario_dict.get(agent_id, {})) or {})
-        if bool(agent_cfg.get("enabled", False)):
+        # Scenario object configs default ``enabled`` to true in the canonical
+        # loader.  Keep the pre-parse observation probe aligned with that
+        # contract so raw dict scenarios do not lose their default-enabled
+        # satellites before validation/building.
+        if bool(agent_cfg.get("enabled", True)):
             kind = str(agent_cfg.get("kind", "satellite") or "satellite").strip().lower()
             if kind != "rocket":
                 enabled.append(str(agent_id))

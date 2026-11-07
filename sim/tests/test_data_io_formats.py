@@ -17,6 +17,7 @@ from sim.data_io.navigation import encode_navigation, oem_from_trajectory, parse
 from sim.data_io.precise import encode_sp3, read_sp3
 from sim.data_io.registry import capability_catalog
 from sim.data_io.rinex import encode_rinex, parse_rinex
+from sim.data_io.tabular import trajectory_document, trajectory_from_document
 from sim.data_io.time import parse_time
 from sim.data_io.tracking import encode_tracking, parse_tracking, read_tracking
 from sim.data_io.trajectory import TrajectorySampler, transform_trajectory
@@ -65,6 +66,32 @@ def test_trajectory_sample_roundtrips(tmp_path, trajectory, format):
     np.testing.assert_array_equal(result.times_s, trajectory.times_s)
     assert result.frame == trajectory.frame
     assert result.epoch.tai_seconds == trajectory.epoch.tai_seconds
+
+
+def test_trajectory_contract_wraps_malformed_times_and_missing_fields(trajectory):
+    with pytest.raises(DataIOError, match="Sample times must be numeric"):
+        Trajectory(
+            trajectory.object_id,
+            trajectory.center,
+            trajectory.frame,
+            trajectory.epoch,
+            [0.0, "bad"],
+            trajectory.states,
+        )
+
+    document = {
+        "schema": "oel.trajectory.v1",
+        "object_id": trajectory.object_id,
+        "center": trajectory.center,
+        "frame": trajectory.frame,
+        "epoch": trajectory_document(trajectory)["epoch"],
+        "time_system": "UTC",
+        "time_basis": "elapsed_TAI_SI_seconds",
+        "units": ["km"] * 3 + ["km/s"] * 3,
+        "times_s": trajectory.times_s.tolist(),
+    }
+    with pytest.raises(DataIOError, match="missing required fields"):
+        trajectory_from_document(document)
 
 
 @pytest.mark.parametrize("format", ["oem-xml", "opm-xml", "omm-xml"])

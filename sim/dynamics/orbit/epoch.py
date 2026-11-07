@@ -9,6 +9,18 @@ AU_KM = 149597870.7
 TIME_DEPENDENT_ENV_CACHE_KEY = "_time_dependent_env_cache"
 
 
+def _validated_position_vector(value: object, label: str) -> np.ndarray:
+    """Return one finite ECI position vector without silently reshaping it."""
+
+    try:
+        vector = np.asarray(value, dtype=float)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} must contain exactly three finite values.") from exc
+    if vector.shape != (3,) or not np.all(np.isfinite(vector)):
+        raise ValueError(f"{label} must contain exactly three finite values.")
+    return np.array(vector, dtype=float, copy=True)
+
+
 def datetime_to_julian_date(dt: datetime) -> float:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
@@ -303,7 +315,7 @@ def resolve_sun_position_eci_km(env: dict, t_s: float) -> np.ndarray:
     """
     sun = _sampled_ephemeris_position("sun", env, t_s)
     if sun is None and "sun_pos_eci_km" in env:
-        sun = np.array(env["sun_pos_eci_km"], dtype=float)
+        sun = _validated_position_vector(env["sun_pos_eci_km"], "sun_pos_eci_km")
     if sun is not None:
         if sun.shape != (3,) or not np.all(np.isfinite(sun)):
             raise ValueError("sun_pos_eci_km must contain exactly three finite values.")
@@ -317,10 +329,7 @@ def resolve_sun_position_eci_km(env: dict, t_s: float) -> np.ndarray:
     if callable(eph_callable):
         out = eph_callable(float(jd), env)
         if isinstance(out, dict) and "sun_pos_eci_km" in out:
-            sun = np.array(out["sun_pos_eci_km"], dtype=float)
-            if sun.shape != (3,) or not np.all(np.isfinite(sun)):
-                raise ValueError("sun_pos_eci_km must contain exactly three finite values.")
-            return sun
+            return _validated_position_vector(out["sun_pos_eci_km"], "sun_pos_eci_km")
 
     mode = str(env.get("ephemeris_mode", "analytic_enhanced")).lower()
     if mode in ("de440_hpop", "hpop_de440", "de440"):
@@ -358,10 +367,7 @@ def resolve_sun_position_eci_km(env: dict, t_s: float) -> np.ndarray:
             "ephemeris_mode must be one of: analytic_enhanced, analytic_simple, de440, hpop_de440, de440_hpop, spice, spiceypy."
         )
 
-    sun = np.asarray(sun, dtype=float)
-    if sun.shape != (3,) or not np.all(np.isfinite(sun)):
-        raise ValueError("sun_pos_eci_km must contain exactly three finite values.")
-    return np.array(sun, dtype=float, copy=True)
+    return _validated_position_vector(sun, "sun_pos_eci_km")
 
 
 def resolve_sun_moon_positions(env: dict, t_s: float) -> tuple[np.ndarray, np.ndarray]:
@@ -372,12 +378,9 @@ def resolve_sun_moon_positions(env: dict, t_s: float) -> tuple[np.ndarray, np.nd
     sun_explicit = _sampled_ephemeris_position("sun", env, t_s)
     moon_explicit = _sampled_ephemeris_position("moon", env, t_s)
     if sun_explicit is None and "sun_pos_eci_km" in env:
-        sun_explicit = np.array(env["sun_pos_eci_km"], dtype=float)
+        sun_explicit = _validated_position_vector(env["sun_pos_eci_km"], "sun_pos_eci_km")
     if moon_explicit is None and "moon_pos_eci_km" in env:
-        moon_explicit = np.array(env["moon_pos_eci_km"], dtype=float)
-    for body, value in (("sun", sun_explicit), ("moon", moon_explicit)):
-        if value is not None and (value.shape != (3,) or not np.all(np.isfinite(value))):
-            raise ValueError(f"{body}_pos_eci_km must contain exactly three finite values.")
+        moon_explicit = _validated_position_vector(env["moon_pos_eci_km"], "moon_pos_eci_km")
     if sun_explicit is not None and moon_explicit is not None:
         return sun_explicit, moon_explicit
 
@@ -392,8 +395,8 @@ def resolve_sun_moon_positions(env: dict, t_s: float) -> tuple[np.ndarray, np.nd
         out = eph_callable(float(jd), env)
         if isinstance(out, dict):
             if "sun_pos_eci_km" in out and "moon_pos_eci_km" in out:
-                sun = np.array(out["sun_pos_eci_km"], dtype=float)
-                moon = np.array(out["moon_pos_eci_km"], dtype=float)
+                sun = _validated_position_vector(out["sun_pos_eci_km"], "sun_pos_eci_km")
+                moon = _validated_position_vector(out["moon_pos_eci_km"], "moon_pos_eci_km")
                 return (
                     sun_explicit if sun_explicit is not None else sun,
                     moon_explicit if moon_explicit is not None else moon,
@@ -409,14 +412,19 @@ def resolve_sun_moon_positions(env: dict, t_s: float) -> tuple[np.ndarray, np.nd
 
         if acceleration_enabled_from_mode():
             sun, moon = hpop_de440_sun_moon_positions_km(jd, env)
+            sun = _validated_position_vector(sun, "sun_pos_eci_km")
+            moon = _validated_position_vector(moon, "moon_pos_eci_km")
             return sun_explicit if sun_explicit is not None else sun, moon_explicit if moon_explicit is not None else moon
         pos = hpop_de440_positions_km(jd, env)
-        sun, moon = np.array(pos["sun"], dtype=float), np.array(pos["moon"], dtype=float)
+        sun = _validated_position_vector(pos["sun"], "sun_pos_eci_km")
+        moon = _validated_position_vector(pos["moon"], "moon_pos_eci_km")
         return sun_explicit if sun_explicit is not None else sun, moon_explicit if moon_explicit is not None else moon
     if mode in ("spice", "spiceypy"):
         from sim.dynamics.orbit.spice import spice_sun_moon_positions_eci_km
 
         sun, moon = spice_sun_moon_positions_eci_km(jd, env)
+        sun = _validated_position_vector(sun, "sun_pos_eci_km")
+        moon = _validated_position_vector(moon, "moon_pos_eci_km")
         return sun_explicit if sun_explicit is not None else sun, moon_explicit if moon_explicit is not None else moon
     if mode in ("analytic_simple", "simple"):
         sun, moon = _analytic_sun_moon_positions(float(jd), True)
@@ -439,7 +447,7 @@ def resolve_body_position_eci_km(body_name: str, env: dict, t_s: float) -> np.nd
     name = str(body_name).strip().lower()
     key = f"{name}_pos_eci_km"
     if key in env:
-        return np.array(env[key], dtype=float)
+        return _validated_position_vector(env[key], key)
 
     if name in ("sun", "moon"):
         sun, moon = resolve_sun_moon_positions(env, t_s)
@@ -458,16 +466,16 @@ def resolve_body_position_eci_km(body_name: str, env: dict, t_s: float) -> np.nd
         pos = hpop_de440_positions_km(jd, env)
         if name not in pos:
             raise RuntimeError(f"Body '{body_name}' is not supported by de440_hpop ephemeris mode.")
-        return np.array(pos[name], dtype=float)
+        return _validated_position_vector(pos[name], f"{name}_pos_eci_km")
     if mode in ("spice", "spiceypy"):
         from sim.dynamics.orbit.spice import spice_body_position_eci_km
 
-        return spice_body_position_eci_km(name, jd, env)
+        return _validated_position_vector(spice_body_position_eci_km(name, jd, env), f"{name}_pos_eci_km")
 
     cb = env.get("ephemeris_body_callable", None)
     if callable(cb):
         out = cb(name, float(jd), env)
-        return np.array(out, dtype=float).reshape(3)
+        return _validated_position_vector(out, f"{name}_pos_eci_km")
 
     raise RuntimeError(
         f"Body '{body_name}' requested but ephemeris_mode='{mode}' cannot resolve it. "

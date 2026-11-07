@@ -169,7 +169,6 @@ class AgentSection:
     force_models: list[AlgorithmPointer] = field(default_factory=list)
     bridge: BridgePointer | None = None
     knowledge: dict[str, Any] = field(default_factory=dict)
-    force_models: list[AlgorithmPointer] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -218,6 +217,7 @@ class SimulatorAccelerationSection(_TypedConfigDict):
 class SimulatorExecutionSection(_TypedConfigDict):
     _defaults = {
         "policy": "configured",
+        "ogp_parallelism": {"enabled": False, "workers": 0},
         "object_parallelism": {
             "enabled": False,
             "backend": "serial",
@@ -573,7 +573,6 @@ class OutputsSection:
     review: OutputReviewSection = field(default_factory=OutputReviewSection)
     orbital_analysis: OutputOrbitalAnalysisSection = field(default_factory=OutputOrbitalAnalysisSection)
     resource_limits: OutputResourceLimitsSection = field(default_factory=OutputResourceLimitsSection)
-    campaign_retention: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "stats", OutputStatsSection(self.stats))
@@ -597,7 +596,6 @@ class MonteCarloVariation:
     high: float | None = None
     mean: float | None = None
     std: float | None = None
-    weights: list[float] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

@@ -9,6 +9,7 @@ from sim.acceleration.settings import acceleration_settings_from_mode
 from sim.core.interfaces import Estimator
 from sim.core.models import Measurement, StateBelief
 from sim.dynamics.orbit.two_body import propagate_two_body_rk4
+from sim.estimation.covariance import validate_covariance
 from sim.estimation.innovation_recovery import (
     FullStateInnovationRecovery,
     InnovationRecoveryConfig,
@@ -144,7 +145,13 @@ class OrbitEKFEstimator(Estimator):
             if not np.isfinite(meas_t_s) or meas_t_s < belief_t_s or meas_t_s > output_t_s:
                 raise ValueError("measurement epoch must lie within the belief-to-output interval.")
 
-        x_pred, p_pred = self._predict(belief.state, belief.covariance, from_t_s=belief.last_update_t_s, to_t_s=meas_t_s)
+        belief_covariance = validate_covariance(belief.covariance, 6, name="belief covariance")
+        x_pred, p_pred = self._predict(
+            belief.state,
+            belief_covariance,
+            from_t_s=belief.last_update_t_s,
+            to_t_s=meas_t_s,
+        )
 
         if measurement is None:
             if meas_t_s < output_t_s:

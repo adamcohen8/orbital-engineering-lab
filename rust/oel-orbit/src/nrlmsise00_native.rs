@@ -4,6 +4,7 @@ use crate::nrlmsise00_model::{gtd7d, NrlmsiseFlags, NrlmsiseInput, NrlmsiseOutpu
 
 /// Packed order: day, second, altitude, latitude, longitude, local solar time,
 /// F10.7A, F10.7, daily Ap, then the seven historical Ap entries.
+#[cfg_attr(not(feature = "python"), allow(dead_code))]
 pub(crate) fn density(values: [f64; 16]) -> Result<f64, String> {
     if values.iter().any(|value| !value.is_finite())
         || values[0].fract() != 0.0

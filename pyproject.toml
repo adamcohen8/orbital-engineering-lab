@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=83,<84", "wheel>=0.46,<0.47"]
+requires = ["setuptools>=84.1,<85", "wheel>=0.46,<0.47"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "orbital-engineering-lab"
-version = "0.35.0"
+version = "0.36.0"
 description = "Integrated spacecraft simulation and analysis platform for rendezvous, control, validation, and mission prototyping."
 readme = "README.md"
 requires-python = ">=3.10,<3.15"
@@ -27,9 +27,10 @@ classifiers = [
   "Topic :: Scientific/Engineering",
 ]
 dependencies = [
-  "oel-rust-game>=0.5,<0.6",
-  "oel-rust-orbit>=0.18.3,<0.19",
+  "oel-rust-game>=0.5.1,<0.6",
+  "oel-rust-orbit>=0.18.4,<0.19",
   "numpy>=2.1,<2.5",
+  "jsonschema>=4.26,<5",
   "matplotlib>=3.8,<3.12",
   "Pillow==12.3.0; python_version < '3.11'",
   "Pillow>=13,<14; python_version >= '3.11'",
@@ -46,6 +47,9 @@ oel-mcp = "integrations.oel_mcp.public_server:main"
 oel-study-mcp = "integrations.oel_mcp.study_server:main"
 
 [project.optional-dependencies]
+acquisition = [
+  "keyring>=25,<26",
+]
 io = [
   "sgp4>=2.24,<3",
   "spiceypy>=8,<9",
@@ -54,12 +58,12 @@ io = [
 dev = [
   "pytest>=9,<10",
   "ruff==0.15.14",
-  "setuptools>=83,<84",
+  "setuptools>=84.1,<85",
   "tomli>=2,<3; python_version < '3.11'",
 ]
 game = [
-  "oel-rust-game>=0.5,<0.6",
-  "oel-rust-orbit>=0.18.3,<0.19",
+  "oel-rust-game>=0.5.1,<0.6",
+  "oel-rust-orbit>=0.18.4,<0.19",
   "pygame>=2.5,<3; python_version < '3.14'",
   "pygame-ce>=2.5,<3; python_version >= '3.14'",
   "Pillow==12.3.0; python_version < '3.11'",
@@ -70,7 +74,8 @@ game = [
 ml = [
   "gymnasium>=0.29,<2",
   "torch>=2.13,<2.14",
-  "filelock>=3.20.3,<4",
+  "filelock>=3.20.3,<4; python_version < '3.11'",
+  "filelock>=4.2.1,<5; python_version >= '3.11'",
 ]
 accel = [
   "numba>=0.61,<0.67",
@@ -81,10 +86,10 @@ validation = [
 cross-platform = [
   "pytest>=9,<10",
   "ruff==0.15.14",
-  "setuptools>=83,<84",
+  "setuptools>=84.1,<85",
   "tomli>=2,<3; python_version < '3.11'",
-  "oel-rust-game>=0.5,<0.6",
-  "oel-rust-orbit>=0.18.3,<0.19",
+  "oel-rust-game>=0.5.1,<0.6",
+  "oel-rust-orbit>=0.18.4,<0.19",
   "pygame>=2.5,<3; python_version < '3.14'",
   "pygame-ce>=2.5,<3; python_version >= '3.14'",
   "Pillow==12.3.0; python_version < '3.11'",
@@ -98,12 +103,13 @@ mcp = [
   "mcp>=2.0.0,<3",
 ]
 full = [
+  "keyring>=25,<26",
   "pytest>=9,<10",
   "ruff==0.15.14",
-  "setuptools>=83,<84",
+  "setuptools>=84.1,<85",
   "tomli>=2,<3; python_version < '3.11'",
-  "oel-rust-game>=0.5,<0.6",
-  "oel-rust-orbit>=0.18.3,<0.19",
+  "oel-rust-game>=0.5.1,<0.6",
+  "oel-rust-orbit>=0.18.4,<0.19",
   "pygame>=2.5,<3; python_version < '3.14'",
   "pygame-ce>=2.5,<3; python_version >= '3.14'",
   "Pillow==12.3.0; python_version < '3.11'",
@@ -112,7 +118,8 @@ full = [
   "imageio-ffmpeg>=0.4,<1",
   "gymnasium>=0.29,<2",
   "torch>=2.13,<2.14",
-  "filelock>=3.20.3,<4",
+  "filelock>=3.20.3,<4; python_version < '3.11'",
+  "filelock>=4.2.1,<5; python_version >= '3.11'",
   "numba>=0.61,<0.67",
   "scipy>=1.14.1,<1.18",
   "sgp4>=2.24,<3",
@@ -121,13 +128,14 @@ full = [
 
 [tool.setuptools]
 include-package-data = false
-py-modules = ["run_simulation"]
+py-modules = ["run_simulation", "run_game"]
 
 [tool.setuptools.data-files]
-"share/oel/configs" = ["configs/quickstart_5min.yaml", "configs/acceptance_relative_coast.yaml", "configs/mars_reference_drag.yaml", "configs/sun_centered_srp.yaml"]
+"share/oel/configs" = ["configs/reference_gnc_vbar_approach.yaml", "configs/reference_gnc_nadir_pointing.yaml", "configs/reference_gnc_rpo_executive.yaml", "configs/ric_pd_10km_experiment.yaml", "configs/quickstart_5min.yaml", "configs/acceptance_relative_coast.yaml", "configs/mars_reference_drag.yaml", "configs/sun_centered_srp.yaml"]
 
 [tool.setuptools.package-data]
 sim = [
+  "data_acquisition/schemas/*.json",
   "presets/objects/*.yaml",
   "dynamics/orbit/data/*.csv",
   "dynamics/orbit/data/*.dat",
@@ -144,6 +152,14 @@ sim = [
   "installation/data/*.md",
   "execution/run_lifecycle/schemas/*.json",
   "fsw_authoring/schemas/*.json",
+  "fsw_authoring/sdk/LICENSE.txt",
+  "fsw_authoring/sdk/c/oel_fsw.h",
+  "fsw_authoring/sdk/c/oel_fsw.c",
+  "fsw_authoring/sdk/c/CMakeLists.txt",
+  "fsw_authoring/sdk/cpp/oel_fsw.hpp",
+  "fsw_authoring/sdk/rust/Cargo.toml",
+  "fsw_authoring/sdk/rust/build.rs",
+  "fsw_authoring/sdk/rust/src/lib.rs",
   "scale/schemas/*.json",
   "*/data/*.txt",
   "game/configs/*.yaml",

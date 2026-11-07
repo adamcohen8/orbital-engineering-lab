@@ -1,9 +1,18 @@
 from __future__ import annotations
 
 import os
+import stat
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from sim.platform_compat import canonicalize_platform_compatibility_root
+from sim.security.input_reads import (
+    DEFAULT_MAX_READ_BYTES,
+    SecureReadRoot,
+    require_secure_read_primitives,
+    secure_read_primitives_available,
+)
 
 
 class ConfigPathSecurityError(ValueError):
@@ -62,6 +71,7 @@ class ConfigPathPolicy:
     allow_external_config_paths: bool = False
     allow_external_ai_prompt_files: bool = False
     restrict_ai_prompt_to_read_roots: bool = False
+    require_secure_reads: bool = False
 
     @classmethod
     def default(
@@ -74,6 +84,7 @@ class ConfigPathPolicy:
         allow_external_config_paths: bool = False,
         allow_external_ai_prompt_files: bool = False,
         allow_config_dir_writes: bool = True,
+        require_secure_reads: bool = False,
     ) -> ConfigPathPolicy:
         repo = _repo_root()
         cfg_path = None if config_path is None else Path(config_path).expanduser().resolve()
@@ -113,6 +124,7 @@ class ConfigPathPolicy:
             allow_external_ai_prompt_files=bool(
                 allow_external_ai_prompt_files or env_allows_external_ai_prompts
             ),
+            require_secure_reads=bool(require_secure_reads),
         )
 
     @classmethod
@@ -151,6 +163,209 @@ class ConfigPathPolicy:
             raise FileNotFoundError(f"{purpose} file does not exist: {path}")
         self._ensure_allowed(path, roots=self.read_roots, purpose=purpose, access="read")
         return path
+
+    def read_input_bytes(
+        self,
+        path_text: str | Path,
+        *,
+        purpose: str,
+        base_dir: str | Path | None = None,
+        max_bytes: int | None = DEFAULT_MAX_READ_BYTES,
+    ) -> tuple[Path, bytes]:
+        """Read a config input from the authorized inode, preserving provenance.
+
+        The returned path is a logical source label.  Consumers must parse the
+        returned bytes and must not reopen that path after authorization.
+        """
+
+        logical = self._resolve_lexical_path(
+            path_text,
+            base_dir=base_dir or self.config_dir,
+            purpose=purpose,
+        )
+        self._ensure_allowed(logical, roots=self.read_roots, purpose=purpose, access="read")
+        roots = self.read_roots
+        if self.allow_external_config_paths and not any(_is_relative_to(logical, root) for root in roots):
+            roots = (*roots, logical.parent)
+        return logical, self._read_bytes_from_authorized_path(
+            logical,
+            roots=roots,
+            purpose=purpose,
+            max_bytes=max_bytes,
+        )
+
+    def authorized_input_file(
+        self,
+        path_text: str | Path,
+        *,
+        purpose: str,
+        base_dir: str | Path | None = None,
+    ) -> Path:
+        """Check one config input through a retained parent descriptor."""
+
+        logical = self._resolve_lexical_path(
+            path_text,
+            base_dir=base_dir or self.config_dir,
+            purpose=purpose,
+        )
+        self._ensure_allowed(logical, roots=self.read_roots, purpose=purpose, access="read")
+        roots = self.read_roots
+        if self.allow_external_config_paths and not any(_is_relative_to(logical, root) for root in roots):
+            roots = (*roots, logical.parent)
+        if secure_read_primitives_available():
+            with SecureReadRoot.open(logical.parent, approved_roots=roots) as reader:
+                reader.stat(logical.name)
+        elif self.require_secure_reads:
+            require_secure_read_primitives()
+        elif not logical.is_file():
+            raise FileNotFoundError(f"{purpose} file does not exist: {logical}")
+        return logical
+
+    def read_input_text(
+        self,
+        path_text: str | Path,
+        *,
+        purpose: str,
+        base_dir: str | Path | None = None,
+        encoding: str = "utf-8",
+        max_bytes: int | None = DEFAULT_MAX_READ_BYTES,
+    ) -> tuple[Path, str]:
+        logical, payload = self.read_input_bytes(
+            path_text,
+            purpose=purpose,
+            base_dir=base_dir,
+            max_bytes=max_bytes,
+        )
+        try:
+            return logical, payload.decode(encoding)
+        except UnicodeDecodeError as exc:
+            raise ConfigPathSecurityError(f"{purpose} is not valid {encoding} text: {logical}") from exc
+
+    def read_ai_prompt_text(
+        self,
+        path_text: str | Path,
+        *,
+        purpose: str,
+        base_dir: str | Path | None = None,
+        encoding: str = "utf-8",
+        max_bytes: int | None = DEFAULT_MAX_READ_BYTES,
+    ) -> tuple[Path, str]:
+        """Read an AI prompt through the prompt-specific trust boundary."""
+
+        logical = self._resolve_lexical_path(
+            path_text,
+            base_dir=base_dir or self.config_dir,
+            purpose=purpose,
+        )
+        if self.allow_external_ai_prompt_files:
+            roots = self.read_roots
+            if not any(_is_relative_to(logical, root) for root in roots):
+                roots = (*roots, logical.parent)
+        else:
+            roots = self.read_roots if self.restrict_ai_prompt_to_read_roots else _as_resolved_roots([self.config_dir])
+            self._ensure_allowed(
+                logical,
+                roots=roots,
+                purpose=purpose,
+                access="read",
+                hint="Pass allow_external_ai_prompt_files=True or set OEL_ALLOW_EXTERNAL_AI_PROMPT_FILES=1 for trusted prompt files.",
+                honor_external_config_paths=False,
+            )
+        payload = self._read_bytes_from_authorized_path(
+            logical,
+            roots=roots,
+            purpose=purpose,
+            max_bytes=max_bytes,
+        )
+        try:
+            return logical, payload.decode(encoding)
+        except UnicodeDecodeError as exc:
+            raise ConfigPathSecurityError(f"{purpose} is not valid {encoding} text: {logical}") from exc
+
+    def _read_bytes_from_authorized_path(
+        self,
+        logical: Path,
+        *,
+        roots: tuple[Path, ...],
+        purpose: str,
+        max_bytes: int | None,
+    ) -> bytes:
+        """Read a bounded input through the secure or trusted local route.
+
+        The normal local policy selects descriptor-bound reads whenever the
+        host provides them.  A trusted CLI caller can still load ordinary
+        local configs on hosts without the POSIX primitives: that compatibility
+        route bounds the read and compares the target's metadata before and
+        after consumption.  It detects ordinary local replacement, but does
+        not claim hostile same-account process protection.  MCP policies set
+        ``require_secure_reads`` and therefore fail closed instead of using
+        this fallback.
+        """
+
+        if secure_read_primitives_available():
+            with SecureReadRoot.open(logical.parent, approved_roots=roots) as reader:
+                return reader.read_bytes(logical.name, max_bytes=max_bytes)
+        if self.require_secure_reads:
+            require_secure_read_primitives()
+        return self._read_path_compatibility_bytes(
+            logical,
+            purpose=purpose,
+            max_bytes=max_bytes,
+        )
+
+    @staticmethod
+    def _read_path_compatibility_bytes(
+        logical: Path,
+        *,
+        purpose: str,
+        max_bytes: int | None,
+    ) -> bytes:
+        if max_bytes is not None and int(max_bytes) < 0:
+            raise ValueError(f"{purpose} read limit must be non-negative.")
+        try:
+            before = os.stat(logical)
+        except OSError as exc:
+            raise FileNotFoundError(f"{purpose} file does not exist: {logical}") from exc
+        if not stat.S_ISREG(before.st_mode):
+            raise ConfigPathSecurityError(f"{purpose} is not a regular file: {logical}")
+        if max_bytes is not None and int(before.st_size) > int(max_bytes):
+            raise ValueError(f"{purpose} exceeds the bounded read limit: {logical}")
+        try:
+            with logical.open("rb") as stream:
+                payload = stream.read(None if max_bytes is None else int(max_bytes) + 1)
+        except OSError as exc:
+            raise ConfigPathSecurityError(f"{purpose} could not be read: {logical}") from exc
+        try:
+            after = os.stat(logical)
+        except OSError as exc:
+            raise ConfigPathSecurityError(
+                f"{purpose} changed or disappeared during the compatibility read: {logical}"
+            ) from exc
+        before_identity = (
+            int(before.st_dev),
+            int(before.st_ino),
+            int(before.st_mode),
+            int(before.st_size),
+            int(before.st_mtime_ns),
+            int(before.st_ctime_ns),
+            int(before.st_nlink),
+        )
+        after_identity = (
+            int(after.st_dev),
+            int(after.st_ino),
+            int(after.st_mode),
+            int(after.st_size),
+            int(after.st_mtime_ns),
+            int(after.st_ctime_ns),
+            int(after.st_nlink),
+        )
+        if before_identity != after_identity:
+            raise ConfigPathSecurityError(
+                f"{purpose} changed during the compatibility read: {logical}"
+            )
+        if max_bytes is not None and len(payload) > int(max_bytes):
+            raise ValueError(f"{purpose} exceeds the bounded read limit: {logical}")
+        return payload
 
     def resolve_ai_prompt_file(
         self,
@@ -211,6 +426,20 @@ class ConfigPathPolicy:
         if not path.is_absolute():
             path = Path(base_dir) / path
         return path.resolve()
+
+    def _resolve_lexical_path(self, path_text: str | Path, *, base_dir: str | Path, purpose: str) -> Path:
+        raw = str(path_text or "").strip()
+        if not raw:
+            raise ValueError(f"{purpose} path must be non-empty.")
+        if raw.startswith("~") and not self.allow_external_config_paths:
+            raise ConfigPathSecurityError(
+                f"{purpose} uses '~', which is blocked for untrusted configs: {raw}. "
+                "Pass allow_external_config_paths=True or set OEL_ALLOW_EXTERNAL_CONFIG_PATHS=1 for trusted configs."
+            )
+        path = Path(raw).expanduser()
+        if not path.is_absolute():
+            path = Path(base_dir) / path
+        return canonicalize_platform_compatibility_root(Path(os.path.abspath(path)))
 
     def _ensure_allowed(
         self,

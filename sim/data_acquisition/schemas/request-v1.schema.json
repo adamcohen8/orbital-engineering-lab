@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "oel.data-acquisition.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "provider",
+    "product"
+  ],
+  "properties": {
+    "schema": {
+      "const": "oel.data-acquisition.v1"
+    },
+    "provider": {
+      "enum": [
+        "spacetrack",
+        "gravity",
+        "celestrak"
+      ]
+    },
+    "product": {
+      "enum": [
+        "gp",
+        "gp_history",
+        "satcat",
+        "egm96",
+        "egm2008",
+        "eop",
+        "space_weather"
+      ]
+    },
+    "connection": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$"
+    },
+    "object_ids": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 999999999
+      }
+    },
+    "start": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "stop": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "published_before": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "max_bytes": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 536870912
+    },
+    "max_records": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 50000
+    },
+    "max_requests": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 16
+    }
+  },
+  "description": "Runtime validation also enforces provider/product pairs, absolute UTC intervals, resource bounds and provider-specific constraints."
+}

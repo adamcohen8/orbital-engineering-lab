@@ -97,6 +97,12 @@ ENVELOPE_SCHEMA: dict[str, Any] = {
                 },
                 "argument_values_retained": {"const": False},
                 "payload_retained": {"const": False},
+                "operation_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 160,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$",
+                },
             },
             "required": [
                 "schema_version",

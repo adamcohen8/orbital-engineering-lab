@@ -30,7 +30,11 @@ SUPPORTED_CHANNELS = frozenset({"stable", "preview"})
 # The signed v1 product is a wire identity. Existing updaters still require
 # the former value; readers accept either spelling.
 SUPPORTED_RELEASE_PRODUCTS = frozenset({"orbital-engagement-lab", "orbital-engineering-lab"})
-INSTALLATION_DISPOSITIONS = frozenset({"official", "modified", "incomplete", "developer"})
+# ``untrusted`` is retained as a distinct disposition for legacy signed
+# releases, revoked-key installs, and installations whose external trust
+# anchor cannot authenticate the signed inventory.  Their bytes remain
+# inspectable but they must not be activated or dispatched as official OEL.
+INSTALLATION_DISPOSITIONS = frozenset({"official", "modified", "incomplete", "developer", "untrusted"})
 COMPATIBILITY_STATUSES = frozenset(
     {
         "compatible",
@@ -172,12 +176,21 @@ def validate_artifact(value: Mapping[str, Any], *, index: int) -> dict[str, Any]
     allowed = {"name", "kind", "path", "url", "bytes", "sha256", "media_type", "platform", "architecture"}
     require_keys(value, {"name", "kind", "bytes", "sha256"}, label=label)
     reject_unknown_keys(value, allowed, label=label)
+    if not isinstance(value.get("name"), str) or not str(value["name"]).strip():
+        raise ContractError(f"{label}.name must be a non-empty string.")
+    if not isinstance(value.get("kind"), str) or not str(value["kind"]).strip():
+        raise ContractError(f"{label}.kind must be a non-empty string.")
     if not value.get("path") and not value.get("url"):
         raise ContractError(f"{label} must provide path or url.")
-    name = str(value["name"])
+    for field in ("path", "url"):
+        if field in value and value[field] is not None and not isinstance(value[field], str):
+            raise ContractError(f"{label}.{field} must be a string.")
+    name = str(value["name"]).strip()
     if not name or Path(name).name != name:
         raise ContractError(f"{label}.name must be a plain file name.")
-    size = int(value["bytes"])
+    if isinstance(value["bytes"], bool) or not isinstance(value["bytes"], int):
+        raise ContractError(f"{label}.bytes must be an integer.")
+    size = value["bytes"]
     if size < 0:
         raise ContractError(f"{label}.bytes must be non-negative.")
     return {

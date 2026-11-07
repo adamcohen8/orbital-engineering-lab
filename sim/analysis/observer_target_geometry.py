@@ -6,6 +6,15 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from sim.utils.geodesy import WGS84_A_KM, WGS84_B_KM
+
+# The surface level is dimensionless.  The normal check uses a dot-product
+# alignment tolerance because both the supplied and reference normals are
+# unit vectors.  These tolerances admit round-off from geodetic construction
+# while rejecting physically off-surface or inward-facing targets.
+_WGS84_SURFACE_LEVEL_TOLERANCE = 1.0e-12
+_WGS84_NORMAL_ALIGNMENT_TOLERANCE = 1.0e-10
+
 
 @dataclass(frozen=True)
 class SurfaceTargetGeometry:
@@ -16,6 +25,46 @@ class SurfaceTargetGeometry:
     inside_pattern: np.ndarray
     inside_range: np.ndarray
     available: np.ndarray
+
+
+def _validate_wgs84_surface_targets(
+    targets: np.ndarray,
+    normals: np.ndarray,
+) -> None:
+    """Validate WGS84 surface membership and outward-normal orientation.
+
+    ``targets`` must satisfy the WGS84 ellipsoid equation within a
+    dimensionless ``1e-12`` level tolerance.  ``normals`` must be aligned with
+    the normalized ellipsoid gradient within a ``1e-10`` dot-product
+    tolerance.  This shared boundary runs before either the Python geometry
+    kernel or the optional native kernel.
+    """
+
+    axes = np.array([WGS84_A_KM, WGS84_A_KM, WGS84_B_KM], dtype=float)
+    level = np.einsum("ij,ij->i", targets / axes, targets / axes)
+    invalid_surface = np.abs(level - 1.0) > _WGS84_SURFACE_LEVEL_TOLERANCE
+    if np.any(invalid_surface):
+        index = int(np.flatnonzero(invalid_surface)[0])
+        raise ValueError(
+            "target_ecef_km must lie on the WGS84 ellipsoid within "
+            f"{_WGS84_SURFACE_LEVEL_TOLERANCE:.1e} normalized level "
+            f"(sample {index} has level {level[index]:.17g})."
+        )
+
+    gradient = targets / (axes * axes)
+    gradient_norm = np.linalg.norm(gradient, axis=1)
+    if np.any(~np.isfinite(gradient_norm)) or np.any(gradient_norm <= 0.0):
+        raise ValueError("WGS84 target ellipsoid gradients must have positive finite norm.")
+    expected_normals = gradient / gradient_norm[:, None]
+    alignment = np.einsum("ij,ij->i", normals, expected_normals)
+    invalid_normal = alignment < 1.0 - _WGS84_NORMAL_ALIGNMENT_TOLERANCE
+    if np.any(invalid_normal):
+        index = int(np.flatnonzero(invalid_normal)[0])
+        raise ValueError(
+            "target_outward_normal_ecef must be the unit outward WGS84 normal "
+            f"within {_WGS84_NORMAL_ALIGNMENT_TOLERANCE:.1e} alignment "
+            f"(sample {index} has alignment {alignment[index]:.17g})."
+        )
 
 
 def evaluate_surface_targets_ecef(
@@ -56,6 +105,7 @@ def evaluate_surface_targets_ecef(
     normal_norms = np.linalg.norm(normals, axis=1)
     if np.any(np.abs(normal_norms - 1.0) > 1.0e-10):
         raise ValueError("Target outward normals must be unit vectors within 1e-10.")
+    _validate_wgs84_surface_targets(targets, normals)
     half_angle = float(half_angle_rad)
     if not np.isfinite(half_angle) or not 0.0 < half_angle < 0.5 * np.pi:
         raise ValueError("half_angle_rad must be finite and strictly within (0, pi/2).")

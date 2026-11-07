@@ -76,6 +76,22 @@ def _steps(value: np.ndarray | Iterable[float] | None) -> list[float]:
     return values
 
 
+def _batch_steps(value: np.ndarray | Iterable[float] | None, rows: int) -> list[float]:
+    """Normalize the native batch step ABI (shared or one row per sample)."""
+
+    if value is None:
+        return DEFAULT_FINITE_DIFFERENCE_STEPS.tolist()
+    steps = np.asarray(value, dtype=np.float64).reshape(-1)
+    if steps.size not in (6, rows * 6):
+        raise ValueError(
+            "finite-difference steps must contain 6 values or 6 values per tracking row"
+        )
+    values = steps.tolist()
+    if not all(isfinite(step) and step > 0.0 for step in values):
+        raise ValueError("finite-difference steps must be finite and positive")
+    return values
+
+
 def _native(name: str):
     function = getattr(_extension(), name, None)
     if function is None:
@@ -186,7 +202,7 @@ def relative_measurement_and_jacobian_batch(
     if len(model_list) != targets.shape[0]:
         raise ValueError("models must contain one model per tracking row")
     codes = [_model_code(model) for model in model_list]
-    step_array = _steps(steps)
+    step_array = _batch_steps(steps, targets.shape[0])
     byte_function = getattr(_extension(), "tracking_measurement_and_jacobian_batch_bytes", None)
     if byte_function is not None:
         result = byte_function(np.asarray(targets, dtype="<f8").tobytes(), np.asarray(observers, dtype="<f8").tobytes(), codes, step_array)

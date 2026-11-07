@@ -349,7 +349,7 @@ class SimulationWorkspace:
         config: str | Path | ScenarioArtifact | SimulationConfig | SimulationScenarioConfig | dict[str, Any],
         *,
         parameter: str,
-        values: list[Any] | tuple[Any, ...],
+        values: Iterable[Any],
         metrics: Mapping[str, MetricCallback] | list[MetricCallback] | tuple[MetricCallback, ...] | None = None,
         output_dir_template: str | None = None,
         step_callback: Any | None = None,
@@ -357,9 +357,10 @@ class SimulationWorkspace:
     ) -> MetricStudyResult:
         _require_private_workflow("sim.execution.sensitivity", "prepare_sensitivity_runs", "Parameter sweeps")
         base = self._coerce_config(config)
+        sweep_values = list(values)
         runs: list[dict[str, Any]] = []
-        total = len(list(values))
-        for idx, value in enumerate(list(values)):
+        total = len(sweep_values)
+        for idx, value in enumerate(sweep_values):
             cfg_i = base.with_value(parameter, value)
             if output_dir_template:
                 cfg_i = cfg_i.with_output_dir(
@@ -385,7 +386,7 @@ class SimulationWorkspace:
         run_metrics = [dict(row.get("metrics", {}) or {}) for row in runs]
         return MetricStudyResult({
             "scenario_name": base.scenario_name,
-            "sweep": {"parameter": str(parameter), "values": list(values), "run_count": int(len(runs))},
+            "sweep": {"parameter": str(parameter), "values": sweep_values, "run_count": int(len(runs))},
             "runs": runs,
             "custom_metrics": _aggregate_custom_metrics(run_metrics),
         })

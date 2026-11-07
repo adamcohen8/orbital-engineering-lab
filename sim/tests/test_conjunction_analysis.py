@@ -17,8 +17,15 @@ from sim.analysis.conjunction_probability import (
     ConjunctionProbabilityError,
     collision_probability_2d,
     project_combined_covariance,
+    small_object_collision_probability,
 )
-from sim.analysis.conjunction_workflow import ConjunctionObject, assess_conjunction, assess_histories, propagate_history
+from sim.analysis.conjunction_workflow import (
+    ConjunctionAssessmentError,
+    ConjunctionObject,
+    assess_conjunction,
+    assess_histories,
+    propagate_history,
+)
 from sim.analysis.trajectory_targeting import PropagationSettings
 
 
@@ -84,6 +91,42 @@ def test_impulsive_burn_does_not_change_preburn_interpolation() -> None:
     ) == pytest.approx(0.1, abs=1.0e-14)
 
 
+def test_tca_boundary_result_uses_the_selected_preimpulse_state() -> None:
+    times = [0.0, 10.0, 20.0]
+    primary = StateHistory.from_arrays(
+        times,
+        [
+            [20.0, 0.0, 0.0, -1.0, 0.0, 0.0],
+            [10.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            [20.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        ],
+        incoming_velocities_eci_km_s=[[-1.0, 0.0, 0.0], [-1.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+    )
+    secondary = StateHistory.from_arrays(times, [[0.0] * 6] * 3)
+
+    result = refine_time_of_closest_approach(primary, secondary, numeric_backend="python")
+
+    assert result["time_s"] == pytest.approx(10.0)
+    assert result["relative_position_eci_km"] == pytest.approx([10.0, 0.0, 0.0])
+    assert result["relative_velocity_eci_km_s"] == pytest.approx([-1.0, 0.0, 0.0])
+    assert result["relative_position_dot_velocity_km2_s"] == pytest.approx(-10.0)
+    assert result["relative_range_rate_km_s"] == pytest.approx(-1.0)
+    assert result["miss_distance_km"] == pytest.approx(np.linalg.norm(result["relative_position_eci_km"]))
+
+
+def test_ric_burn_rejects_zero_angular_momentum() -> None:
+    settings = PropagationSettings.from_mapping({"step_s": 10.0})
+    with pytest.raises(ConjunctionAssessmentError, match="nonzero angular momentum"):
+        propagate_history(
+            [7000.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            20.0,
+            settings,
+            burn_time_s=10.0,
+            burn_frame="ric",
+            delta_v_m_s=[1.0, 0.0, 0.0],
+        )
+
+
 def test_encounter_frame_is_orthonormal_and_places_miss_on_x() -> None:
     result = encounter_frame([1.0, 2.0, 3.0], [0.0, 10.0, 0.0])
     basis = np.asarray(result["basis_rows_eci"])
@@ -138,6 +181,12 @@ def test_2d_pc_fails_closed_when_adaptive_error_is_not_accepted(monkeypatch: pyt
     )
     with pytest.raises(ConjunctionProbabilityError, match="failed closed"):
         collision_probability_2d([0.0, 0.0], np.eye(2) * 0.01, 0.02)
+
+
+@pytest.mark.parametrize("radius", [0.0, -0.01, float("nan"), float("inf")])
+def test_legacy_small_object_probability_rejects_invalid_hard_body_radius(radius: float) -> None:
+    with pytest.raises(ConjunctionProbabilityError, match="Hard-body radius must be positive and finite"):
+        small_object_collision_probability([0.0, 0.0], np.eye(2), radius)
 
 
 def test_covariance_projection_rejects_non_psd_inputs() -> None:

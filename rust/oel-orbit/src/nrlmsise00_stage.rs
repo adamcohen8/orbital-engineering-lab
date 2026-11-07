@@ -1,5 +1,6 @@
 //! Calendar packet assembly matching OEL's Python Julian-date owner.
 //! Solar projection remains with its NumPy owner; density uses the unchanged core.
+#[cfg_attr(not(feature = "python"), allow(dead_code))]
 pub(crate) fn packet(
     jd_utc: f64,
     coordinates: [f64; 3],

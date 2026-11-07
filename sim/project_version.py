@@ -108,13 +108,21 @@ def installed_project_version(*, distribution_name: str = OEL_DISTRIBUTION_NAME)
     except (metadata.PackageNotFoundError, TypeError, KeyError, AttributeError, ValueError):
         distributions = []
     if distributions:
-        distributions.sort(
-            key=lambda distribution: (
-                0 if str(getattr(distribution, "_path", "")).endswith(".dist-info") else 1,
-                str(getattr(distribution, "_path", "")),
-            )
+        # ``importlib.metadata`` yields distributions in discovery order,
+        # which follows the active import path.  Keep that order among modern
+        # ``.dist-info`` entries: sorting paths can select an older inherited
+        # environment over the active checkout merely because its directory
+        # name sorts first.  A legacy ``.egg-info`` remains the fallback when
+        # no modern metadata is present.
+        selected = next(
+            (
+                distribution
+                for distribution in distributions
+                if str(getattr(distribution, "_path", "")).endswith(".dist-info")
+            ),
+            distributions[0],
         )
-        value = str(distributions[0].version or "").strip()
+        value = str(selected.version or "").strip()
         return value or None
     try:
         value = str(metadata.version(distribution_name) or "").strip()

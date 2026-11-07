@@ -38,6 +38,145 @@ def problem_from_dict(data: dict) -> TrajectoryTargetingProblem:
     )
 
 
+@pytest.mark.parametrize(
+    "field",
+    ["mu_km3_s2", "central_body_radius_km", "mass_kg", "event_time_tolerance_s", "event_value_tolerance"],
+)
+def test_propagation_settings_reject_nonfinite_values(field: str) -> None:
+    with pytest.raises(TrajectoryTargetingError, match="positive and finite"):
+        problem_from_dict({"propagation": {field: float("nan")}})
+
+
+def test_targeting_rejects_unknown_fields_at_each_mapping_boundary() -> None:
+    cases = [
+        {"unexpected": 1.0},
+        {"propagation": {"unexpected": 1.0}},
+        {"solver": {"unexpected": 1.0}},
+        {"segments": [{"type": "coast", "name": "coast", "duration_s": 10.0, "unexpected": 1.0}]},
+        {
+            "variables": [
+                {
+                    "name": "duration",
+                    "segment": "coast",
+                    "field": "duration_s",
+                    "initial": 10.0,
+                    "perturbation": 0.1,
+                    "unexpected": 1.0,
+                }
+            ]
+        },
+        {
+            "constraints": [
+                {
+                    "name": "elapsed",
+                    "quantity": "elapsed_time_s",
+                    "target": 10.0,
+                    "tolerance": 1.0e-9,
+                    "unexpected": 1.0,
+                }
+            ]
+        },
+        {
+            "segments": [
+                {
+                    "type": "coast",
+                    "name": "coast",
+                    "stop": {
+                        "quantity": "elapsed_time_s",
+                        "target": 10.0,
+                        "max_duration_s": 20.0,
+                        "unexpected": 1.0,
+                    },
+                }
+            ]
+        },
+    ]
+    for case in cases:
+        with pytest.raises(TrajectoryTargetingError, match="unknown fields"):
+            problem_from_dict(case)
+
+
+def test_targeting_rejects_booleans_before_numeric_conversion() -> None:
+    cases = [
+        {"initial_state_eci_km_km_s": [True, 0.0, 0.0, 0.0, 7.5, 0.0]},
+        {"propagation": {"step_s": True}},
+        {"segments": [{"type": "coast", "name": "coast", "duration_s": True}]},
+        {
+            "segments": [
+                {"type": "impulsive_burn", "name": "burn", "delta_v_m_s": [True, 0.0, 0.0]}
+            ]
+        },
+        {
+            "variables": [
+                {
+                    "name": "duration",
+                    "segment": "coast",
+                    "field": "duration_s",
+                    "initial": True,
+                    "perturbation": 0.1,
+                }
+            ]
+        },
+        {
+            "constraints": [
+                {"name": "elapsed", "quantity": "elapsed_time_s", "target": True, "tolerance": 1.0e-9}
+            ]
+        },
+        {"solver": {"max_iterations": True}},
+        {
+            "segments": [
+                {
+                    "type": "coast",
+                    "name": "coast",
+                    "stop": {
+                        "quantity": "elapsed_time_s",
+                        "target": 10.0,
+                        "max_duration_s": True,
+                    },
+                }
+            ]
+        },
+    ]
+    for case in cases:
+        with pytest.raises(TrajectoryTargetingError, match="boolean"):
+            problem_from_dict(case)
+
+
+@pytest.mark.parametrize("integrator", ["rkf78", "dopri5", "adaptive"])
+def test_rust_direct_execution_rejects_non_rk4_before_native_probe(
+    monkeypatch: pytest.MonkeyPatch, integrator: str
+) -> None:
+    import sim.rust_targeting_backend as native_targeting
+
+    def fail_if_native_is_requested() -> None:
+        pytest.fail("unsupported Rust targeting execution probed the native extension")
+
+    monkeypatch.setattr(native_targeting, "_extension", fail_if_native_is_requested)
+    problem = problem_from_dict({"propagation": {"step_s": 10.0, "integrator": integrator}})
+
+    with pytest.raises(
+        TrajectoryTargetingError,
+        match=r"Rust direct trajectory execution supports only.*numeric_backend='python'",
+    ):
+        execute_trajectory(problem, numeric_backend="rust")
+
+
+def test_python_backend_retains_explicit_adaptive_execution(monkeypatch: pytest.MonkeyPatch) -> None:
+    import sim.rust_targeting_backend as native_targeting
+
+    def fail_if_native_is_requested() -> None:
+        pytest.fail("Python-selected adaptive targeting probed the native extension")
+
+    monkeypatch.setattr(native_targeting, "_extension", fail_if_native_is_requested)
+    problem = problem_from_dict({"propagation": {"step_s": 10.0, "integrator": "adaptive"}})
+
+    execution = execute_trajectory(problem, numeric_backend="python")
+
+    assert execution["status"] == "completed"
+    assert execution["numeric_backend"] == "python"
+    assert execution["propagator"]["integrator"] == "adaptive"
+
+
 def test_execute_multisegment_coast_burn_coast_uses_onp_and_records_resources() -> None:
     problem = problem_from_dict(
         {

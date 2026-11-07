@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
@@ -412,7 +413,9 @@ def _request_source(item: Mapping[str, Any]) -> dict[str, Any]:
     metadata = deepcopy(dict(item.get("metadata", {}) or {}))
     content_sha256 = item.get("content_sha256")
     if content_sha256 is not None:
-        metadata.setdefault("content_sha256", str(content_sha256))
+        metadata["content_sha256"] = str(content_sha256)
+    else:
+        metadata.pop("content_sha256", None)
     return {
         "ref_id": str(item["input_id"]),
         "kind": kind,
@@ -447,6 +450,7 @@ def _resource_bound_findings(
     input_refs: Sequence[Mapping[str, Any]],
 ) -> list[EdgeCompilationFinding]:
     requirements: dict[str, float] = {}
+    findings: list[EdgeCompilationFinding] = []
     metadata_to_bound = {
         "input_bytes": "max_input_bytes",
         "observation_count": "max_observations",
@@ -462,11 +466,74 @@ def _resource_bound_findings(
         for metadata_name, bound_name in metadata_to_bound.items():
             value = dict(ref.get("metadata", {}) or {}).get(metadata_name)
             if value is not None:
-                requirements[bound_name] = requirements.get(bound_name, 0.0) + float(value)
-    findings: list[EdgeCompilationFinding] = []
+                try:
+                    numeric_value = float(value)
+                except (TypeError, ValueError, OverflowError):
+                    numeric_value = float("nan")
+                if (
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not math.isfinite(numeric_value)
+                    or numeric_value < 0.0
+                ):
+                    findings.append(
+                        EdgeCompilationFinding(
+                            "edge.resource_metadata_invalid",
+                            f"Input metadata {metadata_name!r} for operation {operation_id!r} must be a finite non-negative number.",
+                            (f"$.plan.operations[{operation_id}].input_refs",),
+                            {
+                                "operation_id": operation_id,
+                                "metadata_name": metadata_name,
+                                "value": value,
+                            },
+                            "Replace the resource metadata with the measured non-negative input bound.",
+                        )
+                    )
+                    continue
+                requirements[bound_name] = requirements.get(bound_name, 0.0) + numeric_value
     for bound_name, minimum in requirements.items():
         declared = bounds.get(bound_name)
-        if declared is None or float(declared) < minimum:
+        if declared is None:
+            findings.append(
+                EdgeCompilationFinding(
+                    "edge.resource_bound_insufficient",
+                    f"Operation {operation_id!r} does not bound {bound_name!r} for its selected inputs.",
+                    (f"$.plan.operations[{operation_id}].bounds.{bound_name}",),
+                    {
+                        "operation_id": operation_id,
+                        "bound": bound_name,
+                        "declared": declared,
+                        "required_minimum": minimum,
+                    },
+                    "Declare a per-operation maximum at least as large as the identity-bound input metadata.",
+                )
+            )
+            continue
+        try:
+            numeric_declared = float(declared)
+        except (TypeError, ValueError, OverflowError):
+            numeric_declared = float("nan")
+        if (
+            isinstance(declared, bool)
+            or not isinstance(declared, (int, float))
+            or not math.isfinite(numeric_declared)
+            or numeric_declared < 0.0
+        ):
+            findings.append(
+                EdgeCompilationFinding(
+                    "edge.resource_bound_invalid",
+                    f"Operation {operation_id!r} declares an invalid {bound_name!r} resource bound.",
+                    (f"$.plan.operations[{operation_id}].bounds.{bound_name}",),
+                    {
+                        "operation_id": operation_id,
+                        "bound": bound_name,
+                        "declared": declared,
+                        "required_minimum": minimum,
+                    },
+                    "Declare a finite non-negative numeric bound before compiling typed edges.",
+                )
+            )
+        elif numeric_declared < minimum:
             findings.append(
                 EdgeCompilationFinding(
                     "edge.resource_bound_insufficient",

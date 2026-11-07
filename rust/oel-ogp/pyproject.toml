@@ -1,0 +1,13 @@
+[build-system]
+requires = ["maturin>=1.12,<2"]
+build-backend = "maturin"
+
+[project]
+name = "oel-rust-ogp"
+version = "0.1.0"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+description = "Optional source-public OGP backend for Orbital Engineering Lab"
+
+[tool.maturin]
+features = ["python"]

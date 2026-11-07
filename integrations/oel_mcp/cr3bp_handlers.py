@@ -9,12 +9,11 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-import os
+from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Mapping
 
-from integrations.oel_mcp.base_handlers import require_file_size
 from integrations.oel_mcp.contracts import MAX_MANIFEST_BYTES
 from integrations.oel_mcp.cr3bp_registry import (
     CR3BP_PLAN_TOOL_ID,
@@ -27,15 +26,16 @@ from integrations.oel_mcp.cr3bp_registry import (
 )
 from integrations.oel_mcp.execution import (
     MCPExecutionCancelled,
-    _ensure_directory_nofollow,
-    _open_directory_nofollow,
     complete_manifest,
     manifest_base,
     safe_artifact_id,
     write_execution_manifest,
 )
 from sim.review.cr3bp import load_cr3bp_history, render_cr3bp_research
+from sim.review.evidence_capsule import evidence_file_mtime_ns
 from sim.review.workspace import ReviewWorkspace
+from sim.security.input_reads import SecureReadError
+from sim.security.output_writes import bind_output_writer
 
 CR3BP_PLAN_SCHEMA_VERSION = 1
 
@@ -184,33 +184,35 @@ def _reject_symlinked_path(path: Path, *, root: Path, policy: Any, kind: str) ->
 
 
 def _read_child(handler: Any, output: Path, *parts: str, kind: str = "any") -> Path:
-    lexical = output.joinpath(*parts).absolute()
-    resolved = handler.path_policy.resolve_read_child(output, *parts, kind=kind, required=False)
-    if resolved.exists() and resolved != lexical:
-        raise PermissionError("Path is not authorized for this operation: symlinked input.")
-    current = lexical
-    while current != output:
-        if current.is_symlink():
-            raise PermissionError("Path is not authorized for this operation: symlinked input.")
-        if output not in current.parents:
-            raise PermissionError("Path is not authorized for this operation: input escaped its output directory.")
-        current = current.parent
-    return resolved
+    lexical = output.joinpath(*parts)
+    try:
+        return handler.path_policy.authorized_read_path(lexical, kind=kind)
+    except FileNotFoundError:
+        return lexical
 
 
 def _require_review_input(handler: Any, output: Path) -> None:
     """Authorize the logical review store and enforce its input-size budget."""
 
+    policy = handler.path_policy
     db = _read_child(handler, output, "review", "run.sqlite", kind="file")
     canonical_capsule = _read_child(handler, output, "review", "run.sqlite.gz", kind="file")
     capsule_manifest = _read_child(handler, output, "review", "evidence_capsule.json", kind="file")
     capsule = canonical_capsule
     compressed_capsule: Path | None = None
     capsule_entry: dict[str, Any] | None = None
-    if capsule_manifest.is_file():
-        require_file_size(capsule_manifest, maximum=MAX_MANIFEST_BYTES)
+    manifest_bytes: bytes | None = None
+    try:
+        _manifest_path, manifest_bytes = _read_authorized_with_budget(
+            policy,
+            capsule_manifest,
+            maximum=MAX_MANIFEST_BYTES,
+        )
+    except FileNotFoundError:
+        manifest_bytes = None
+    if manifest_bytes is not None:
         try:
-            payload = json.loads(capsule_manifest.read_text(encoding="utf-8"))
+            payload = json.loads(manifest_bytes.decode("utf-8"))
             entries = [
                 dict(item)
                 for item in list(dict(payload or {}).get("artifacts", []) or [])
@@ -220,7 +222,17 @@ def _require_review_input(handler: Any, output: Path) -> None:
                 # A normal, uncompressed review store may share a capsule
                 # manifest for another logical artifact.  Only a manifest
                 # that claims to describe run.sqlite is relevant here.
-                if canonical_capsule.is_file() or not db.is_file():
+                canonical_capsule_record = _authorized_optional_record(
+                    policy,
+                    canonical_capsule,
+                    maximum=MAX_CR3BP_REVIEW_STORE_BYTES,
+                )
+                db_record = _authorized_optional_record(
+                    policy,
+                    db,
+                    maximum=MAX_CR3BP_REVIEW_STORE_BYTES,
+                )
+                if canonical_capsule_record is not None or db_record is None:
                     raise ValueError("Evidence capsule manifest must describe exactly one CR3BP SQLite store.")
             elif len(entries) != 1:
                 raise ValueError("Evidence capsule manifest must describe exactly one CR3BP SQLite store.")
@@ -248,10 +260,19 @@ def _require_review_input(handler: Any, output: Path) -> None:
                     compressed_name,
                     kind="file",
                 )
-                if not compressed_capsule.is_file():
-                    raise FileNotFoundError("Evidence capsule compressed SQLite store is missing.")
+                try:
+                    _compressed_path, compressed_record = policy.authorized_file_record(
+                        compressed_capsule,
+                        maximum=MAX_CR3BP_REVIEW_STORE_BYTES,
+                    )
+                except FileNotFoundError as exc:
+                    raise FileNotFoundError("Evidence capsule compressed SQLite store is missing.") from exc
+                except SecureReadError as exc:
+                    if "read budget" in str(exc).lower():
+                        raise ValueError("Evidence capsule compressed payload exceeds the file-size budget.") from exc
+                    raise
                 compressed_bytes = int(capsule_entry.get("compressed_bytes", -1))
-                if compressed_bytes != compressed_capsule.stat().st_size:
+                if compressed_bytes != int(compressed_record["bytes"]):
                     raise ValueError("Evidence capsule compressed size does not match its manifest.")
                 original_bytes = int(capsule_entry.get("original_bytes", -1))
                 if original_bytes < 0 or original_bytes > MAX_CR3BP_REVIEW_STORE_BYTES:
@@ -259,10 +280,22 @@ def _require_review_input(handler: Any, output: Path) -> None:
                 # A manifest may deliberately use a safe, noncanonical basename;
                 # ReviewWorkspace follows that content-bound mapping when hydrating.
                 capsule = compressed_capsule
-        except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        except ValueError as exc:
+            # Preserve the established public size-budget contract while
+            # collapsing malformed capsule details to one safe diagnostic.
+            if "file-size budget" in str(exc).lower():
+                raise
+            raise ValueError("Evidence capsule has no valid bounded compressed-size declaration.") from exc
+        except SecureReadError as exc:
+            if "read budget" in str(exc).lower():
+                raise ValueError("Authorized input exceeds the file-size budget.") from exc
+            raise
+        except (OSError, TypeError, json.JSONDecodeError) as exc:
             raise ValueError("Evidence capsule has no valid bounded compressed-size declaration.") from exc
 
-    if not db.is_file() and not capsule.is_file():
+    db_present = _authorized_optional_record(policy, db, maximum=MAX_CR3BP_REVIEW_STORE_BYTES)
+    capsule_present = _authorized_optional_record(policy, capsule, maximum=MAX_CR3BP_REVIEW_STORE_BYTES)
+    if not db_present and not capsule_present:
         raise FileNotFoundError("Required CR3BP review evidence is missing.")
     sidecars = [
         _read_child(handler, output, "review", "run.sqlite-wal", kind="file"),
@@ -271,17 +304,27 @@ def _require_review_input(handler: Any, output: Path) -> None:
     total_bytes = 0
     counted: set[Path] = set()
     for candidate in (db, canonical_capsule, compressed_capsule):
-        if candidate is not None and candidate.is_file():
+        if candidate is not None:
             candidate = candidate.absolute()
             if candidate in counted:
                 continue
-            require_file_size(candidate, maximum=MAX_CR3BP_REVIEW_STORE_BYTES)
-            total_bytes += candidate.stat().st_size
+            record = _authorized_optional_record(
+                policy,
+                candidate,
+                maximum=MAX_CR3BP_REVIEW_STORE_BYTES,
+            )
+            if record is None:
+                continue
+            total_bytes += int(record["bytes"])
             counted.add(candidate)
     for candidate in sidecars:
-        if candidate.is_file():
-            require_file_size(candidate, maximum=MAX_CR3BP_REVIEW_STORE_BYTES)
-            total_bytes += candidate.stat().st_size
+        record = _authorized_optional_record(
+            policy,
+            candidate,
+            maximum=MAX_CR3BP_REVIEW_STORE_BYTES,
+        )
+        if record is not None:
+            total_bytes += int(record["bytes"])
     if total_bytes > MAX_CR3BP_REVIEW_STORE_BYTES:
         raise ValueError("CR3BP review store and SQLite sidecars exceed the file-size budget.")
     # The renderer also reads the schema/saved-view sidecars when present.  A
@@ -295,17 +338,113 @@ def _require_review_input(handler: Any, output: Path) -> None:
         "generated_artifacts.json",
     ):
         sidecar = _read_child(handler, output, "review", name, kind="file")
-        if sidecar.is_file():
-            require_file_size(sidecar, maximum=MAX_MANIFEST_BYTES)
+        _authorized_optional_record(policy, sidecar, maximum=MAX_MANIFEST_BYTES)
     for name in ("mcp_execution_manifest.json", "master_run_summary.json", "agent_evidence_packet.json", "index.md"):
         sidecar = _read_child(handler, output, name, kind="file")
-        if sidecar.is_file():
-            require_file_size(sidecar, maximum=MAX_MANIFEST_BYTES)
+        _authorized_optional_record(policy, sidecar, maximum=MAX_MANIFEST_BYTES)
 
     # A compressed logical store is accepted only when its declared hydrated
     # size is within the same MCP budget used for an ordinary SQLite file.
     if capsule_entry is not None and compressed_capsule is None:
         raise ValueError("Evidence capsule compressed SQLite store is missing.")
+
+
+def _authorized_optional_record(policy: Any, path: Path, *, maximum: int) -> dict[str, Any] | None:
+    try:
+        _logical, record = policy.authorized_file_record(path, maximum=maximum)
+    except FileNotFoundError:
+        return None
+    except SecureReadError as exc:
+        if "read budget" in str(exc).lower():
+            raise ValueError("Authorized input exceeds the file-size budget.") from exc
+        raise
+    return dict(record)
+
+
+def _read_authorized_with_budget(
+    policy: Any,
+    path: Path,
+    *,
+    maximum: int,
+) -> tuple[Path, bytes]:
+    """Read one CR3BP input while retaining its stable size error contract."""
+
+    try:
+        return policy.read_authorized_bytes(path, maximum=maximum)
+    except SecureReadError as exc:
+        if "read budget" in str(exc).lower():
+            raise ValueError("Authorized input exceeds the file-size budget.") from exc
+        raise
+
+
+def _same_review_content(left: Mapping[str, Any], right: Mapping[str, Any]) -> bool:
+    return all(left.get(key) == right.get(key) for key in ("relative_path", "size_bytes", "sha256", "storage"))
+
+
+def _source_review_identity(handler: Any, output: Path) -> dict[str, Any]:
+    """Return identity for the authorized logical source, not its sealed copy."""
+
+    with ReviewWorkspace.open(output, protected=True) as workspace:
+        identity = dict(workspace.evidence_identity())
+    # Capsule hydration creates a fresh temporary inode on every open.  Use
+    # the content-bound source mtime so a plan remains stable across calls.
+    # Direct SQLite identities already include a retained WAL descriptor; the
+    # explicit source stat is only needed for a compressed capsule, where the
+    # hydrated inode is intentionally ephemeral.
+    if identity.get("storage") == "sqlite_gzip_capsule":
+        identity["mtime_ns"] = int(
+            evidence_file_mtime_ns(output / "review" / "run.sqlite", secure=True)
+        )
+    return identity
+
+
+@contextmanager
+def _secure_review_input_snapshot(handler: Any, output: Path):
+    """Seal the bounded review inputs before handing them to SQLite/plotting."""
+
+    policy = handler.path_policy
+    paths = [
+        "review/run.sqlite",
+        "review/run.sqlite-wal",
+        "review/run.sqlite-shm",
+        "review/run.sqlite.gz",
+        "review/evidence_capsule.json",
+        "review/schema.json",
+        "review/saved_views.json",
+        "review/workflow_manifest.json",
+        "review/generated_artifacts.json",
+        "mcp_execution_manifest.json",
+        "master_run_summary.json",
+        "agent_evidence_packet.json",
+        "index.md",
+    ]
+    try:
+        _manifest_path, manifest_bytes = policy.read_authorized_bytes(
+            output / "review" / "evidence_capsule.json",
+            maximum=MAX_MANIFEST_BYTES,
+        )
+        payload = json.loads(manifest_bytes.decode("utf-8"))
+        entries = [
+            dict(item)
+            for item in list(dict(payload or {}).get("artifacts", []) or [])
+            if isinstance(item, dict) and item.get("logical_path") == "run.sqlite"
+        ]
+        if len(entries) == 1:
+            compressed_name = str(entries[0].get("compressed_path", "") or "")
+            candidate = Path(compressed_name)
+            if compressed_name and not candidate.is_absolute() and len(candidate.parts) == 1 and candidate.name == compressed_name:
+                paths.append(str(Path("review") / compressed_name))
+    except (FileNotFoundError, OSError, TypeError, ValueError, json.JSONDecodeError):
+        # _require_review_input reports the authoritative malformed/missing
+        # capsule error.  Keep the snapshot allowlist conservative here.
+        pass
+    with policy.snapshot_read_files(
+        output,
+        paths,
+        maximum_file_bytes=MAX_CR3BP_REVIEW_STORE_BYTES,
+        maximum_total_bytes=MAX_CR3BP_REVIEW_STORE_BYTES + 8 * MAX_MANIFEST_BYTES,
+    ) as (logical_root, snapshot):
+        yield logical_root, snapshot
 
 
 def _authorize_renderer_writes(handler: Any, output: Path) -> tuple[Path, ...]:
@@ -373,15 +512,12 @@ def _operation_manifest(
     spec: Mapping[str, Any],
     evidence_identity: Mapping[str, Any],
     manifest_dir: Path,
+    manifest_writer: Any,
 ) -> tuple[dict[str, Any], Path]:
     plan_id = str(arguments["cr3bp_plan_id"])
     token = safe_artifact_id("cr3bp_" + plan_id.rsplit(":", 1)[-1][:32])
     target = manifest_dir / f"{token}.manifest.json"
     _reject_symlinked_path(target, root=manifest_dir, policy=handler.path_policy, kind="write")
-    if target.exists():
-        raise FileExistsError(
-            "A CR3BP operation receipt already exists for this plan; inspect it before retrying."
-        )
     manifest = manifest_base(
         tool_id=contract.tool_id,
         approval_id=str(arguments["approval"]["approval_id"]),
@@ -396,39 +532,12 @@ def _operation_manifest(
             "manifest_filename": target.name,
         }
     )
-    written = _reserve_operation_manifest(target, manifest)
-    return manifest, written
-
-
-def _reserve_operation_manifest(target: Path, manifest: Mapping[str, Any]) -> Path:
-    """Create the initial receipt with an exclusive filesystem reservation.
-
-    ``write_execution_manifest`` intentionally replaces existing manifests so
-    that terminal updates are atomic.  That behavior is unsafe for the first
-    operation receipt: two callers can both observe an absent target and then
-    overwrite one another's running state.  Reserve the exact target with
-    ``O_EXCL`` first; terminal updates remain the normal atomic replacements.
-    A failed operation keeps its running receipt if terminalization itself
-    fails, preserving the unknown-outcome boundary for inspection.
-    """
-
-    _ensure_directory_nofollow(target.parent, require_empty=False)
     serialized = (json.dumps(dict(manifest), indent=2, sort_keys=True, default=str) + "\n").encode("utf-8")
-    directory_fd = _open_directory_nofollow(target.parent, create=False)
-    file_fd: int | None = None
-    try:
-        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
-        file_fd = os.open(target.name, flags, 0o600, dir_fd=directory_fd)
-        with os.fdopen(file_fd, "wb") as stream:
-            file_fd = None
-            stream.write(serialized)
-            stream.flush()
-            os.fsync(stream.fileno())
-    finally:
-        if file_fd is not None:
-            os.close(file_fd)
-        os.close(directory_fd)
-    return target
+    # The child writer retains the descriptor for the approved manifest
+    # directory.  Its exclusive create both reserves the operation receipt and
+    # records the inode that may later be finalized by this same operation.
+    written = manifest_writer.write_bytes(target.name, serialized)
+    return manifest, written
 
 
 def _finish_operation_manifest(
@@ -436,6 +545,7 @@ def _finish_operation_manifest(
     target: Path,
     manifest: Mapping[str, Any],
     *,
+    manifest_writer: Any,
     status: str,
     artifacts: list[Path],
     cancelled: bool = False,
@@ -452,27 +562,36 @@ def _finish_operation_manifest(
         manifest_dir,
         completed,
         filename=target.name,
+        writer=manifest_writer,
     )
 
 
 def _plan_cr3bp_render(handler: Any, contract: Any, arguments: dict[str, Any]) -> dict[str, Any]:
     def operation() -> dict[str, Any]:
-        output = handler.path_policy.resolve_read(arguments["output_dir"], kind="directory")
+        output = handler.path_policy.authorized_read_path(arguments["output_dir"], kind="directory")
         _require_review_input(handler, output)
         spec = _normalize_spec(arguments, output_dir=output)
-        with ReviewWorkspace.open(output) as workspace:
-            initial_identity = workspace.evidence_identity()
-            times, _states, system = load_cr3bp_history(workspace, spec["object_id"])
-            final_identity = workspace.evidence_identity()
-            if final_identity != initial_identity:
-                raise ValueError("Review store changed while planning; no CR3BP render plan was issued.")
+        source_identity = _source_review_identity(handler, output)
+        with _secure_review_input_snapshot(handler, output) as (_logical_root, snapshot):
+            with ReviewWorkspace.open(
+                snapshot,
+                protected=True,
+                logical_output_dir=output,
+            ) as workspace:
+                initial_identity = workspace.evidence_identity()
+                if not _same_review_content(source_identity, initial_identity):
+                    raise ValueError("Review store changed while planning; no CR3BP render plan was issued.")
+                times, _states, system = load_cr3bp_history(workspace, spec["object_id"])
+                final_identity = workspace.evidence_identity()
+                if final_identity != initial_identity:
+                    raise ValueError("Review store changed while planning; no CR3BP render plan was issued.")
         return {
             "status": "planned",
             "output_dir": str(output),
             "review_store": "review/run.sqlite",
-            "cr3bp_plan_id": cr3bp_plan_id(initial_identity, spec),
+            "cr3bp_plan_id": cr3bp_plan_id(source_identity, spec),
             "spec": spec,
-            "evidence_identity": initial_identity,
+            "evidence_identity": source_identity,
             "system": asdict(system),
             "row_count": int(times.size),
             "time_range_s": [float(times[0]), float(times[-1])],
@@ -511,10 +630,11 @@ def _render_cr3bp(
     cancel_event: Any | None = None,
 ) -> dict[str, Any]:
     def operation() -> dict[str, Any]:
-        output = handler.path_policy.resolve_read(arguments["output_dir"], kind="directory")
+        output = handler.path_policy.authorized_read_path(arguments["output_dir"], kind="directory")
         _require_review_input(handler, output)
         figures, manifest_dir = _authorize_renderer_writes(handler, output)
         spec = _normalize_spec(arguments, output_dir=output)
+        source_identity = _source_review_identity(handler, output)
         manifest: dict[str, Any] | None = None
         manifest_target: Path | None = None
         manifest_path: Path | None = None
@@ -526,123 +646,146 @@ def _render_cr3bp(
             if cancel_event is not None and cancel_event.is_set():
                 raise MCPExecutionCancelled("The CR3BP render was cancelled before its deterministic render boundary.")
 
-        try:
-            with ReviewWorkspace.open(output) as workspace:
-                initial_identity = workspace.evidence_identity()
-                expected_plan = cr3bp_plan_id(initial_identity, spec)
-                if str(arguments["cr3bp_plan_id"]) != expected_plan:
-                    raise ValueError("The CR3BP plan is stale or does not match the review store and specification.")
-                manifest, manifest_path = _operation_manifest(
-                    handler,
-                    contract=contract,
-                    arguments=arguments,
-                    spec=spec,
-                    evidence_identity=initial_identity,
-                    manifest_dir=manifest_dir,
-                )
-                manifest_target = manifest_path
-                check_cancelled()
-                rendered = render_cr3bp_research(
-                    workspace,
-                    spec["object_id"],
-                    kind=spec["kind"],
-                    axes=spec["axes"],
-                    origin=spec["origin"],
-                    plane=spec["plane"],
-                    reference_time_s=spec["reference_time_s"],
-                    reference_angle_rad=spec["reference_angle_rad"],
-                    slice_km=spec["slice_km"],
-                    jacobi=spec["jacobi"],
-                    jacobi_mode=spec["jacobi_mode"],
-                    bounds_km=spec["bounds_km"],
-                    resolution=spec["resolution"],
-                    movie_format=spec["movie_format"],
-                    frames=spec["frames"],
-                    fps=spec["fps"],
-                    style=spec["style"],
-                )
-                files = _authorize_renderer_result(handler, output, rendered)
-                final_identity = workspace.evidence_identity()
-                if final_identity != initial_identity:
-                    _finish_operation_manifest(
-                        manifest_dir,
-                        manifest_target,
-                        manifest,
-                        status="failed",
-                        artifacts=files,
-                        error_type="EvidenceChanged",
-                    )
-                    manifest_finalized = True
-                    raise ValueError(
-                        "Review store changed while rendering; generated artifacts are not valid evidence."
-                    )
-                if cancel_event is not None and cancel_event.is_set():
-                    _finish_operation_manifest(
-                        manifest_dir,
-                        manifest_target,
-                        manifest,
-                        status="cancelled",
-                        cancelled=True,
-                        artifacts=files,
-                        error_type="MCPExecutionCancelled",
-                    )
-                    manifest_finalized = True
-                    raise MCPExecutionCancelled("The CR3BP render was cancelled after its render boundary.")
+        # The input review store remains a read-only path input.  All renderer
+        # outputs and the operation receipt share one descriptor-bound writer;
+        # no producer can fall back to path-only writes while it is bound.
+        with handler.path_policy.open_secure_writer(output, create=True, require_empty=False) as output_writer:
+            with output_writer.child(Path("review") / "mcp_cr3bp", create=True) as manifest_writer:
+                with bind_output_writer(output_writer):
+                    try:
+                        with _secure_review_input_snapshot(handler, output) as (_logical_root, snapshot):
+                            with ReviewWorkspace.open(
+                                snapshot,
+                                protected=True,
+                                logical_output_dir=output,
+                            ) as workspace:
+                                initial_identity = workspace.evidence_identity()
+                                if not _same_review_content(source_identity, initial_identity):
+                                    raise ValueError("Review store changed while rendering; generated artifacts are not valid evidence.")
+                                expected_plan = cr3bp_plan_id(source_identity, spec)
+                                if str(arguments["cr3bp_plan_id"]) != expected_plan:
+                                    raise ValueError("The CR3BP plan is stale or does not match the review store and specification.")
+                                manifest, manifest_path = _operation_manifest(
+                                    handler,
+                                    contract=contract,
+                                    arguments=arguments,
+                                    spec=spec,
+                                    evidence_identity=source_identity,
+                                    manifest_dir=manifest_dir,
+                                    manifest_writer=manifest_writer,
+                                )
+                                manifest_target = manifest_path
+                                check_cancelled()
+                                rendered = render_cr3bp_research(
+                                    workspace,
+                                    spec["object_id"],
+                                    kind=spec["kind"],
+                                    axes=spec["axes"],
+                                    origin=spec["origin"],
+                                    plane=spec["plane"],
+                                    reference_time_s=spec["reference_time_s"],
+                                    reference_angle_rad=spec["reference_angle_rad"],
+                                    slice_km=spec["slice_km"],
+                                    jacobi=spec["jacobi"],
+                                    jacobi_mode=spec["jacobi_mode"],
+                                    bounds_km=spec["bounds_km"],
+                                    resolution=spec["resolution"],
+                                    movie_format=spec["movie_format"],
+                                    frames=spec["frames"],
+                                    fps=spec["fps"],
+                                    style=spec["style"],
+                                    record=False,
+                                )
+                                files = _authorize_renderer_result(handler, output, rendered)
+                                final_identity = workspace.evidence_identity()
+                                source_final_identity = _source_review_identity(handler, output)
+                                if final_identity != initial_identity or source_final_identity != source_identity:
+                                    _finish_operation_manifest(
+                                        manifest_dir,
+                                        manifest_target,
+                                        manifest,
+                                        manifest_writer=manifest_writer,
+                                        status="failed",
+                                        artifacts=files,
+                                        error_type="EvidenceChanged",
+                                    )
+                                    manifest_finalized = True
+                                    raise ValueError(
+                                        "Review store changed while rendering; generated artifacts are not valid evidence."
+                                    )
+                                if cancel_event is not None and cancel_event.is_set():
+                                    _finish_operation_manifest(
+                                        manifest_dir,
+                                        manifest_target,
+                                        manifest,
+                                        manifest_writer=manifest_writer,
+                                        status="cancelled",
+                                        cancelled=True,
+                                        artifacts=files,
+                                        error_type="MCPExecutionCancelled",
+                                    )
+                                    manifest_finalized = True
+                                    raise MCPExecutionCancelled("The CR3BP render was cancelled after its render boundary.")
 
-                artifact_path = Path(str(rendered["figure"])).resolve()
-                artifact_id = safe_artifact_id(artifact_path.stem)
-                manifest.update({"artifact_id": artifact_id})
-                manifest_path = _finish_operation_manifest(
-                    manifest_dir,
-                    manifest_target,
-                    manifest,
-                    status="completed" if all(path.is_file() for path in files) else "partial",
-                    artifacts=files,
-                )
-                manifest_finalized = True
+                                artifact_path = Path(str(rendered["figure"]))
+                                if not artifact_path.is_absolute():
+                                    artifact_path = output / artifact_path
+                                artifact_id = safe_artifact_id(artifact_path.stem)
+                                manifest.update({"artifact_id": artifact_id})
+                                manifest_path = _finish_operation_manifest(
+                                    manifest_dir,
+                                    manifest_target,
+                                    manifest,
+                                    manifest_writer=manifest_writer,
+                                    status="completed" if all(path.is_file() for path in files) else "partial",
+                                    artifacts=files,
+                                )
+                                manifest_finalized = True
+                    except BaseException as exc:
+                        if manifest is not None and manifest_target is not None and not manifest_finalized:
+                            try:
+                                artifacts = _authorize_renderer_result(handler, output, rendered) if rendered else []
+                            except Exception:
+                                artifacts = _new_files(figures, before_files, handler)
+                            try:
+                                _finish_operation_manifest(
+                                    manifest_dir,
+                                    manifest_target,
+                                    manifest,
+                                    manifest_writer=manifest_writer,
+                                    status="cancelled" if isinstance(exc, MCPExecutionCancelled) else "failed",
+                                    cancelled=isinstance(exc, MCPExecutionCancelled),
+                                    artifacts=artifacts,
+                                    error_type=type(exc).__name__,
+                                )
+                            except Exception:
+                                # Preserve the original renderer/error result.
+                                # The started receipt remains durable if its
+                                # terminalization itself fails.
+                                pass
+                        raise
 
-            artifact = {
-                "artifact_id": artifact_id,
-                "path": str(artifact_path),
-                "relative_path": str(artifact_path.relative_to(output)),
-                "path_exists": artifact_path.is_file(),
-                "kind": spec["kind"],
-                "movie_format": spec["movie_format"],
-                "files": {str(key): str(value) for key, value in rendered.items() if key != "diagnostics"},
-                "diagnostics": rendered.get("diagnostics", {}),
-                "visual_qa_status": "pending_agent_review",
-                "experimental": True,
-                "inertial_alignment": "CR3BP model axes, not J2000",
-            }
-            status = "completed" if all(path.is_file() for path in files) else "partial"
-            return {
-                "status": status,
-                "output_dir": str(output),
-                "cr3bp_plan_id": str(arguments["cr3bp_plan_id"]),
-                "artifact": artifact,
-                "manifest_path": str(manifest_path),
-            }
-        except BaseException as exc:
-            if manifest is not None and manifest_target is not None and not manifest_finalized:
-                try:
-                    artifacts = _authorize_renderer_result(handler, output, rendered) if rendered else []
-                except Exception:
-                    artifacts = _new_files(figures, before_files, handler)
-                try:
-                    _finish_operation_manifest(
-                        manifest_dir,
-                        manifest_target,
-                        manifest,
-                        status="cancelled" if isinstance(exc, MCPExecutionCancelled) else "failed",
-                        cancelled=isinstance(exc, MCPExecutionCancelled),
-                        artifacts=artifacts,
-                        error_type=type(exc).__name__,
-                    )
-                except Exception:
-                    # Preserve the original renderer/error result. The started
-                    # receipt remains durable if terminalization itself fails.
-                    pass
-            raise
+        artifact = {
+            "artifact_id": artifact_id,
+            "path": str(artifact_path),
+            "relative_path": str(artifact_path.relative_to(output)),
+            "path_exists": artifact_path.is_file(),
+            "kind": spec["kind"],
+            "movie_format": spec["movie_format"],
+            "files": {str(key): str(value) for key, value in rendered.items() if key != "diagnostics"},
+            "diagnostics": rendered.get("diagnostics", {}),
+            "visual_qa_status": "pending_agent_review",
+            "experimental": True,
+            "inertial_alignment": "CR3BP model axes, not J2000",
+        }
+        status = "completed" if all(path.is_file() for path in files) else "partial"
+        return {
+            "status": status,
+            "output_dir": str(output),
+            "cr3bp_plan_id": str(arguments["cr3bp_plan_id"]),
+            "artifact": artifact,
+            "manifest_path": str(manifest_path),
+        }
 
     return handler._envelope(
         contract=contract,

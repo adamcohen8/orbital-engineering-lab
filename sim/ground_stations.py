@@ -30,6 +30,16 @@ def _json_float(value: float) -> float | None:
     return x if np.isfinite(x) else None
 
 
+def _validated_time_vector(t_s: np.ndarray) -> np.ndarray:
+    try:
+        values = np.asarray(t_s, dtype=float).reshape(-1)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("ground-station times must be a finite, strictly increasing vector.") from exc
+    if not np.all(np.isfinite(values)) or np.any(np.diff(values) <= 0.0):
+        raise ValueError("ground-station times must be a finite, strictly increasing vector.")
+    return values
+
+
 def _first_last_time(t_s: np.ndarray, mask: np.ndarray) -> tuple[float | None, float | None]:
     idx = np.flatnonzero(mask)
     if idx.size == 0:
@@ -87,7 +97,7 @@ def evaluate_ground_station_access(
     configured maximum range when one is supplied.
     """
     stations = [station for station in ground_stations if station.enabled]
-    tt = np.array(t_s, dtype=float).reshape(-1)
+    tt = _validated_time_vector(t_s)
     if not stations or tt.size == 0:
         return {}, {}
     frame_ctx = frame_context or frame_context_from_mapping({}, jd_utc_start=jd_utc_start, source="ground_station")
@@ -111,8 +121,15 @@ def evaluate_ground_station_access(
         for object_id, hist in sorted(truth_hist.items()):
             if str(dict(object_state_frames or {}).get(str(object_id), "eci") or "eci").lower() != "eci":
                 continue
-            arr = np.array(hist, dtype=float)
-            n = min(tt.size, arr.shape[0])
+            arr = np.asarray(hist, dtype=float)
+            if arr.ndim != 2 or arr.shape[1] < 3:
+                raise ValueError(f"truth_hist[{object_id!r}] must have shape (samples, >=3).")
+            if arr.shape[0] != tt.size:
+                raise ValueError(
+                    f"truth_hist[{object_id!r}] must contain exactly {tt.size} samples "
+                    f"to match t_s; got {arr.shape[0]}."
+                )
+            n = tt.size
             access = np.zeros(tt.size, dtype=bool)
             los_ok = np.zeros(tt.size, dtype=bool)
             range_km = np.full(tt.size, np.nan)
@@ -218,7 +235,7 @@ def evaluate_ground_station_measurements(
     """
 
     stations = [station for station in ground_stations if station.enabled and _measurements_enabled(station)]
-    tt = np.array(t_s, dtype=float).reshape(-1)
+    tt = _validated_time_vector(t_s)
     if not stations or tt.size == 0:
         return {}
     frame_ctx = frame_context or frame_context_from_mapping({}, jd_utc_start=jd_utc_start, source="ground_station")
@@ -245,8 +262,15 @@ def evaluate_ground_station_measurements(
         for object_id, hist in sorted(truth_hist.items()):
             if str(dict(object_state_frames or {}).get(str(object_id), "eci") or "eci").lower() != "eci":
                 continue
-            arr = np.array(hist, dtype=float)
-            n = min(tt.size, arr.shape[0])
+            arr = np.asarray(hist, dtype=float)
+            if arr.ndim != 2 or arr.shape[1] < 6:
+                raise ValueError(f"truth_hist[{object_id!r}] must have shape (samples, >=6).")
+            if arr.shape[0] != tt.size:
+                raise ValueError(
+                    f"truth_hist[{object_id!r}] must contain exactly {tt.size} samples "
+                    f"to match t_s; got {arr.shape[0]}."
+                )
+            n = tt.size
             rows: list[dict[str, Any]] = []
             skipped = {"cadence": 0, "line_of_sight": 0, "elevation": 0, "range": 0, "invalid_state": 0}
             last_emit_t = -np.inf
@@ -316,6 +340,15 @@ def evaluate_ground_station_measurements(
                     vector.append(measured_range_rate)
                     components.append("range_rate_km_s")
                     sigmas.append(cfg["range_rate_sigma_km_s"])
+                measurement_values = {
+                    "azimuth_deg": measured_az,
+                    "elevation_deg": measured_el,
+                    "range_km": measured_range,
+                    "range_rate_km_s": measured_range_rate,
+                }
+                physically_valid, validity_reason = _ground_measurement_physical_validity(
+                    measurement_values
+                )
                 rows.append(
                     {
                         "time_s": t,
@@ -330,6 +363,8 @@ def evaluate_ground_station_measurements(
                         "elevation_deg": measured_el,
                         "range_km": measured_range,
                         "range_rate_km_s": measured_range_rate,
+                        "valid": physically_valid,
+                        "validity_reason": validity_reason,
                         "truth_azimuth_deg": float(geometry["azimuth_deg"]),
                         "truth_elevation_deg": float(geometry["elevation_deg"]),
                         "truth_range_km": float(geometry["range_km"]),
@@ -342,6 +377,8 @@ def evaluate_ground_station_measurements(
             station_payload["targets"][str(object_id)] = {
                 "measurements": rows,
                 "measurement_count": len(rows),
+                "usable_measurement_count": sum(1 for row in rows if row.get("valid", True)),
+                "invalid_measurement_count": sum(1 for row in rows if row.get("valid") is False),
                 "skipped": skipped,
             }
         output[station.id] = station_payload
@@ -379,7 +416,13 @@ def ground_station_measurements_to_observation_packet(
         source="ground_station_observation_packet",
     )
     obs_rows: list[dict[str, Any]] = []
-    for row in rows:
+    for row_index, row in enumerate(rows):
+        valid, reason = _ground_measurement_row_validity(row)
+        if not valid:
+            raise ValueError(
+                f"ground-station measurement row {row_index} is physically invalid ({reason}); "
+                "invalid raw measurements cannot be converted into observations."
+            )
         t = float(row["time_s"])
         jd = row.get("jd_utc")
         if jd is None and jd_utc_start is not None:
@@ -528,6 +571,49 @@ def _normal(rng: np.random.Generator, sigma: float) -> float:
     if s <= 0.0:
         return 0.0
     return float(rng.normal(0.0, s))
+
+
+def _ground_measurement_physical_validity(values: dict[str, Any]) -> tuple[bool, str]:
+    """Return the physical-domain disposition for a ground measurement row.
+
+    Gaussian measurement noise is intentionally left unbounded.  This helper
+    therefore classifies impossible draws for evidence and conversion gates;
+    it never clips, truncates, or resamples them.
+    """
+
+    for name in ("azimuth_deg", "elevation_deg", "range_km", "range_rate_km_s"):
+        if name not in values:
+            continue
+        try:
+            value = float(values[name])
+        except (TypeError, ValueError, OverflowError):
+            return False, f"{name}_not_numeric"
+        if not np.isfinite(value):
+            return False, f"{name}_nonfinite"
+        if name == "azimuth_deg" and not 0.0 <= value < 360.0:
+            return False, "azimuth_out_of_range"
+        if name == "elevation_deg" and not -90.0 <= value <= 90.0:
+            return False, "elevation_out_of_range"
+        if name == "range_km" and value <= 0.0:
+            return False, "range_nonpositive"
+    return True, "valid"
+
+
+def _ground_measurement_row_validity(row: dict[str, Any]) -> tuple[bool, str]:
+    """Apply an explicit producer disposition, then validate numeric domains."""
+
+    if "valid" in row and type(row["valid"]) is not bool:
+        return False, "validity_flag_not_boolean"
+    if row.get("valid", True) is False:
+        reason = str(row.get("validity_reason", "flagged_invalid") or "flagged_invalid")
+        return False, reason
+    return _ground_measurement_physical_validity(
+        {
+            name: row[name]
+            for name in ("azimuth_deg", "elevation_deg", "range_km", "range_rate_km_s")
+            if name in row
+        }
+    )
 
 
 def _access_reason(

@@ -13,16 +13,32 @@ def ellipsoid_limb_angle(r_fixed_km, sun_fixed_km, equatorial_radius_km, flatten
     condition r.T Q limb = 1. The positive transverse root faces the Sun.
     The disc-overlap approximation remains the same as the conical model.
     """
-    r = np.asarray(r_fixed_km, dtype=float)
-    sun = np.asarray(sun_fixed_km, dtype=float)
+    try:
+        r = np.asarray(r_fixed_km, dtype=float)
+        sun = np.asarray(sun_fixed_km, dtype=float)
+        radius = float(equatorial_radius_km)
+        flatten = float(flattening)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("limb geometry inputs must be numeric.") from exc
+    if r.shape != (3,) or sun.shape != (3,) or not np.isfinite(r).all() or not np.isfinite(sun).all():
+        raise ValueError("limb geometry vectors must contain exactly three finite values.")
+    if not np.isfinite(radius) or radius <= 0.0:
+        raise ValueError("equatorial_radius_km must be finite and positive.")
+    if not np.isfinite(flatten) or not 0.0 <= flatten < 1.0:
+        raise ValueError("flattening must be finite and satisfy 0 <= flattening < 1.")
     distance = float(np.linalg.norm(r))
+    if distance <= 0.0:
+        raise ValueError("observer position norm must be positive.")
+    sun_norm = float(np.linalg.norm(sun))
+    if sun_norm <= 0.0:
+        raise ValueError("Sun position norm must be positive.")
     u = r / distance
     transverse = sun - float(sun @ u) * u
     if np.linalg.norm(transverse) <= 1e-12 * max(float(np.linalg.norm(sun)), 1.0):
         axis = np.eye(3)[int(np.argmin(abs(u)))]
         transverse = axis - float(axis @ u) * u
     v = transverse / np.linalg.norm(transverse)
-    q = np.array([1.0, 1.0, (1.0 - flattening) ** -2]) / equatorial_radius_km**2
+    q = np.array([1.0, 1.0, (1.0 - flatten) ** -2]) / radius**2
     a, b, c = float((u * q) @ u), float((u * q) @ v), float((v * q) @ v)
     if a * distance**2 <= 1.0:
         return float(np.pi / 2)
@@ -33,7 +49,10 @@ def ellipsoid_limb_angle(r_fixed_km, sun_fixed_km, equatorial_radius_km, flatten
 
 def _resolve_sun_position_eci_km(env: dict, t_s: float) -> np.ndarray:
     if "sun_pos_eci_km" in env:
-        return np.asarray(env["sun_pos_eci_km"], dtype=float)
+        sun = np.asarray(env["sun_pos_eci_km"], dtype=float)
+        if sun.shape != (3,) or not np.all(np.isfinite(sun)):
+            raise ValueError("sun_pos_eci_km must contain exactly three finite values.")
+        return sun.copy()
     try:
         sun, _ = resolve_sun_moon_positions(env, t_s)
         if np.linalg.norm(sun) > 0.0:
@@ -41,6 +60,8 @@ def _resolve_sun_position_eci_km(env: dict, t_s: float) -> np.ndarray:
     except RuntimeError:
         pass
     sun_dir = np.asarray(env.get("sun_dir_eci", np.array([1.0, 0.0, 0.0], dtype=float)), dtype=float)
+    if sun_dir.shape != (3,) or not np.all(np.isfinite(sun_dir)):
+        raise ValueError("sun_dir_eci must contain exactly three finite values.")
     n = float(np.linalg.norm(sun_dir))
     if n <= 0.0:
         return np.array([AU_KM, 0.0, 0.0], dtype=float)
@@ -49,10 +70,14 @@ def _resolve_sun_position_eci_km(env: dict, t_s: float) -> np.ndarray:
 
 def resolve_srp_geometry(r_sc_eci_km: np.ndarray, t_s: float, env: dict) -> dict[str, object]:
     r_sc = np.asarray(r_sc_eci_km, dtype=float).reshape(3)
+    if not np.all(np.isfinite(r_sc)):
+        raise ValueError("r_sc_eci_km must contain exactly three finite values.")
     r_norm2 = float(np.dot(r_sc, r_sc))
     r_norm = float(np.sqrt(r_norm2)) if r_norm2 > 0.0 else 0.0
 
     r_sun = _resolve_sun_position_eci_km(env, t_s).reshape(3)
+    if not np.all(np.isfinite(r_sun)):
+        raise ValueError("sun_pos_eci_km must contain exactly three finite values.")
     sun_norm2 = float(np.dot(r_sun, r_sun))
     sun_norm = float(np.sqrt(sun_norm2)) if sun_norm2 > 0.0 else 0.0
 

@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from sim.security.output_writes import current_output_writer, staged_output_file
+
 
 def _scalar(value: Any) -> str:
     if value is None:
@@ -17,6 +19,49 @@ def _scalar(value: Any) -> str:
         return f"{value:.4g}"
     text = str(value).strip()
     return text if text else "not available"
+
+
+def _writer_logical_path(path: str | Path, writer: Any | None = None) -> Path:
+    """Map a logical or path-facing output path into the writer namespace."""
+
+    active = writer or current_output_writer()
+    raw = Path(path).expanduser()
+    if not raw.is_absolute():
+        raw = Path.cwd() / raw
+    if active is None:
+        return raw
+    logical_root = Path(active.logical_root).expanduser()
+    physical_root = Path(active.root).expanduser()
+    for candidate, mapped_root in ((logical_root, logical_root), (physical_root, logical_root)):
+        try:
+            return mapped_root / raw.relative_to(candidate)
+        except ValueError:
+            continue
+    raise ValueError(f"Output index path {raw} is outside the protected writer roots.")
+
+
+def _logicalize_paths(value: Any, writer: Any | None) -> Any:
+    """Preserve logical artifact references when a producer returned staging paths."""
+
+    if writer is None:
+        return value
+    if isinstance(value, Path):
+        try:
+            return _writer_logical_path(value, writer)
+        except ValueError:
+            return value
+    if isinstance(value, str):
+        try:
+            return str(_writer_logical_path(value, writer)) if Path(value).is_absolute() else value
+        except (ValueError, OSError):
+            return value
+    if isinstance(value, dict):
+        return {key: _logicalize_paths(item, writer) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_logicalize_paths(item, writer) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_logicalize_paths(item, writer) for item in value)
+    return value
 
 
 def _path_link(path_text: Any, *, base_dir: Path) -> str:
@@ -497,11 +542,12 @@ def write_output_index(
     next_steps: list[str] | None = None,
 ) -> Path:
     """Write a human-readable index for an output directory."""
-    outdir.mkdir(parents=True, exist_ok=True)
-    index_path = outdir / "index.md"
+    writer = current_output_writer()
+    logical_outdir = _writer_logical_path(outdir, writer)
+    index_path = logical_outdir / "index.md"
     summary = dict(summary or {})
     payload = dict(payload or {})
-    artifacts = dict(artifacts or {})
+    artifacts = _logicalize_paths(dict(artifacts or {}), writer)
     scenario_name = summary.get("scenario_name", payload.get("scenario_name", title))
     scenario_description = str(
         summary.get("scenario_description", payload.get("scenario_description", "")) or ""
@@ -528,7 +574,7 @@ def write_output_index(
         narrative = []
         next_command = ""
 
-    steps = list(next_steps or _default_next_steps(workflow=workflow, artifacts=artifacts, base_dir=outdir))
+    steps = list(next_steps or _default_next_steps(workflow=workflow, artifacts=artifacts, base_dir=logical_outdir))
     lines = [
         "# Start Here",
         "",
@@ -569,9 +615,15 @@ def write_output_index(
             ),
             "",
             "## Artifact Inventory",
-            *_artifact_lines(artifacts, base_dir=outdir),
+            *_artifact_lines(artifacts, base_dir=logical_outdir),
             "",
         ]
     )
-    index_path.write_text("\n".join(lines), encoding="utf-8")
+    encoded = "\n".join(lines)
+    if writer is None:
+        logical_outdir.mkdir(parents=True, exist_ok=True)
+        index_path.write_text(encoded, encoding="utf-8")
+    else:
+        with staged_output_file(index_path) as staged:
+            staged.write_text(encoded, encoding="utf-8")
     return index_path

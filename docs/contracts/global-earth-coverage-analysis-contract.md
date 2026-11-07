@@ -158,6 +158,11 @@ Spacecraft position, ellipsoid intersection, slant range, and local surface
 points use OEL's governed WGS84 geodesy and Earth-fixed/ECI frame path. Terrain,
 geoid height, topography, atmosphere, and refraction do not modify the surface.
 
+Public surface-target geometry helpers require the normalized ellipsoid level
+to be within `1e-12` of one and the supplied unit normal to align with the
+normalized ellipsoid gradient within `1e-10`. These checks run before Python or
+native geometry dispatch.
+
 ### Equal-area indexing surface
 
 Stable cell identity uses HEALPix NESTED indexing on the WGS84 authalic sphere.

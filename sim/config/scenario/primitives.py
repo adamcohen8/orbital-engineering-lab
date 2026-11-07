@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import sys
 from typing import Any
 
 from sim.config.scenario.models import (
@@ -206,6 +207,16 @@ def _validate_integer_multiple(
     denominator_name: str,
 ) -> None:
     ratio = numerator / denominator
+    if not math.isfinite(ratio):
+        raise ValueError(
+            f"{numerator_name}/{denominator_name} ratio is not representable for "
+            "simulation timing; reduce the numerator or increase the denominator."
+        )
+    if ratio > sys.maxsize - 1:
+        raise ValueError(
+            f"{numerator_name}/{denominator_name} ratio exceeds the platform's "
+            "representable timing range; reduce the numerator or increase the denominator."
+        )
     nearest = round(ratio)
     # Scale the acceptance window with representational error, rather than
     # with the magnitude of the quotient.  A relative tolerance can accept a

@@ -14,6 +14,78 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def _effective_dependency_site_packages() -> tuple[Path, ...]:
+    """Return dependency roots actually visible to this test interpreter.
+
+    ``site.getsitepackages()`` omits site-package directories injected by a
+    processed ``.pth`` file.  The child venv processes the generated fixture
+    ``.pth`` only once, so copy the already-effective path entries instead of
+    expecting it to recursively process the parent venv's ``.pth`` files.
+    """
+
+    roots: list[Path] = []
+    for raw in [*site.getsitepackages(), *sys.path]:
+        if not raw:
+            continue
+        candidate = Path(raw).expanduser().resolve()
+        if not candidate.is_dir() or not any(
+            part in {"site-packages", "dist-packages"} for part in candidate.parts
+        ):
+            continue
+        if candidate not in roots:
+            roots.append(candidate)
+    return tuple(roots)
+
+
+def test_noneditable_wheel_launches_trainer_help_outside_checkout(tmp_path: Path) -> None:
+    wheel_dir = tmp_path / "wheels"
+    wheel_dir.mkdir()
+    metadata_dir = tmp_path / "metadata"
+    metadata_dir.mkdir()
+    subprocess.run(
+        [sys.executable, "-c",
+         "from setuptools.build_meta import build_wheel; import sys; "
+         "build_wheel(sys.argv[1], config_settings={"
+         "'--global-option': ['egg_info', '--egg-base', sys.argv[2], 'build', '--build-base', sys.argv[3]], "
+         "'--build-option': ['--bdist-dir', sys.argv[4]]})",
+         str(wheel_dir), str(metadata_dir), str(tmp_path / "build"), str(tmp_path / "bdist")],
+        cwd=ROOT, check=True, capture_output=True, text=True,
+    )
+    wheel = next(wheel_dir.glob("*.whl"))
+    with zipfile.ZipFile(wheel) as archive:
+        assert "run_game.py" in archive.namelist()
+    environment = tmp_path / "installed"
+    venv.EnvBuilder(with_pip=True, system_site_packages=True).create(environment)
+    scripts = environment / ("Scripts" if os.name == "nt" else "bin")
+    python = scripts / ("python.exe" if os.name == "nt" else "python")
+    installed_site = Path(subprocess.check_output(
+        [str(python), "-I", "-c", "import site; print(site.getsitepackages()[0])"], text=True,
+    ).strip())
+    # Reuse the test environment's dependencies, while OEL itself must come
+    # from the newly installed wheel at the front of site-packages.
+    (installed_site / "test-dependencies.pth").write_text(
+        "".join(f"{path}\n" for path in _effective_dependency_site_packages()),
+        encoding="utf-8",
+    )
+    env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH" and not key.startswith("OEL_")}
+    env.update(OEL_DATA_HOME=str(tmp_path / "data"), OEL_CONFIG_HOME=str(tmp_path / "config"))
+    subprocess.run(
+        [str(python), "-I", "-m", "pip", "install", "--no-index", "--no-deps", "--force-reinstall", str(wheel)],
+        cwd=tmp_path, env=env, check=True, capture_output=True, text=True,
+    )
+    identity = json.loads(subprocess.check_output(
+        [str(python), "-I", "-c", "import json,sim,run_game; print(json.dumps([sim.__file__,run_game.__file__]))"],
+        cwd=tmp_path, env=env, text=True,
+    ))
+    assert all(Path(path).is_relative_to(installed_site) for path in identity)
+    result = subprocess.run(
+        [str(python), "-I", "-m", "sim.installation.cli", "trainer", "--help"],
+        cwd=tmp_path, env=env, capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "--controlled-object" in result.stdout
+
+
 @pytest.mark.external
 def test_m5_wheel_packages_supported_mcp_profiles_and_keeps_dependency_optional(
     tmp_path: Path, monkeypatch

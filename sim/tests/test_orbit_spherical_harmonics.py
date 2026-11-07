@@ -45,6 +45,12 @@ class TestOrbitSphericalHarmonics(unittest.TestCase):
                 ]
             )
 
+    def test_direct_terms_reject_nonfinite_coefficients(self):
+        with self.assertRaisesRegex(ValueError, "coefficients must be finite"):
+            SphericalHarmonicTerm(n=2, m=0, c_nm=float("nan"))
+        with self.assertRaisesRegex(ValueError, "coefficients must be finite"):
+            SphericalHarmonicTerm(n=2, m=0, c_nm=0.0, s_nm=float("inf"))
+
     @staticmethod
     def _write_minimal_eop(path: Path) -> None:
         path.write_text(

@@ -185,11 +185,27 @@ def bind_study_plan(
         },
     )
     envelope = payload["resource_envelope"]
-    envelope.setdefault("max_cpu_time_s", float(envelope["max_wall_time_s"]))
-    envelope.setdefault("max_peak_memory_mb", 2048.0)
-    envelope.setdefault("max_storage_mb", 512.0)
-    envelope.setdefault("max_artifact_mb", 256.0)
-    envelope.setdefault("max_parallel_workers", 1)
+    if isinstance(envelope, Mapping):
+        envelope = dict(envelope)
+        wall_time = envelope.get("max_wall_time_s")
+        if (
+            "max_wall_time_s" not in envelope
+            or isinstance(wall_time, bool)
+            or not isinstance(wall_time, (int, float))
+            or not math.isfinite(float(wall_time))
+        ):
+            raise StudyContractError(
+                "Study contract validation failed: "
+                "$.resource_envelope.max_wall_time_s must be a finite number."
+            )
+        # CPU authorization is an independent ceiling.  Keep the historical
+        # default for plans that omit it rather than deriving one from wall time.
+        envelope.setdefault("max_cpu_time_s", 3600.0)
+        envelope.setdefault("max_peak_memory_mb", 2048.0)
+        envelope.setdefault("max_storage_mb", 512.0)
+        envelope.setdefault("max_artifact_mb", 256.0)
+        envelope.setdefault("max_parallel_workers", 1)
+        payload["resource_envelope"] = envelope
     payload["plan_id"] = str(payload.get("plan_id", "") or "pending")
     payload.pop("plan_sha256", None)
     provisional = canonical_sha256(_without_identity(payload, "plan_id", "plan_sha256"))
@@ -317,6 +333,7 @@ def build_plan_review(planning_result: Mapping[str, Any]) -> dict[str, Any]:
         "assumptions": deepcopy(plan["assumptions"]),
         "non_claims": deepcopy(plan["non_claims"]),
         "resource_envelope": deepcopy(plan["resource_envelope"]),
+        "resource_accounting": deepcopy(result["resource_accounting"]),
         "execution_route": deepcopy(result["execution_route"]),
         "commercial_status": deepcopy(result["commercial_status"]),
         "user_review_required": True,

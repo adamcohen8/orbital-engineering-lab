@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from sim.control.attitude._validation import require_finite_matrix, require_finite_scalar, require_finite_vector
 from sim.core.interfaces import Controller
 from sim.core.models import Command, StateBelief
 from sim.numeric_backend import normalize_numeric_backend
@@ -17,6 +18,9 @@ class QuaternionPDController(Controller):
     max_torque_nm: float = 0.05
 
     def __post_init__(self) -> None:
+        self.kp = require_finite_scalar(self.kp, "kp")
+        self.kd = require_finite_scalar(self.kd, "kd")
+        self.max_torque_nm = require_finite_scalar(self.max_torque_nm, "max_torque_nm", allow_positive_inf=True)
         self.desired_attitude_quat_bn = _normalize_quaternion(np.array(self.desired_attitude_quat_bn, dtype=float))
 
     def set_target(self, desired_attitude_quat_bn: np.ndarray) -> None:
@@ -28,15 +32,18 @@ class QuaternionPDController(Controller):
             return Command.zero()
         q = _normalize_quaternion(belief.state[6:10])
         q_des = _normalize_quaternion(self.desired_attitude_quat_bn)
-        w = np.array(belief.state[10:13], dtype=float)
+        w = require_finite_vector(belief.state[10:13], "belief angular rate", size=3)
+        kp = require_finite_scalar(self.kp, "kp")
+        kd = require_finite_scalar(self.kd, "kd")
+        max_torque = require_finite_scalar(self.max_torque_nm, "max_torque_nm", allow_positive_inf=True)
         q_err = _quat_multiply(_quat_conjugate(q_des), q)
         if q_err[0] < 0.0:
             q_err *= -1.0
         q_err_vec = q_err[1:4]
-        torque = -self.kp * q_err_vec - self.kd * w
+        torque = -kp * q_err_vec - kd * w
         n = np.linalg.norm(torque)
-        if n > self.max_torque_nm and n > 0.0:
-            torque *= self.max_torque_nm / n
+        if n > max_torque and n > 0.0:
+            torque *= max_torque / n
         return Command(thrust_eci_km_s2=np.zeros(3), torque_body_nm=torque, mode_flags={"mode": "quat_pd"})
 
 
@@ -72,6 +79,8 @@ class ReactionWheelPDController(Controller):
             raise ValueError("wheel_axes_body must be shape (3,N) or (N,3).")
         if G.shape[1] < 3:
             raise ValueError("wheel_axes_body must include at least 3 wheel axes.")
+        if not np.all(np.isfinite(G)):
+            raise ValueError("wheel_axes_body must contain finite values.")
         for k in range(G.shape[1]):
             n = float(np.linalg.norm(G[:, k]))
             if n == 0.0:
@@ -81,6 +90,8 @@ class ReactionWheelPDController(Controller):
         lim = np.array(self.wheel_torque_limits_nm, dtype=float).reshape(-1)
         if lim.size == 1:
             lim = np.full(G.shape[1], float(lim[0]))
+        if not np.all(np.isfinite(lim) | np.isposinf(lim)):
+            raise ValueError("wheel_torque_limits_nm must contain finite values or positive infinity.")
         if lim.size != G.shape[1] or np.any(lim <= 0.0):
             raise ValueError("wheel_torque_limits_nm must be positive scalar or length-N vector.")
 
@@ -91,6 +102,8 @@ class ReactionWheelPDController(Controller):
         wd = np.array(self.desired_rate_body_rad_s, dtype=float).reshape(-1)
         if wd.size != 3:
             raise ValueError("desired_rate_body_rad_s must be length-3.")
+        if not np.all(np.isfinite(wd)):
+            raise ValueError("desired_rate_body_rad_s must contain finite values.")
         self.desired_rate_body_rad_s = wd
 
         kp = np.array(self.kp, dtype=float).reshape(-1)
@@ -99,8 +112,16 @@ class ReactionWheelPDController(Controller):
             kp = np.full(3, float(kp[0]))
         if kd.size == 1:
             kd = np.full(3, float(kd[0]))
+        if not np.all(np.isfinite(kp)) or not np.all(np.isfinite(kd)):
+            raise ValueError("kp and kd must contain finite values.")
         if kp.size != 3 or kd.size != 3 or np.any(kp < 0.0) or np.any(kd < 0.0):
             raise ValueError("kp and kd must be non-negative scalar or length-3 vectors.")
+        if self.max_body_torque_nm is not None:
+            self.max_body_torque_nm = require_finite_scalar(
+                self.max_body_torque_nm,
+                "max_body_torque_nm",
+                allow_positive_inf=True,
+            )
 
         self._allocation = np.linalg.pinv(G)
         self._wheel_axes_3xn = G
@@ -138,6 +159,8 @@ class ReactionWheelPDController(Controller):
             w = np.array(desired_rate_body_rad_s, dtype=float).reshape(-1)
             if w.size != 3:
                 raise ValueError("desired_rate_body_rad_s must be length-3.")
+            if not np.all(np.isfinite(w)):
+                raise ValueError("desired_rate_body_rad_s must contain finite values.")
             self.desired_rate_body_rad_s = w
 
     def act(self, belief: StateBelief, t_s: float, budget_ms: float) -> Command:
@@ -145,8 +168,8 @@ class ReactionWheelPDController(Controller):
             return Command.zero()
         q = _normalize_quaternion(belief.state[6:10])
         q_des = _normalize_quaternion(self.desired_attitude_quat_bn)
-        w = np.array(belief.state[10:13], dtype=float)
-        w_des = np.array(self.desired_rate_body_rad_s, dtype=float)
+        w = require_finite_vector(belief.state[10:13], "belief angular rate", size=3)
+        w_des = require_finite_vector(self.desired_rate_body_rad_s, "desired_rate_body_rad_s", size=3)
 
         q_err = _quat_multiply(_quat_conjugate(q_des), q)
         if q_err[0] < 0.0:
@@ -158,10 +181,15 @@ class ReactionWheelPDController(Controller):
         wheel_torque_cmd = np.clip(wheel_torque_cmd, -self._wheel_limits_nm, self._wheel_limits_nm)
         torque = -(self._wheel_axes_3xn @ wheel_torque_cmd)
 
-        if self.max_body_torque_nm is not None and self.max_body_torque_nm > 0.0:
+        max_body_torque = (
+            None
+            if self.max_body_torque_nm is None
+            else require_finite_scalar(self.max_body_torque_nm, "max_body_torque_nm", allow_positive_inf=True)
+        )
+        if max_body_torque is not None and max_body_torque > 0.0:
             n = float(np.linalg.norm(torque))
-            if n > self.max_body_torque_nm:
-                torque *= self.max_body_torque_nm / n
+            if n > max_body_torque:
+                torque *= max_body_torque / n
                 wheel_torque_cmd = self._allocate_wheel_torque(torque, clip=True)
                 wheel_torque_cmd = np.clip(wheel_torque_cmd, -self._wheel_limits_nm, self._wheel_limits_nm)
                 torque = -(self._wheel_axes_3xn @ wheel_torque_cmd)
@@ -196,6 +224,8 @@ class ReactionWheelPIDController(ReactionWheelPDController):
         ki = np.array(self.ki, dtype=float).reshape(-1)
         if ki.size == 1:
             ki = np.full(3, float(ki[0]))
+        if not np.all(np.isfinite(ki)):
+            raise ValueError("ki must contain finite values.")
         if ki.size != 3 or np.any(ki < 0.0):
             raise ValueError("ki must be non-negative scalar or length-3 vector.")
         self._ki = ki
@@ -206,6 +236,8 @@ class ReactionWheelPIDController(ReactionWheelPDController):
             lim = np.array(self.integral_limit, dtype=float).reshape(-1)
             if lim.size == 1:
                 lim = np.full(3, float(lim[0]))
+            if not np.all(np.isfinite(lim)):
+                raise ValueError("integral_limit must contain finite values.")
             if lim.size != 3 or np.any(lim <= 0.0):
                 raise ValueError("integral_limit must be positive scalar or length-3 vector.")
             self._integral_limit = lim
@@ -229,8 +261,8 @@ class ReactionWheelPIDController(ReactionWheelPDController):
             return Command.zero()
         q = _normalize_quaternion(belief.state[6:10])
         q_des = _normalize_quaternion(self.desired_attitude_quat_bn)
-        w = np.array(belief.state[10:13], dtype=float)
-        w_des = np.array(self.desired_rate_body_rad_s, dtype=float)
+        w = require_finite_vector(belief.state[10:13], "belief angular rate", size=3)
+        w_des = require_finite_vector(self.desired_rate_body_rad_s, "desired_rate_body_rad_s", size=3)
 
         q_err = _quat_multiply(_quat_conjugate(q_des), q)
         if q_err[0] < 0.0:
@@ -262,10 +294,15 @@ class ReactionWheelPIDController(ReactionWheelPDController):
         wheel_torque_cmd = np.clip(wheel_torque_unsat, -self._wheel_limits_nm, self._wheel_limits_nm)
         torque = -(self._wheel_axes_3xn @ wheel_torque_cmd)
 
-        if self.max_body_torque_nm is not None and self.max_body_torque_nm > 0.0:
+        max_body_torque = (
+            None
+            if self.max_body_torque_nm is None
+            else require_finite_scalar(self.max_body_torque_nm, "max_body_torque_nm", allow_positive_inf=True)
+        )
+        if max_body_torque is not None and max_body_torque > 0.0:
             n = float(np.linalg.norm(torque))
-            if n > self.max_body_torque_nm:
-                torque *= self.max_body_torque_nm / n
+            if n > max_body_torque:
+                torque *= max_body_torque / n
                 wheel_torque_cmd = self._allocate_wheel_torque(torque, clip=True)
                 wheel_torque_cmd = np.clip(wheel_torque_cmd, -self._wheel_limits_nm, self._wheel_limits_nm)
                 torque = -(self._wheel_axes_3xn @ wheel_torque_cmd)
@@ -312,7 +349,7 @@ class SmallAngleLQRController(Controller):
     def __post_init__(self) -> None:
         backend = normalize_numeric_backend(self.numeric_backend, error_message="small-angle LQR numeric_backend must be python or rust")
         self.numeric_backend = backend
-        inertia = np.array(self.inertia_kg_m2, dtype=float)
+        inertia = require_finite_matrix(self.inertia_kg_m2, "inertia_kg_m2", shape=(3, 3))
         if inertia.shape != (3, 3):
             raise ValueError("inertia_kg_m2 must be 3x3.")
         if np.linalg.det(inertia) == 0.0:
@@ -329,6 +366,8 @@ class SmallAngleLQRController(Controller):
             raise ValueError("wheel_axes_body must be shape (3,N) or (N,3).")
         if G.shape[1] < 3:
             raise ValueError("wheel_axes_body must include at least 3 wheel axes.")
+        if not np.all(np.isfinite(G)):
+            raise ValueError("wheel_axes_body must contain finite values.")
         for k in range(G.shape[1]):
             n = float(np.linalg.norm(G[:, k]))
             if n == 0.0:
@@ -340,6 +379,8 @@ class SmallAngleLQRController(Controller):
             lim = np.full(G.shape[1], float(lim[0]))
         if lim.size != G.shape[1]:
             raise ValueError("wheel_torque_limits_nm must be scalar or length equal to number of wheels.")
+        if not np.all(np.isfinite(lim) | np.isposinf(lim)):
+            raise ValueError("wheel_torque_limits_nm must contain finite values or positive infinity.")
         if np.any(lim <= 0.0):
             raise ValueError("wheel_torque_limits_nm must be positive.")
 
@@ -349,27 +390,45 @@ class SmallAngleLQRController(Controller):
         wd = np.array(self.desired_rate_body_rad_s, dtype=float).reshape(-1)
         if wd.size != 3:
             raise ValueError("desired_rate_body_rad_s must be length-3.")
+        if not np.all(np.isfinite(wd)):
+            raise ValueError("desired_rate_body_rad_s must contain finite values.")
 
         q_weights = np.array(self.q_weights, dtype=float).reshape(-1)
         if q_weights.size == 1:
             q_weights = np.full(6, float(q_weights[0]))
+        if not np.all(np.isfinite(q_weights)):
+            raise ValueError("q_weights must contain finite values.")
         if q_weights.size != 6 or np.any(q_weights <= 0.0):
             raise ValueError("q_weights must be positive scalar or length-6 vector.")
         r_weights = np.array(self.r_weights, dtype=float).reshape(-1)
         if r_weights.size == 1:
             r_weights = np.full(G.shape[1], float(r_weights[0]))
+        if not np.all(np.isfinite(r_weights)):
+            raise ValueError("r_weights must contain finite values.")
         if r_weights.size != G.shape[1] or np.any(r_weights <= 0.0):
             raise ValueError("r_weights must be positive scalar or length-N vector.")
+        require_finite_scalar(self.design_dt_s, "design_dt_s")
         if self.design_dt_s <= 0.0:
             raise ValueError("design_dt_s must be positive.")
+        require_finite_scalar(self.riccati_max_iter, "riccati_max_iter")
         if self.riccati_max_iter <= 0:
             raise ValueError("riccati_max_iter must be positive.")
+        require_finite_scalar(self.riccati_tol, "riccati_tol")
         if self.riccati_tol <= 0.0:
             raise ValueError("riccati_tol must be positive.")
+        require_finite_scalar(self.capture_angle_deg, "capture_angle_deg")
         if self.capture_angle_deg < 0.0:
             raise ValueError("capture_angle_deg must be non-negative.")
+        require_finite_scalar(self.capture_kp, "capture_kp")
+        require_finite_scalar(self.capture_kd, "capture_kd")
         if self.capture_kp < 0.0 or self.capture_kd < 0.0:
             raise ValueError("capture_kp and capture_kd must be non-negative.")
+        if self.max_body_torque_nm is not None:
+            self.max_body_torque_nm = require_finite_scalar(
+                self.max_body_torque_nm,
+                "max_body_torque_nm",
+                allow_positive_inf=True,
+            )
 
         A = np.block(
             [
@@ -420,8 +479,8 @@ class SmallAngleLQRController(Controller):
             return Command.zero()
         q = _normalize_quaternion(belief.state[6:10])
         q_des = _normalize_quaternion(self.desired_attitude_quat_bn)
-        w = np.array(belief.state[10:13], dtype=float)
-        w_des = np.array(self.desired_rate_body_rad_s, dtype=float)
+        w = require_finite_vector(belief.state[10:13], "belief angular rate", size=3)
+        w_des = require_finite_vector(self.desired_rate_body_rad_s, "desired_rate_body_rad_s", size=3)
 
         q_err = _quat_multiply(_quat_conjugate(q_des), q)
         if q_err[0] < 0.0:
@@ -442,10 +501,15 @@ class SmallAngleLQRController(Controller):
         wheel_torque_cmd = np.clip(wheel_torque_cmd, -self._wheel_limits_nm, self._wheel_limits_nm)
         torque = -(self._wheel_axes_3xn @ wheel_torque_cmd)
 
-        if self.max_body_torque_nm is not None and self.max_body_torque_nm > 0.0:
+        max_body_torque = (
+            None
+            if self.max_body_torque_nm is None
+            else require_finite_scalar(self.max_body_torque_nm, "max_body_torque_nm", allow_positive_inf=True)
+        )
+        if max_body_torque is not None and max_body_torque > 0.0:
             n = float(np.linalg.norm(torque))
-            if n > self.max_body_torque_nm:
-                torque *= self.max_body_torque_nm / n
+            if n > max_body_torque:
+                torque *= max_body_torque / n
                 wheel_torque_cmd = self._allocate_wheel_torque(torque, clip=True)
                 wheel_torque_cmd = np.clip(wheel_torque_cmd, -self._wheel_limits_nm, self._wheel_limits_nm)
                 torque = -(self._wheel_axes_3xn @ wheel_torque_cmd)
@@ -474,6 +538,8 @@ class SmallAngleLQRController(Controller):
             w = np.array(desired_rate_body_rad_s, dtype=float).reshape(-1)
             if w.size != 3:
                 raise ValueError("desired_rate_body_rad_s must be length-3.")
+            if not np.all(np.isfinite(w)):
+                raise ValueError("desired_rate_body_rad_s must contain finite values.")
             self.desired_rate_body_rad_s = w
 
     @classmethod

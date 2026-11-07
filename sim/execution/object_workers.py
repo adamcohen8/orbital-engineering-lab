@@ -126,6 +126,19 @@ class SerialObjectStepExecutor:
     ) -> list[ObjectKnowledgeSyncResult] | None:
         return None
 
+class OGPBatchStepExecutor(SerialObjectStepExecutor):
+    """Public bounded native OGP preparation, with ordinary ordered stepping."""
+
+    def __init__(self, engine: _SingleRunEngine, *, max_workers: int) -> None:
+        super().__init__(engine)
+        from sim.execution.ogp_history import OGPHistoryPreparation
+
+        self.preparation = OGPHistoryPreparation(engine, workers=max(1, int(max_workers)))
+
+    def step_objects(self, inputs: list[ObjectStepInput]) -> list[ObjectStepResult]:
+        self.preparation.prepare(inputs)
+        return super().step_objects(inputs)
+
 class ThreadPoolHistoryStepExecutor(SerialObjectStepExecutor):
     """Parallel native history preparation followed by ordinary serial steps."""
     backend_name = 'thread_pool'

@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from sim.control.attitude._validation import require_finite_scalar
 from sim.control.attitude.baseline import QuaternionPDController, _normalize_quaternion
 from sim.control.attitude.pose_commands import _attitude_quat_align_primary
 from sim.core.models import Command, StateBelief, StateTruth
@@ -55,8 +56,14 @@ class ReferencePointingController(QuaternionPDController):
         if self.target_position_eci_km is not None:
             self.target_position_eci_km = _vector3(self.target_position_eci_km, "target_position_eci_km")
         self.ric_direction = _unit(self.ric_direction, "ric_direction")
-        if self.max_target_slew_rate_deg_s is not None and self.max_target_slew_rate_deg_s <= 0.0:
-            raise ValueError("max_target_slew_rate_deg_s must be positive when provided.")
+        if self.max_target_slew_rate_deg_s is not None:
+            self.max_target_slew_rate_deg_s = require_finite_scalar(
+                self.max_target_slew_rate_deg_s,
+                "max_target_slew_rate_deg_s",
+                allow_positive_inf=True,
+            )
+            if self.max_target_slew_rate_deg_s <= 0.0:
+                raise ValueError("max_target_slew_rate_deg_s must be positive when provided.")
 
     def set_target_direction(self, direction_eci: np.ndarray) -> None:
         self.reference_direction_eci = _unit(direction_eci, "direction_eci")

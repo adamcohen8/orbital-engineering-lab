@@ -18,6 +18,7 @@ import tarfile
 import tempfile
 import zipfile
 from datetime import datetime, timezone
+from email.parser import Parser
 from pathlib import Path
 from typing import Any
 
@@ -30,13 +31,24 @@ from sim.installation.contracts import (  # noqa: E402
     RELEASE_MANIFEST_SCHEMA,
     SCENARIO_SCHEMA,
     WORKSPACE_SCHEMA,
+    canonical_json_bytes,
     sha256_file,
+)
+from sim.installation.integrity import build_installation_integrity  # noqa: E402
+from sim.installation.integrity_transport import pack_installation_integrity  # noqa: E402
+from sim.installation.manager import (  # noqa: E402
+    _provisioning_environment,
+    _remove_bootstrap_runtime_packages,
+    _remove_bytecode_caches,
+    _remove_unbound_distribution_metadata,
+    _remove_unbound_runtime_convenience,
 )
 from sim.installation.signing import (  # noqa: E402
     RSAPrivateKey,
     RSAPublicKey,
     load_private_key,
     load_public_keys,
+    load_release_public_keys,
     sign_payload,
     verify_payload,
 )
@@ -68,6 +80,8 @@ def utc_now() -> str:
 
 
 def _source_commit(root: Path) -> str | None:
+    if not (root / ".git").exists():
+        return None
     completed = subprocess.run(
         ["git", "-C", str(root), "rev-parse", "HEAD"],
         capture_output=True,
@@ -167,6 +181,11 @@ def _render_installers(
     output.mkdir(parents=True, exist_ok=True)
     keys_text = public_keys.read_text(encoding="utf-8") if public_keys is not None else '{"keys": []}\n'
     bootstrap_text = (templates / "bootstrap_install.py").read_text(encoding="utf-8")
+    codec_placeholder = "# __OEL_INTEGRITY_TRANSPORT__"
+    if bootstrap_text.count(codec_placeholder) != 1:
+        raise ValueError("Standalone bootstrap integrity transport placeholder drifted.")
+    codec = (ROOT / "sim" / "installation" / "integrity_transport.py").read_text(encoding="utf-8")
+    bootstrap_text = bootstrap_text.replace(codec_placeholder, codec)
     bootstrap_text = bootstrap_text.replace(
         "__OEL_TRUSTED_KEYS_B64__",
         base64.b64encode(keys_text.encode("utf-8")).decode("ascii"),
@@ -206,8 +225,10 @@ def _official_signing_material(
         raise ValueError(
             f"Official release-signing keys must be RS256 with at least {_MINIMUM_OFFICIAL_RSA_BITS} RSA bits."
         )
-    trusted_keys = load_public_keys(public_keys)
-    trusted = trusted_keys.get(signing_key.key_id)
+    # Preserve the established mismatch diagnostic for the selected signing
+    # key, then apply the release-only policy to the complete registry.
+    parsed_keys = load_public_keys(public_keys)
+    trusted = parsed_keys.get(signing_key.key_id)
     if trusted is None:
         raise ValueError("The trusted public-key registry does not contain the release-signing key id.")
     if (
@@ -217,7 +238,7 @@ def _official_signing_material(
         or trusted.revoked
     ):
         raise ValueError("The trusted public-key registry does not match the active release-signing key.")
-    return signing_key, trusted_keys
+    return signing_key, load_release_public_keys(public_keys)
 
 
 def _collect_supply_chain_evidence(
@@ -348,12 +369,93 @@ def _collect_supply_chain_evidence(
     }
 
 
+def _wheel_filename_distribution(name: str) -> str:
+    """Return the distribution portion of a PEP 427 wheel filename."""
+
+    stem = Path(name).stem
+    match = re.match(r"^(?P<distribution>.+?)-\d", stem)
+    return _normalized_distribution_name(match.group("distribution") if match else stem)
+
+
+def _build_project_wheel(source_root: Path, destination: Path, *, version: str) -> Path:
+    """Build the local OEL wheel into the signed wheelhouse.
+
+    Dependency wheels arrive from the already-qualified supply-chain
+    wheelhouse.  The project distribution itself is built from an exact,
+    private staging copy of the source inventory, with an isolated temporary
+    wheel output and no index access.  The caller's checkout is never used as
+    a build directory, so packaging cannot create or delete user files while
+    preparing the signed release.
+    """
+
+    destination.mkdir(parents=True, exist_ok=True)
+    environment = _provisioning_environment(offline=True)
+    with tempfile.TemporaryDirectory(prefix="oel-project-wheel-", dir=destination.parent) as temporary:
+        stage = Path(temporary) / "source"
+        for source_file in _source_files(source_root):
+            relative = source_file.relative_to(source_root)
+            target = stage / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_file, target)
+        if not (stage / "pyproject.toml").is_file():
+            raise ValueError("The staged OEL source inventory is missing pyproject.toml.")
+        with tempfile.TemporaryDirectory(prefix="oel-project-wheel-output-", dir=destination.parent) as wheel_output:
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-I",
+                    "-B",
+                    "-m",
+                    "pip",
+                    "wheel",
+                    "--no-deps",
+                    "--no-build-isolation",
+                    "--no-index",
+                    "--no-cache-dir",
+                    "--wheel-dir",
+                    wheel_output,
+                    str(stage),
+                ],
+                cwd=stage,
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if completed.returncode != 0:
+                detail = (completed.stderr or completed.stdout).strip()
+                raise ValueError(f"Could not build the OEL project wheel locally: {detail}")
+            candidates = sorted(Path(wheel_output).glob("*.whl"), key=lambda item: item.name)
+            if len(candidates) != 1:
+                raise ValueError("The local OEL project wheel build must produce exactly one wheel.")
+            candidate = candidates[0]
+            with zipfile.ZipFile(candidate) as archive:
+                metadata_name = next(
+                    (name for name in archive.namelist() if name.endswith(".dist-info/METADATA")),
+                    None,
+                )
+                if metadata_name is None:
+                    raise ValueError("The local OEL project wheel is missing dist-info metadata.")
+                metadata = Parser().parsestr(archive.read(metadata_name).decode("utf-8"))
+            if _normalized_distribution_name(str(metadata.get("Name", ""))) != _normalized_distribution_name(
+                "orbital-engineering-lab"
+            ) or str(metadata.get("Version", "")).strip() != str(version):
+                raise ValueError("The local wheel does not identify the requested OEL project and version.")
+            target = destination / candidate.name
+            if target.exists() or target.is_symlink():
+                raise ValueError(f"The local OEL project wheel collides with an existing wheel: {target.name}")
+            shutil.copy2(candidate, target)
+            return target
+
+
 def _collect_wheelhouse(
     source: Path | None,
     output: Path,
     *,
     required: bool,
     expected_wheels: list[dict[str, Any]] | None = None,
+    source_root: Path | None = None,
+    version: str | None = None,
 ) -> tuple[list[Path], list[dict[str, Any]]]:
     if source is None:
         if required:
@@ -369,14 +471,52 @@ def _collect_wheelhouse(
         if not zipfile.is_zipfile(wheel):
             raise ValueError(f"Wheelhouse entry is not a valid wheel archive: {wheel}")
     actual_wheels = {wheel.name: sha256_file(wheel) for wheel in wheels}
+    # Classify project wheels from signed archive metadata, never only from a
+    # caller-controlled filename.  A renamed project wheel must remain part
+    # of the exact external gate comparison rather than becoming an
+    # unaccounted release artifact.
+    wheel_distributions = {
+        wheel.name: _normalized_distribution_name(_wheel_metadata(wheel)[0])
+        for wheel in wheels
+    }
     expected = {str(row.get("name")): str(row.get("sha256")) for row in list(expected_wheels or [])}
-    if required and actual_wheels != expected:
+    project_name = _normalized_distribution_name("orbital-engineering-lab")
+    for wheel in wheels:
+        if (
+            wheel_distributions[wheel.name] == project_name
+            and _wheel_filename_distribution(wheel.name) != project_name
+        ):
+            raise ValueError(f"OEL project wheel filename does not match its METADATA identity: {wheel.name}")
+    project_expected = {
+        name: digest for name, digest in expected.items() if _wheel_filename_distribution(name) == project_name
+    }
+    expected_external = {
+        name: digest
+        for name, digest in expected.items()
+        if name not in project_expected
+    }
+    actual_external = {
+        name: digest
+        for name, digest in actual_wheels.items()
+        if wheel_distributions[name] != project_name
+    }
+    if required and actual_external != expected_external:
         raise ValueError("Release wheelhouse does not exactly match the passing gate wheel inventory.")
     destination = output / "wheelhouse"
     destination.mkdir(parents=True, exist_ok=True)
+    project_inputs = [wheel for wheel in wheels if wheel_distributions[wheel.name] == project_name]
+    if len(project_inputs) > 1:
+        raise ValueError("Release wheelhouse contains duplicate OEL project wheels.")
+    # If the gate did not authenticate a project wheel, do not silently copy
+    # one supplied by the caller.  Build the project distribution from the
+    # exact source root below, then sign/install that resulting wheel.  A gate
+    # that does authenticate a project wheel may supply that exact byte set.
+    skip_project_input = bool(project_inputs and source_root is not None and not project_expected)
     copied: list[Path] = []
     artifacts: list[dict[str, Any]] = []
     for wheel in wheels:
+        if skip_project_input and wheel_distributions[wheel.name] == project_name:
+            continue
         with zipfile.ZipFile(wheel) as archive:
             names = archive.namelist()
             if archive.testzip() is not None:
@@ -411,6 +551,34 @@ def _collect_wheelhouse(
                 "media_type": "application/zip",
             }
         )
+    project_copied = [path for path in copied if _normalized_distribution_name(_wheel_metadata(path)[0]) == project_name]
+    if len(project_copied) > 1:
+        raise ValueError("Release wheelhouse contains duplicate OEL project wheels.")
+    if not project_copied:
+        if not required and source_root is None:
+            return copied, artifacts
+        if source_root is None or version is None:
+            raise ValueError(
+                "Signed release builds require the OEL project wheel in the wheelhouse or a source root to build it."
+            )
+        project_target = _build_project_wheel(source_root, destination, version=version)
+        copied.append(project_target)
+        artifacts.append(
+            {
+                "name": project_target.name,
+                "kind": "wheel",
+                "path": f"wheelhouse/{project_target.name}",
+                "bytes": project_target.stat().st_size,
+                "sha256": sha256_file(project_target),
+                "media_type": "application/zip",
+            }
+        )
+        project_copied = [project_target]
+    if project_expected:
+        if len(project_expected) != 1 or project_copied[0].name not in project_expected:
+            raise ValueError("Built OEL project wheel does not match the passing gate wheel inventory.")
+        if sha256_file(project_copied[0]) != project_expected[project_copied[0].name]:
+            raise ValueError("Built OEL project wheel does not match the passing gate wheel inventory.")
     return copied, artifacts
 
 
@@ -429,7 +597,8 @@ def _verify_offline_runtime_install(
     with tempfile.TemporaryDirectory(prefix="oel-offline-release-smoke-") as temporary:
         runtime_root = Path(temporary) / "runtime"
         create = subprocess.run(
-            [sys.executable, "-m", "venv", str(runtime_root)],
+            [sys.executable, "-I", "-B", "-m", "venv", str(runtime_root)],
+            env=_provisioning_environment(offline=True),
             capture_output=True,
             text=True,
             check=False,
@@ -440,9 +609,12 @@ def _verify_offline_runtime_install(
         install = subprocess.run(
             [
                 str(python),
+                "-I",
+                "-B",
                 "-m",
                 "pip",
                 "install",
+                "--no-compile",
                 "--disable-pip-version-check",
                 "--no-index",
                 "--find-links",
@@ -450,6 +622,7 @@ def _verify_offline_runtime_install(
                 "--only-binary=:all:",
                 f"{archive}[full]",
             ],
+            env=_provisioning_environment(offline=True),
             capture_output=True,
             text=True,
             check=False,
@@ -460,12 +633,15 @@ def _verify_offline_runtime_install(
         probe = subprocess.run(
             [
                 str(python),
+                "-I",
+                "-B",
                 "-c",
                 (
                     "import importlib.metadata; import sim; import sim.installation.cli; "
                     f"assert importlib.metadata.version('orbital-engineering-lab') == {version!r}"
                 ),
             ],
+            env=_provisioning_environment(offline=True),
             capture_output=True,
             text=True,
             check=False,
@@ -481,6 +657,247 @@ def _verify_offline_runtime_install(
         "platform": platform.system(),
         "architecture": platform.machine(),
     }
+
+
+def _wheel_metadata(path: Path) -> tuple[str, list[str]]:
+    """Read only the signed distribution metadata needed for profile closure."""
+
+    with zipfile.ZipFile(path) as archive:
+        metadata = next((name for name in archive.namelist() if name.endswith(".dist-info/METADATA")), None)
+        if metadata is None:
+            raise ValueError(f"Wheel is missing dist-info METADATA: {path}")
+        parsed = Parser().parsestr(archive.read(metadata).decode("utf-8"))
+    name = str(parsed.get("Name", "")).strip()
+    if not name:
+        raise ValueError(f"Wheel metadata lacks a distribution name: {path}")
+    return name, [str(value) for value in parsed.get_all("Requires-Dist", [])]
+
+
+def _normalized_distribution_name(value: str) -> str:
+    return re.sub(r"[-_.]+", "-", value).lower()
+
+
+def _profile_wheel_closures(wheels: list[Path], profiles: list[str]) -> dict[str, list[Path]]:
+    """Resolve each advertised extra to the exact copied wheel closure.
+
+    The release gate provides the immutable wheel set; this resolver uses the
+    wheel metadata and the target interpreter's marker environment to derive
+    profile membership.  A missing dependency is a build error rather than a
+    reason to sign an all-wheel inventory for every profile.
+    """
+
+    try:
+        from packaging.markers import default_environment
+        from packaging.requirements import Requirement
+    except ImportError as exc:  # pragma: no cover - packaging is a build dependency
+        raise ValueError("Profile-specific release inventories require the packaging library.") from exc
+    by_name: dict[str, tuple[Path, list[str]]] = {}
+    for wheel in wheels:
+        name, requirements = _wheel_metadata(wheel)
+        normalized = _normalized_distribution_name(name)
+        if normalized in by_name:
+            raise ValueError(f"Wheelhouse contains duplicate distribution identity: {name}")
+        by_name[normalized] = (wheel, requirements)
+    project = _normalized_distribution_name("orbital-engineering-lab")
+    if project not in by_name:
+        raise ValueError("Signed profile inventories require the OEL project wheel in the wheelhouse.")
+    environment = default_environment()
+    closures: dict[str, list[Path]] = {}
+    for profile in profiles:
+        selected: set[str] = set()
+        extras_by_name: dict[str, set[str]] = {project: {profile} if profile != "core" else set()}
+        processed: dict[str, frozenset[str]] = {}
+        pending = [project]
+        while pending:
+            name = pending.pop()
+            extras = frozenset(extras_by_name.setdefault(name, set()))
+            if processed.get(name) == extras:
+                continue
+            entry = by_name.get(name)
+            if entry is None:
+                raise ValueError(f"Profile {profile!r} requires a wheel missing from the signed wheelhouse: {name}")
+            selected.add(name)
+            processed[name] = extras
+            _wheel, requirements = entry
+            for raw_requirement in requirements:
+                try:
+                    requirement = Requirement(raw_requirement)
+                except Exception as exc:
+                    raise ValueError(f"Wheel metadata has an invalid requirement {raw_requirement!r}") from exc
+                # Extras belong to the distribution that was requested. OEL's
+                # full profile must not enable an unrelated dependency's full
+                # extra; propagate only explicit dependency[extra] requests.
+                if requirement.marker is not None and not any(
+                    requirement.marker.evaluate({**environment, "extra": extra})
+                    for extra in ("", *sorted(extras))
+                ):
+                    continue
+                dependency = _normalized_distribution_name(requirement.name)
+                dependency_extras = extras_by_name.setdefault(dependency, set())
+                dependency_extras.update(_normalized_distribution_name(extra) for extra in requirement.extras)
+                if processed.get(dependency) != frozenset(dependency_extras):
+                    pending.append(dependency)
+        closures[profile] = sorted((by_name[name][0] for name in selected), key=lambda item: item.name)
+    return closures
+
+
+def _runtime_site_packages_for_build(root: Path) -> Path:
+    candidates = sorted((root / "lib").glob("python*/site-packages"))
+    candidates.append(root / "Lib" / "site-packages")
+    for candidate in candidates:
+        if candidate.is_dir() and not candidate.is_symlink():
+            return candidate
+    raise ValueError(f"Profile runtime has no site-packages directory: {root}")
+
+
+def _installed_distribution_names(site_packages: Path) -> set[str]:
+    names: set[str] = set()
+    for metadata in sorted(site_packages.glob("*.dist-info/METADATA")):
+        try:
+            parsed = Parser().parsestr(metadata.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError):
+            continue
+        name = str(parsed.get("Name", "")).strip()
+        if name:
+            names.add(_normalized_distribution_name(name))
+    return names
+
+
+def _build_profile_runtime_inventories(
+    *,
+    archive: Path,
+    wheelhouse: Path,
+    version: str,
+    wheel_files: list[Path],
+    profiles: list[str],
+    wheel_digests: dict[str, str] | None = None,
+) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+    """Install each advertised profile in a disposable runtime and sign its exact bytes."""
+
+    from sim.installation.integrity import _rebind_runtime_scripts, build_runtime_inventory, verify_runtime_inventory
+
+    closures = _profile_wheel_closures(wheel_files, profiles)
+    expected_digests = dict(wheel_digests or {})
+    inventories: dict[str, dict[str, Any]] = {}
+    qualification: dict[str, Any] | None = None
+    with tempfile.TemporaryDirectory(prefix="oel-profile-release-smoke-") as temporary:
+        base = Path(temporary).resolve()
+        for profile in profiles:
+            runtime_root = base / profile
+            create = subprocess.run(
+                [sys.executable, "-I", "-B", "-m", "venv", str(runtime_root)],
+                env=_provisioning_environment(offline=True),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if create.returncode != 0:
+                raise ValueError(f"Could not create {profile!r} profile runtime: {create.stderr.strip()}")
+            python = _runtime_python(runtime_root)
+            for wheel in closures[profile]:
+                expected_digest = expected_digests.get(wheel.name)
+                if expected_digest is not None and sha256_file(wheel) != expected_digest:
+                    raise ValueError(f"Profile {profile!r} wheel changed before offline provisioning: {wheel.name}")
+            install = subprocess.run(
+                [
+                    str(python), "-I", "-B", "-m", "pip", "install", "--no-compile", "--disable-pip-version-check",
+                    "--no-deps", "--no-index", "--find-links", str(wheelhouse), "--only-binary=:all:",
+                    *(str(wheel) for wheel in closures[profile]),
+                ],
+                env=_provisioning_environment(offline=True),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if install.returncode != 0:
+                detail = (install.stderr or install.stdout).strip()
+                raise ValueError(f"Offline {profile!r} profile dependency closure failed: {detail}")
+            check = subprocess.run(
+                [str(python), "-I", "-B", "-m", "pip", "check"],
+                env=_provisioning_environment(offline=True),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if check.returncode != 0:
+                raise ValueError(f"Offline {profile!r} profile pip check failed: {check.stdout}\n{check.stderr}".strip())
+            try:
+                # Match the manager's post-install surface exactly: pip and
+                # setuptools are removed only when they are venv-seeded and
+                # absent from the selected signed closure.  The full profile
+                # explicitly carries setuptools, so its package files and
+                # generated wrappers remain part of the signed inventory.
+                closure_distributions = {
+                    _normalized_distribution_name(_wheel_metadata(wheel)[0])
+                    for wheel in closures[profile]
+                }
+                _remove_bootstrap_runtime_packages(
+                    runtime_root,
+                    preserve_distributions=closure_distributions,
+                )
+                _remove_unbound_distribution_metadata(runtime_root)
+                _remove_bytecode_caches(runtime_root)
+                _remove_unbound_runtime_convenience(
+                    runtime_root,
+                    preserve_distributions=closure_distributions,
+                )
+                selected_names = _installed_distribution_names(_runtime_site_packages_for_build(runtime_root))
+                missing_distributions = closure_distributions - selected_names
+                if missing_distributions:
+                    missing = ", ".join(sorted(missing_distributions))
+                    raise ValueError(
+                        f"Offline {profile!r} profile lost signed wheel distributions after cleanup: {missing}"
+                    )
+                selected_wheels = list(closures[profile])
+                inventories[profile] = build_runtime_inventory(
+                    selected_wheels,
+                    interpreter=("Scripts/python.exe" if os.name == "nt" else "bin/python"),
+                    provider={"boundary": "external-interpreter", "trust": "operator-owned"},
+                    profile=profile,
+                    runtime_root=runtime_root,
+                )
+                issues = verify_runtime_inventory(
+                    runtime_root,
+                    inventories[profile],
+                    interpreter=python,
+                    trusted_provider=Path(getattr(sys, "_base_executable", sys.executable)),
+                )
+                if issues:
+                    raise ValueError(f"Offline {profile!r} profile integrity verification failed: {'; '.join(issues[:8])}")
+                published_runtime = base / (profile + "-published")
+                _rebind_runtime_scripts(runtime_root, inventories[profile], published_runtime)
+                runtime_root.rename(published_runtime)
+                issues = verify_runtime_inventory(
+                    published_runtime, inventories[profile],
+                    interpreter=published_runtime / str(inventories[profile]["layout"]["interpreter"]),
+                    trusted_provider=Path(getattr(sys, "_base_executable", sys.executable)),
+                )
+                if issues:
+                    raise ValueError(f"Published {profile!r} profile integrity verification failed: {'; '.join(issues[:8])}")
+                if profile == "full":
+                    qualification = {
+                        "status": "passed",
+                        "network_used": False,
+                        "profile": "full",
+                        "python": platform.python_version(),
+                        "platform": platform.system(),
+                        "architecture": platform.machine(),
+                    }
+            finally:
+                # One profile at a time keeps the release smoke footprint
+                # bounded on constrained disks; only the signed inventory is
+                # retained after capture.
+                shutil.rmtree(runtime_root, ignore_errors=True)
+    if qualification is None:
+        qualification = {
+            "status": "not-run",
+            "network_used": False,
+            "profile": "full",
+            "python": platform.python_version(),
+            "platform": platform.system(),
+            "architecture": platform.machine(),
+        }
+    return inventories, qualification
 
 
 def build_release(
@@ -565,16 +982,45 @@ def build_release(
         output,
         required=not developer_unsigned,
         expected_wheels=list(supply_chain.get("resolved_wheels", []) or []),
+        source_root=root,
+        version=version,
     )
     archive = output / f"orbital-engineering-lab-{version}-{edition}.tar.gz"
     _build_source_archive(root, archive, version=version, epoch=epoch)
+    release_profiles = ["core", "game", "accel", "validation", "mcp", "acquisition", "full"] + (["pro"] if edition == "pro" else [])
+    profile_runtime_inventories: dict[str, dict[str, Any]] | None = None
     offline_runtime_qualification = None
     if not developer_unsigned:
-        offline_runtime_qualification = _verify_offline_runtime_install(
+        if not wheel_files:
+            raise ValueError("Signed release builds require a wheelhouse for each profile runtime inventory.")
+        profile_runtime_inventories, offline_runtime_qualification = _build_profile_runtime_inventories(
             archive=archive,
             wheelhouse=output / "wheelhouse",
             version=version,
+            wheel_files=wheel_files,
+            profiles=release_profiles,
+            wheel_digests={str(row["name"]): str(row["sha256"]) for row in wheel_artifacts},
         )
+    # Bind the exact archive source inventory and every copied wheel member to
+    # the release signature.  The installation record later remains a mutable
+    # diagnostic receipt; it is never the authority for an official install.
+    installation_integrity = build_installation_integrity(
+        root,
+        wheel_files,
+        interpreter="Scripts/python.exe" if os.name == "nt" else "bin/python",
+        provider={"boundary": "external-interpreter", "trust": "operator-owned"},
+        source_files=_source_files(root),
+        runtime_profiles=profile_runtime_inventories,
+    ) if profile_runtime_inventories is not None else build_installation_integrity(
+        root,
+        wheel_files,
+        interpreter="Scripts/python.exe" if os.name == "nt" else "bin/python",
+        provider={"boundary": "external-interpreter", "trust": "operator-owned"},
+        source_files=_source_files(root),
+        profile="core",
+    )
+    if len(canonical_json_bytes(installation_integrity)) > 256 * 1024:
+        installation_integrity = pack_installation_integrity(installation_integrity)
     artifact = {
         "name": archive.name,
         "kind": "source",
@@ -598,8 +1044,7 @@ def build_release(
         "platforms": platforms or [platform.system()],
         "architecture": architecture or platform.machine(),
         "python": {"requires": ">=3.10,<3.15", "recommended": "3.14"},
-        "profiles": ["core", "game", "accel", "validation", "mcp", "full"]
-        + (["pro"] if edition == "pro" else []),
+        "profiles": release_profiles,
         "contracts": {
             "workspace": WORKSPACE_SCHEMA,
             "scenario": SCENARIO_SCHEMA,
@@ -607,7 +1052,7 @@ def build_release(
             "candidate": "oel.fswdk.candidate.v1",
         },
         "constraints": _constraint_digests(root),
-        "minimum_launcher_version": "0.25.0",
+        "minimum_launcher_version": "0.36.0",
         "release_notes": "CHANGELOG.md",
         "claims": ["Immutable source artifact with content-bound installation metadata."],
         "non_claims": [
@@ -616,6 +1061,7 @@ def build_release(
         ],
         "supply_chain": {
             **supply_chain,
+            "installation_integrity": installation_integrity,
             **(
                 {"offline_runtime_qualification": offline_runtime_qualification}
                 if offline_runtime_qualification is not None
@@ -631,7 +1077,10 @@ def build_release(
         if not verify_payload(signed, trusted_keys):
             raise ValueError("Signed release manifest does not verify against the embedded trusted-key registry.")
     manifest_path = output / "release-manifest.json"
-    manifest_path.write_text(json.dumps(signed, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    manifest_text = json.dumps(signed, indent=2, sort_keys=True) + "\n"
+    if len(manifest_text.encode("utf-8")) > 4 * 1024 * 1024:
+        raise ValueError("Release manifest exceeds the existing 4 MiB updater metadata limit.")
+    manifest_path.write_text(manifest_text, encoding="utf-8")
     checksum_path = output / "SHA256SUMS"
     checksum_path.write_text(f"{sha256_file(archive)}  {archive.name}\n{sha256_file(manifest_path)}  {manifest_path.name}\n")
     installers = _render_installers(output, public_keys=public_keys, base_url=base_url, channel_url=channel_url)

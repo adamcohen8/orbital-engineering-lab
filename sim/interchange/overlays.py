@@ -6,6 +6,7 @@ from typing import Any, Mapping
 
 import yaml
 
+from .manifests import bind_output_path
 from .scenario_patches import (
     ScenarioPatchError,
     build_scenario_patch_product,
@@ -51,6 +52,8 @@ def emit_scenario_overlay(
     *,
     overlay_id: str,
     output_path: str | Path,
+    logical_output_path: str | Path | None = None,
+    writer: Any | None = None,
     rationale: str,
     data_markings: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -61,42 +64,58 @@ def emit_scenario_overlay(
     if not reason:
         raise ScenarioOverlayError("rationale must be non-empty.")
     operations = _overlay_operations(overlay, rationale=reason)
-    target = Path(output_path).expanduser().resolve()
-    product = build_scenario_patch_product(
-        source_scenario,
-        patch_type="scenario_capability_overlay",
-        selection={
-            "selection_id": overlay_key,
-            "selection_kind": "scenario_capability_overlay",
-            "rank": 1,
-            "recommended_modes": ["explicit_overlay"],
-        },
-        operations=operations,
-        evidence={
-            "objective": {"overlay_id": overlay_key, "rationale": reason},
-            "constraints": {
-                "bounded_top_level_fields": [
-                    "analysis",
-                    "ground_stations",
-                    "objects",
-                    "outputs.review",
-                    "simulator.termination",
-                ]
-            },
-            "producer_evidence": {"overlay": deepcopy(dict(overlay))},
-        },
-        producer_capability_id=SCENARIO_OVERLAY_ADAPTER_ID,
-        producer_run_id=overlay_key,
-        disposition="accepted",
-        producer_status="explicit_overlay_validated",
-        non_claims=[
-            "The overlay changes scenario configuration but does not execute the scenario.",
-            "Ordinary scenario validation remains required after materialization.",
-        ],
-        data_markings=data_markings,
-        output_path=target,
+    target, logical_target = bind_output_path(
+        output_path,
+        logical_output_path,
+        writer=writer,
     )
-    result = write_scenario_patch_product(product, target)
+    try:
+        product = build_scenario_patch_product(
+            source_scenario,
+            patch_type="scenario_capability_overlay",
+            selection={
+                "selection_id": overlay_key,
+                "selection_kind": "scenario_capability_overlay",
+                "rank": 1,
+                "recommended_modes": ["explicit_overlay"],
+            },
+            operations=operations,
+            evidence={
+                "objective": {"overlay_id": overlay_key, "rationale": reason},
+                "constraints": {
+                    "bounded_top_level_fields": [
+                        "analysis",
+                        "ground_stations",
+                        "objects",
+                        "outputs.review",
+                        "simulator.termination",
+                    ]
+                },
+                "producer_evidence": {"overlay": deepcopy(dict(overlay))},
+            },
+            producer_capability_id=SCENARIO_OVERLAY_ADAPTER_ID,
+            producer_run_id=overlay_key,
+            disposition="accepted",
+            producer_status="explicit_overlay_validated",
+            non_claims=[
+                "The overlay changes scenario configuration but does not execute the scenario.",
+                "Ordinary scenario validation remains required after materialization.",
+            ],
+            data_markings=data_markings,
+            output_path=target,
+            logical_output_path=logical_target,
+            writer=writer,
+        )
+        result = write_scenario_patch_product(
+            product,
+            target,
+            logical_output_path=logical_target,
+            writer=writer,
+        )
+    except ScenarioOverlayError:
+        raise
+    except ScenarioPatchError as exc:
+        raise ScenarioOverlayError(str(exc)) from exc
     return {"status": "emitted", **result, "operation_count": len(operations)}
 
 

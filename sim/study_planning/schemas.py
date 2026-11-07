@@ -105,6 +105,14 @@ OPERATION_BOUNDS_SCHEMA = _object(
         "max_iterations": {"type": "integer", "minimum": 1, "maximum": 1_000_000},
         "max_cases": {"type": "integer", "minimum": 1, "maximum": 10_000_000},
         "max_wall_time_s": {"type": "number", "minimum": 0.001, "maximum": 2_592_000},
+        "max_cpu_time_s": {"type": "number", "minimum": 0.001, "maximum": 2_592_000},
+        "max_work_units": {"type": "number", "minimum": 0.001, "maximum": 1_000_000_000_000_000},
+        "max_peak_memory_mb": {"type": "number", "minimum": 0.001, "maximum": 1_048_576},
+        "max_retained_output_bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10_995_116_277_760,
+        },
         "max_input_bytes": {"type": "integer", "minimum": 1, "maximum": 17_179_869_184},
         "max_observations": {"type": "integer", "minimum": 1, "maximum": 10_000_000},
         "max_arc_duration_s": {"type": "number", "minimum": 0.001, "maximum": 31_536_000},
@@ -112,7 +120,8 @@ OPERATION_BOUNDS_SCHEMA = _object(
         "max_estimator_evaluations": {"type": "integer", "minimum": 1, "maximum": 1_000_000_000},
         "max_batch_evaluations": {"type": "integer", "minimum": 1, "maximum": 100_000_000},
         "max_stations": {"type": "integer", "minimum": 1, "maximum": 100_000},
-    }
+    },
+    required=("max_wall_time_s",),
 )
 
 ARTIFACT_REFERENCE_SCHEMA = _object(
@@ -236,7 +245,13 @@ RESOURCE_ENVELOPE_SCHEMA = _object(
         "max_total_cases": {"type": "integer", "minimum": 1, "maximum": 10_000_000},
         "max_wall_time_s": {"type": "number", "minimum": 0.001, "maximum": 2_592_000},
         "max_cpu_time_s": {"type": "number", "minimum": 0.001, "maximum": 2_592_000},
+        "max_work_units": {"type": "number", "minimum": 0.001, "maximum": 1_000_000_000_000_000},
         "max_peak_memory_mb": {"type": "number", "minimum": 1, "maximum": 1_048_576},
+        "max_retained_output_bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10_995_116_277_760,
+        },
         "max_storage_mb": {"type": "number", "minimum": 0.001, "maximum": 10_485_760},
         "max_artifact_mb": {"type": "number", "minimum": 0.001, "maximum": 1_048_576},
         "max_parallel_workers": {"type": "integer", "minimum": 1, "maximum": 1024},
@@ -249,6 +264,53 @@ RESOURCE_ENVELOPE_SCHEMA = _object(
         "max_stations": {"type": "integer", "minimum": 1, "maximum": 100_000},
     },
     required=("resource_profile", "max_operations", "max_total_cases", "max_wall_time_s"),
+)
+
+RESOURCE_ACCOUNTING_METRIC_SCHEMA = _object(
+    {
+        "status": {"type": "string", "enum": ["assessed", "unassessed"]},
+        "value": {"type": ["number", "null"]},
+        "basis": _text(maximum=500),
+        "issue_codes": _string_array(maximum=64),
+    },
+    required=("status", "value", "basis", "issue_codes"),
+)
+
+RESOURCE_ACCOUNTING_SCHEMA = _object(
+    {
+        "schema": {"const": "oel.study_resource_accounting.v1"},
+        "metrics": _object(
+            {
+                "total_cases": RESOURCE_ACCOUNTING_METRIC_SCHEMA,
+                "cpu_time_s": RESOURCE_ACCOUNTING_METRIC_SCHEMA,
+                "work_units": RESOURCE_ACCOUNTING_METRIC_SCHEMA,
+                "propagation_steps": RESOURCE_ACCOUNTING_METRIC_SCHEMA,
+                "estimator_evaluations": RESOURCE_ACCOUNTING_METRIC_SCHEMA,
+                "batch_evaluations": RESOURCE_ACCOUNTING_METRIC_SCHEMA,
+                "arc_duration_s": RESOURCE_ACCOUNTING_METRIC_SCHEMA,
+                "peak_memory_mb": RESOURCE_ACCOUNTING_METRIC_SCHEMA,
+                "unique_input_bytes": RESOURCE_ACCOUNTING_METRIC_SCHEMA,
+                "retained_output_bytes": RESOURCE_ACCOUNTING_METRIC_SCHEMA,
+                "observation_count": RESOURCE_ACCOUNTING_METRIC_SCHEMA,
+                "station_count": RESOURCE_ACCOUNTING_METRIC_SCHEMA,
+            },
+            required=(
+                "total_cases",
+                "cpu_time_s",
+                "work_units",
+                "propagation_steps",
+                "estimator_evaluations",
+                "batch_evaluations",
+                "arc_duration_s",
+                "peak_memory_mb",
+                "unique_input_bytes",
+                "retained_output_bytes",
+            ),
+        ),
+        "worker_bound": {"type": ["integer", "null"]},
+        "issue_codes": _string_array(maximum=128),
+    },
+    required=("schema", "metrics", "worker_bound", "issue_codes"),
 )
 
 STUDY_PLAN_SCHEMA = _object(
@@ -495,6 +557,7 @@ STUDY_PLAN_REVIEW_SCHEMA = _object(
         "assumptions": _string_array(maximum=256),
         "non_claims": _string_array(maximum=256),
         "resource_envelope": RESOURCE_ENVELOPE_SCHEMA,
+        "resource_accounting": RESOURCE_ACCOUNTING_SCHEMA,
         "execution_route": EXECUTION_ROUTE_SCHEMA,
         "commercial_status": COMMERCIAL_STATUS_SCHEMA,
         "user_review_required": {"const": True},
@@ -520,6 +583,7 @@ STUDY_PLAN_REVIEW_SCHEMA = _object(
         "assumptions",
         "non_claims",
         "resource_envelope",
+        "resource_accounting",
         "execution_route",
         "commercial_status",
         "user_review_required",
@@ -743,6 +807,7 @@ PLANNING_RESULT_SCHEMA = _object(
         "plan": NULLABLE_STUDY_PLAN_SCHEMA,
         "plan_sha256": {"type": ["string", "null"], "pattern": SHA256_PATTERN},
         "findings": {"type": "array", "items": PLANNING_FINDING_SCHEMA, "maxItems": 2048},
+        "resource_accounting": RESOURCE_ACCOUNTING_SCHEMA,
         "config_receipts": {
             "type": "array",
             "items": STUDY_CONFIG_VALIDATION_RECEIPT_SCHEMA,
@@ -775,6 +840,7 @@ PLANNING_RESULT_SCHEMA = _object(
         "plan",
         "plan_sha256",
         "findings",
+        "resource_accounting",
         "config_receipts",
         "execution_route",
         "commercial_status",
@@ -811,6 +877,8 @@ def schema_for(schema_id: str) -> dict[str, Any]:
 __all__ = [
     "CAPABILITY_REQUEST_SCHEMA",
     "PLANNING_RESULT_SCHEMA",
+    "RESOURCE_ACCOUNTING_SCHEMA",
+    "RESOURCE_ACCOUNTING_METRIC_SCHEMA",
     "SCHEMAS",
     "STUDY_CAPABILITY_SCHEMA",
     "STUDY_CAPABILITY_MANIFEST_SCHEMA",

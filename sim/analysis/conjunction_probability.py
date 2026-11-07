@@ -232,7 +232,12 @@ def small_object_collision_probability(
     """Legacy density-at-origin approximation retained for scenario compatibility."""
 
     mean = np.asarray(mean_plane_km, dtype=float)
+    if mean.shape != (2,) or not np.all(np.isfinite(mean)):
+        raise ConjunctionProbabilityError("Encounter-plane mean must be a finite two-vector.")
     covariance = validate_covariance(covariance_plane_km2, dimension=2)
+    radius = float(hard_body_radius_km)
+    if not math.isfinite(radius) or radius <= 0.0:
+        raise ConjunctionProbabilityError("Hard-body radius must be positive and finite.")
     determinant = float(np.linalg.det(covariance))
     if determinant <= 0.0:
         raise ConjunctionProbabilityError("Encounter-plane covariance must be positive definite.")
@@ -240,7 +245,7 @@ def small_object_collision_probability(
     if exponent < -745.0:
         return 0.0
     density = math.exp(exponent) / (2.0 * math.pi * math.sqrt(determinant))
-    return float(min(max(math.pi * float(hard_body_radius_km) ** 2 * density, 0.0), 1.0))
+    return float(min(max(math.pi * radius**2 * density, 0.0), 1.0))
 
 
 __all__ = [

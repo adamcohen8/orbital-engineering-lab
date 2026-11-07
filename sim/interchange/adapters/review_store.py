@@ -11,9 +11,11 @@ from typing import Any, Mapping
 
 import numpy as np
 
-from sim.interchange.provenance import canonical_json_bytes, compute_product_id, sha256_file
+from sim.interchange.manifests import bind_output_path, write_json_document
+from sim.interchange.provenance import canonical_json_bytes, compute_product_id
 from sim.interchange.validation import validate_product
-from sim.review import ReviewWorkspace
+from sim.review import ReviewStoreNotFoundError, ReviewWorkspace
+from sim.security.input_reads import SecureReadChanged
 
 COMPLETED_RUN_STATE_ADAPTER_ID = "oel.completed_run.state_export"
 COMPLETED_RUN_STATE_ADAPTER_VERSION = "2"
@@ -44,6 +46,10 @@ def build_completed_run_state_product(
     completed_run: str | Path,
     *,
     output_path: str | Path,
+    logical_output_path: str | Path | None = None,
+    writer: Any | None = None,
+    export_created_utc: str | None = None,
+    protected: bool | None = None,
     object_id: str | None = None,
     selector: str = "final",
     sample_index: int | None = None,
@@ -52,12 +58,68 @@ def build_completed_run_state_product(
     epoch_jd_utc: float | None = None,
     data_markings: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build one state product from an exact, read-only completed-run selection."""
+    """Build one state product from an exact, read-only completed-run selection.
 
-    target = Path(output_path).expanduser().resolve()
-    workspace = ReviewWorkspace.open(completed_run)
-    db_path = workspace.db_path
-    starting_db_hash = sha256_file(db_path)
+    ``export_created_utc`` is optional operation metadata for deterministic
+    callers. When omitted, ``created_utc`` records the actual export time;
+    it never substitutes for an absent source-run ``generated_utc`` value.
+    """
+
+    workspace = ReviewWorkspace.open(completed_run, protected=protected)
+    try:
+        if workspace.has_live_wal():
+            raise CompletedRunStateExportError(
+                "Completed-run state export requires a checkpointed review store; "
+                "live SQLite WAL evidence must be checkpointed before handoff."
+            )
+        return _build_completed_run_state_product_from_workspace(
+            workspace,
+            output_path=output_path,
+            logical_output_path=logical_output_path,
+            writer=writer,
+            export_created_utc=export_created_utc,
+            object_id=object_id,
+            selector=selector,
+            sample_index=sample_index,
+            time_s=time_s,
+            event_id=event_id,
+            epoch_jd_utc=epoch_jd_utc,
+            data_markings=data_markings,
+        )
+    finally:
+        workspace.close()
+
+
+def _build_completed_run_state_product_from_workspace(
+    workspace: ReviewWorkspace,
+    *,
+    output_path: str | Path,
+    logical_output_path: str | Path | None = None,
+    writer: Any | None = None,
+    export_created_utc: str | None = None,
+    object_id: str | None = None,
+    selector: str = "final",
+    sample_index: int | None = None,
+    time_s: float | None = None,
+    event_id: str | None = None,
+    epoch_jd_utc: float | None = None,
+    data_markings: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+
+    target, logical_target = bind_output_path(
+        output_path,
+        logical_output_path,
+        writer=writer,
+    )
+    workspace.freeze_source()
+    if workspace.has_live_wal():
+        raise CompletedRunStateExportError(
+            "Completed-run state export requires a checkpointed review store; "
+            "live SQLite WAL evidence must be checkpointed before handoff."
+        )
+    db_path = workspace.logical_db_path
+    starting_db_record = workspace.source_db_record()
+    starting_db_hash = str(starting_db_record["sha256"])
     _require_review_contract(workspace)
     metadata = _one_row(
         workspace.query(
@@ -109,19 +171,43 @@ def build_completed_run_state_product(
         time_s=selected_time_s,
         epoch_jd_utc=epoch_jd_utc,
     )
-    db_hash_after_read = sha256_file(db_path)
-    if db_hash_after_read != starting_db_hash:
-        raise CompletedRunStateExportError("Review store changed while the selected sample was being exported.")
+    try:
+        workspace.assert_source_unchanged()
+    except (ReviewStoreNotFoundError, SecureReadChanged) as exc:
+        raise CompletedRunStateExportError(
+            "Review store or schema changed while the selected sample was being exported."
+        ) from exc
+    schema_bytes = workspace.source_schema_bytes()
+    schema_record = workspace.source_schema_record()
+    if schema_bytes is not None and schema_record is None:
+        raise CompletedRunStateExportError("Review schema provenance could not be bound to its source record.")
+    source_digest_reader = _retained_source_digest_reader(workspace)
 
-    source_artifacts = [_source_artifact(db_path, target=target, artifact_id="completed_run_review_store")]
-    if workspace.schema_path.is_file():
-        source_artifacts.append(
-            _source_artifact(workspace.schema_path, target=target, artifact_id="completed_run_review_schema")
+    source_artifacts = [
+        _source_artifact(
+            db_path,
+            target=logical_target,
+            artifact_id="completed_run_review_store",
+            sha256=starting_db_hash,
+            size_bytes=int(starting_db_record["bytes"]),
         )
-    created_utc = _normalize_utc(
+    ]
+    if schema_bytes is not None and schema_record is not None:
+        source_artifacts.append(
+            _source_artifact(
+                workspace.schema_path,
+                target=logical_target,
+                artifact_id="completed_run_review_schema",
+                sha256=str(schema_record["sha256"]),
+                size_bytes=int(schema_record["bytes"]),
+            )
+        )
+    source_generated_utc = _normalize_utc(
         metadata["generated_utc"],
-        fallback=_schema_generated_utc(workspace.schema_path),
+        fallback=_schema_generated_utc(schema_bytes),
+        allow_missing=True,
     )
+    created_utc = _export_created_utc(export_created_utc)
     selection = {
         "selector_kind": selector_kind,
         "requested": _selector_request(
@@ -137,6 +223,10 @@ def build_completed_run_state_product(
     }
     orbit_force_model, source_attitude_enabled = _model_assumptions(config)
     warnings = []
+    if source_generated_utc is None:
+        warnings.append(
+            "Source review provenance has no generated_utc; producer timestamp is unavailable and age freshness was not evaluated."
+        )
     if covariance.get("present") is not True:
         warnings.append("No matching full 6x6 ECI covariance row was available for the selected sample.")
     if source_attitude_enabled:
@@ -181,7 +271,7 @@ def build_completed_run_state_product(
                 "run_id": str(metadata["run_id"]),
                 "scenario_name": str(metadata["scenario_name"]),
                 "review_schema_version": str(metadata["review_schema_version"]),
-                "generated_utc": created_utc,
+                "generated_utc": source_generated_utc,
                 "config_sha256": str(metadata["config_sha256"]),
                 "review_db_sha256": starting_db_hash,
                 "initial_jd_utc": initial_jd_utc,
@@ -191,7 +281,11 @@ def build_completed_run_state_product(
         },
         "quality": {
             "disposition": "accepted",
-            "producer_status": "completed_run_sample_selected",
+            "producer_status": (
+                "completed_run_sample_selected"
+                if source_generated_utc is not None
+                else "completed_run_sample_selected_timestamp_unavailable"
+            ),
             "gates": {
                 "review_store_hash_stable": True,
                 "config_hash_verified": True,
@@ -214,10 +308,17 @@ def build_completed_run_state_product(
         },
         "freshness": {
             "integrity_status": "current",
-            "age_status": "not_applicable",
+            "age_status": "not_applicable" if source_generated_utc is not None else "not_evaluated",
             "reference_epoch_jd_utc": epoch_jd_utc,
-            "evaluated_utc": created_utc,
-            "policy": {"assessment": "content-bound_completed_run_sample"},
+            "evaluated_utc": created_utc if source_generated_utc is not None else None,
+            "policy": {
+                "assessment": "content-bound_completed_run_sample",
+                **(
+                    {}
+                    if source_generated_utc is not None
+                    else {"reason": "source_generated_utc_unavailable"}
+                ),
+            },
         },
         "provenance": {
             "source_artifacts": source_artifacts,
@@ -241,7 +342,11 @@ def build_completed_run_state_product(
         "data_markings": _data_markings(config, override=data_markings),
     }
     product["product_id"] = compute_product_id(product)
-    report = validate_product(product, source_path=target)
+    report = validate_product(
+        product,
+        source_path=logical_target,
+        source_digest_reader=source_digest_reader,
+    )
     if not report.valid:
         messages = "; ".join(f"{issue.path}: {issue.message}" for issue in report.errors)
         raise CompletedRunStateExportError(f"Generated completed-run state product failed validation: {messages}")
@@ -278,6 +383,10 @@ def export_completed_run_state(
     completed_run: str | Path,
     *,
     output_path: str | Path,
+    logical_output_path: str | Path | None = None,
+    writer: Any | None = None,
+    export_created_utc: str | None = None,
+    protected: bool | None = None,
     object_id: str | None = None,
     selector: str = "final",
     sample_index: int | None = None,
@@ -287,43 +396,63 @@ def export_completed_run_state(
     data_markings: Mapping[str, Any] | None = None,
     overwrite: bool = False,
 ) -> dict[str, Any]:
-    """Write a deterministic state product; never mutate or execute the source run."""
+    """Write a state product; never mutate or execute the source run.
 
-    target = Path(output_path).expanduser().resolve()
-    target.parent.mkdir(parents=True, exist_ok=True)
-    product = build_completed_run_state_product(
-        completed_run,
-        output_path=target,
-        object_id=object_id,
-        selector=selector,
-        sample_index=sample_index,
-        time_s=time_s,
-        event_id=event_id,
-        epoch_jd_utc=epoch_jd_utc,
-        data_markings=data_markings,
+    The product identity remains content-bound and timestamp-independent.
+    """
+
+    target, logical_target = bind_output_path(
+        output_path,
+        logical_output_path,
+        writer=writer,
     )
-    text = json.dumps(product, indent=2, sort_keys=True) + "\n"
-    if target.exists():
-        if target.read_text(encoding="utf-8") != text and not overwrite:
+    workspace = ReviewWorkspace.open(completed_run, protected=protected)
+    try:
+        if workspace.has_live_wal():
+            raise CompletedRunStateExportError(
+                "Completed-run state export requires a checkpointed review store; "
+                "live SQLite WAL evidence must be checkpointed before handoff."
+            )
+        product = _build_completed_run_state_product_from_workspace(
+            workspace,
+            output_path=target,
+            logical_output_path=logical_target,
+            writer=writer,
+            export_created_utc=export_created_utc,
+            object_id=object_id,
+            selector=selector,
+            sample_index=sample_index,
+            time_s=time_s,
+            event_id=event_id,
+            epoch_jd_utc=epoch_jd_utc,
+            data_markings=data_markings,
+        )
+        try:
+            write_json_document(product, target, writer=writer, overwrite=overwrite)
+        except FileExistsError as exc:
             raise CompletedRunStateExportError(
                 "Output product exists with different content; pass overwrite=True explicitly to replace it."
-            )
-    if not target.exists() or target.read_text(encoding="utf-8") != text:
-        target.write_text(text, encoding="utf-8")
-    report = validate_product(product, source_path=target)
-    return {
-        "status": "exported",
-        "product_path": str(target),
-        "product_id": product["product_id"],
-        "object_id": product["payload"]["object"]["object_id"],
-        "selection": deepcopy(product["payload"]["selection"]),
-        "epoch_jd_utc": product["payload"]["state"]["epoch"]["value"],
-        "covariance_present": product["payload"]["covariance"]["present"],
-        "valid": report.valid,
-        "promotable": report.promotable,
-        "execution_occurred": False,
-        "issues": [issue.to_dict() for issue in report.issues],
-    }
+            ) from exc
+        report = validate_product(
+            product,
+            source_path=logical_target,
+            source_digest_reader=_retained_source_digest_reader(workspace),
+        )
+        return {
+            "status": "exported",
+            "product_path": str(target),
+            "product_id": product["product_id"],
+            "object_id": product["payload"]["object"]["object_id"],
+            "selection": deepcopy(product["payload"]["selection"]),
+            "epoch_jd_utc": product["payload"]["state"]["epoch"]["value"],
+            "covariance_present": product["payload"]["covariance"]["present"],
+            "valid": report.valid,
+            "promotable": report.promotable,
+            "execution_occurred": False,
+            "issues": [issue.to_dict() for issue in report.issues],
+        }
+    finally:
+        workspace.close()
 
 
 def _require_review_contract(workspace: ReviewWorkspace) -> None:
@@ -656,14 +785,40 @@ def _selector_request(
     return {"sample": "final"}
 
 
-def _source_artifact(path: Path, *, target: Path, artifact_id: str) -> dict[str, Any]:
+def _source_artifact(
+    path: Path,
+    *,
+    target: Path,
+    artifact_id: str,
+    sha256: str,
+    size_bytes: int,
+) -> dict[str, Any]:
     return {
         "artifact_id": artifact_id,
-        "sha256": sha256_file(path),
+        "sha256": str(sha256),
         "path": os.path.relpath(path, start=target.parent),
         "media_type": "application/vnd.sqlite3" if path.suffix == ".sqlite" else "application/json",
-        "size_bytes": path.stat().st_size,
+        "size_bytes": int(size_bytes),
     }
+
+
+def _retained_source_digest_reader(workspace: ReviewWorkspace):
+    """Verify only the source records captured by a retained workspace."""
+
+    records: dict[Path, str] = {
+        Path(os.path.abspath(os.fspath(workspace.logical_db_path))): str(
+            workspace.source_db_record()["sha256"]
+        ),
+    }
+    schema_record = workspace.source_schema_record()
+    if schema_record is not None:
+        records[Path(os.path.abspath(os.fspath(workspace.schema_path)))] = str(schema_record["sha256"])
+
+    def read(candidate: Path) -> str | None:
+        workspace.assert_source_unchanged()
+        return records.get(Path(os.path.abspath(os.fspath(candidate))))
+
+    return read
 
 
 def _data_markings(config: Mapping[str, Any], *, override: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -716,27 +871,44 @@ def _json_list(value: Any, label: str) -> list[Any]:
     return parsed
 
 
-def _schema_generated_utc(schema_path: Path) -> str:
-    if not schema_path.is_file():
+def _schema_generated_utc(schema_bytes: bytes | None) -> str:
+    if schema_bytes is None:
         return ""
     try:
-        payload = json.loads(schema_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        payload = json.loads(schema_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
         return ""
     return str(dict(payload or {}).get("generated_utc", "") or "").strip()
 
 
-def _normalize_utc(value: Any, *, fallback: Any = None) -> str:
+def _export_created_utc(value: str | None) -> str:
+    """Return the product export time, distinct from source-run provenance."""
+
+    if value is None:
+        return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    normalized = _normalize_utc(value, label="export_created_utc")
+    assert normalized is not None
+    return normalized
+
+
+def _normalize_utc(
+    value: Any,
+    *,
+    fallback: Any = None,
+    allow_missing: bool = False,
+    label: str = "generated_utc",
+) -> str | None:
     text = str(value or "").strip() or str(fallback or "").strip()
     if not text:
+        if allow_missing:
+            return None
         raise CompletedRunStateExportError(
-            "Completed-run provenance has no generated_utc in run_metadata or review/schema.json; "
-            "rerun the scenario before exporting a handoff product."
+            f"Completed-run provenance has no {label} in run_metadata or review/schema.json."
         )
     try:
         parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
     except ValueError as exc:
-        raise CompletedRunStateExportError("run_metadata generated_utc is invalid.") from exc
+        raise CompletedRunStateExportError(f"{label} is invalid.") from exc
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")

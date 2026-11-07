@@ -13,6 +13,14 @@ class CompositeSensorModel(SensorModel):
     sensors: list[SensorModel]
     time_tolerance_s: float = 1e-9
 
+    def __post_init__(self) -> None:
+        if isinstance(self.time_tolerance_s, (bool, np.bool_)):
+            raise ValueError("time_tolerance_s must be finite and nonnegative.")
+        tolerance = float(self.time_tolerance_s)
+        if not np.isfinite(tolerance) or tolerance < 0.0:
+            raise ValueError("time_tolerance_s must be finite and nonnegative.")
+        self.time_tolerance_s = tolerance
+
     def measure(self, truth: StateTruth, env: dict, t_s: float) -> Measurement | None:
         parts = []
         sample_times = []

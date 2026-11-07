@@ -17,6 +17,22 @@ class NoisyOwnStateSensor(SensorModel):
     update_cadence_s: float = 0.0
     _last_update_t_s: float = -np.inf
 
+    def __post_init__(self) -> None:
+        for field_name in ("pos_sigma_km", "vel_sigma_km_s"):
+            value = getattr(self, field_name)
+            if isinstance(value, (bool, np.bool_)):
+                raise ValueError(f"{field_name} must be finite and nonnegative.")
+            normalized = float(value)
+            if not np.isfinite(normalized) or normalized < 0.0:
+                raise ValueError(f"{field_name} must be finite and nonnegative.")
+            setattr(self, field_name, normalized)
+        if isinstance(self.update_cadence_s, (bool, np.bool_)):
+            raise ValueError("update_cadence_s must be finite and nonnegative.")
+        cadence = float(self.update_cadence_s)
+        if not np.isfinite(cadence) or cadence < 0.0:
+            raise ValueError("update_cadence_s must be finite and nonnegative.")
+        self.update_cadence_s = cadence
+
     def measure(self, truth: StateTruth, env: dict, t_s: float) -> Measurement | None:
         if not _cadence_due(t_s, self._last_update_t_s, self.update_cadence_s):
             return None

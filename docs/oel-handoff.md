@@ -74,8 +74,11 @@ full-trajectory equivalence, or operational suitability.
 ## Export a Completed-run State
 
 A completed single-run review store can emit one `oel.completed_run_state`
-product. Select the object explicitly whenever
-the run contains more than one eligible object:
+product. Export requires a completed, stable review database with any SQLite
+write-ahead log checkpointed by its owning process. A live WAL is rejected so
+the exported state and source-artifact fingerprints describe the same bytes.
+Select the object explicitly whenever the run contains more than one eligible
+object:
 
 ```bash
 .venv/bin/python -m sim.handoff export-state outputs/source_run \
@@ -111,6 +114,15 @@ For a trusted relative-time fixture, `--epoch-jd-utc` supplies an explicit UTC
 anchor. The exporter rejects a missing anchor and rejects an override that
 conflicts with a configured source epoch; the choice is recorded in product
 provenance.
+
+`created_utc` on a completed-run product records when the handoff exporter
+created the product. It is separate from `payload.source_run.generated_utc`,
+which preserves the source review store's provenance value and may be `null`
+when the source producer did not record one. In that case the product records a
+timestamp-unavailable warning and uses `freshness.age_status: not_evaluated`;
+the exporter does not use the orbital epoch as a wall-clock substitute. Python
+callers that need reproducible presentation bytes may pass the optional
+`export_created_utc` argument; it does not change the content-bound product ID.
 
 ## Export an Atomic Multi-object Snapshot
 
@@ -183,6 +195,12 @@ Scale adapter can export measured event-centered observations, run dynamics
 OD, and prepare a truth-free IHE input bundle and authoring skeleton. Weak fit
 or holdout evidence remains `review_required`; no intent or hypothesis is
 selected automatically.
+
+Export requires stable, checkpointed review evidence. The adapter retains the
+database and companion-file identities through validation. `created_utc` records
+export time; Python callers can pass `export_created_utc` for reproducible
+fixtures. Missing source `generated_utc` produces a warning and leaves source
+age unevaluated.
 
 ## Emit a Scenario-capability Overlay
 

@@ -2,16 +2,18 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import json
 import math
 import re
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 import numpy as np
+
+from sim.data_io.common import read_text, strict_json
+from sim.data_io.contracts import DataIOError
 
 from .contracts import (
     AGE_STATUSES,
@@ -27,6 +29,7 @@ from .provenance import compute_manifest_id, compute_product_id, sha256_file
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _PRODUCT_ID_RE = re.compile(r"^oel\.[a-z0-9_.-]+:[0-9a-f]{64}$")
+SourceDigestReader = Callable[[Path], str | None]
 _ENVELOPE_FIELDS = {
     "schema_id",
     "schema_version",
@@ -100,11 +103,11 @@ class InterchangeValidationReport:
 def load_interchange_document(path: str | Path) -> dict[str, Any]:
     source = Path(path)
     try:
-        value = json.loads(source.read_text(encoding="utf-8"))
+        value = strict_json(read_text(source))
     except FileNotFoundError as exc:
         raise ValueError(f"interchange document does not exist: {source}") from exc
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"interchange document is not valid JSON: {exc}") from exc
+    except DataIOError as exc:
+        raise ValueError(f"interchange document is not valid bounded JSON: {exc}") from exc
     if not isinstance(value, dict):
         raise ValueError("interchange document root must be a JSON object")
     return value
@@ -115,10 +118,16 @@ def validate_document(
     *,
     source_path: str | Path | None = None,
     verify_sources: bool = True,
+    source_digest_reader: SourceDigestReader | None = None,
 ) -> InterchangeValidationReport:
     schema_id = str(document.get("schema_id", "") or "")
     if schema_id == PRODUCT_ENVELOPE_SCHEMA_ID:
-        return validate_product(document, source_path=source_path, verify_sources=verify_sources)
+        return validate_product(
+            document,
+            source_path=source_path,
+            verify_sources=verify_sources,
+            source_digest_reader=source_digest_reader,
+        )
     if schema_id == HANDOFF_MANIFEST_SCHEMA_ID:
         return _validate_manifest(document)
     issue = InterchangeValidationIssue(
@@ -145,6 +154,7 @@ def validate_product(
     *,
     source_path: str | Path | None = None,
     verify_sources: bool = True,
+    source_digest_reader: SourceDigestReader | None = None,
 ) -> InterchangeValidationReport:
     issues: list[InterchangeValidationIssue] = []
     _closed_mapping(document, _ENVELOPE_FIELDS, "$", issues)
@@ -176,6 +186,7 @@ def validate_product(
         freshness=freshness,
         source_path=source_path,
         verify_sources=verify_sources,
+        source_digest_reader=source_digest_reader,
         issues=issues,
     )
     markings = _required_mapping(document, "data_markings", "$", issues)
@@ -305,6 +316,7 @@ def _validate_provenance(
     freshness: Mapping[str, Any],
     source_path: str | Path | None,
     verify_sources: bool,
+    source_digest_reader: SourceDigestReader | None,
     issues: list[InterchangeValidationIssue],
 ) -> None:
     path = "$.provenance"
@@ -363,7 +375,49 @@ def _validate_provenance(
             )
             continue
         candidate = Path(raw_path)
-        resolved = candidate if candidate.is_absolute() else base / candidate
+        # Normalize ``..`` before checking existence.  The product destination
+        # may be a new nested path whose parent has not been created yet; a
+        # lexical Path.is_file() check would reject a valid sibling source
+        # merely because an intermediate destination directory is absent.
+        resolved = (candidate if candidate.is_absolute() else base / candidate).resolve()
+        if source_digest_reader is not None:
+            try:
+                actual = source_digest_reader(resolved)
+            except Exception as exc:
+                _error(
+                    issues,
+                    "provenance.source_reader_failed",
+                    f"{item_path}.path",
+                    f"Retained source verification failed: {exc}",
+                )
+                continue
+            if actual is None:
+                _error(
+                    issues,
+                    "provenance.source_unbound",
+                    f"{item_path}.path",
+                    f"Source artifact is not bound to the retained source reader: {resolved}",
+                )
+                continue
+            if not isinstance(actual, str) or not _SHA256_RE.fullmatch(actual):
+                _error(
+                    issues,
+                    "provenance.source_reader_invalid",
+                    f"{item_path}.sha256",
+                    "Retained source reader must return a lowercase SHA-256 digest or None.",
+                )
+                continue
+            compared += 1
+            if digest and actual != digest:
+                severity = "error" if integrity == "current" else "blocker"
+                _add(
+                    issues,
+                    "provenance.source_hash_mismatch",
+                    f"{item_path}.sha256",
+                    f"Source hash mismatch for {resolved.name}; observed {actual}.",
+                    severity,
+                )
+            continue
         if not resolved.is_file():
             severity = "error" if integrity == "current" else "blocker"
             _add(
@@ -737,9 +791,21 @@ def _validate_completed_run_state(
     _required_string(source_run, "run_id", source_path, issues)
     _required_string(source_run, "scenario_name", source_path, issues)
     _required_string(source_run, "review_schema_version", source_path, issues)
-    generated = _required_string(source_run, "generated_utc", source_path, issues)
-    if generated:
-        _validate_utc(generated, f"{source_path}.generated_utc", issues)
+    if "generated_utc" not in source_run:
+        _error(issues, "schema.required", f"{source_path}.generated_utc", "Missing required field 'generated_utc'.")
+    else:
+        generated_raw = source_run.get("generated_utc")
+        if generated_raw is None:
+            pass
+        elif isinstance(generated_raw, str) and generated_raw.strip():
+            _validate_utc(generated_raw.strip(), f"{source_path}.generated_utc", issues)
+        else:
+            _error(
+                issues,
+                "type.timestamp",
+                f"{source_path}.generated_utc",
+                "Expected an ISO-8601 UTC timestamp or null when source provenance is unavailable.",
+            )
     config_hash = _required_string(source_run, "config_sha256", source_path, issues)
     review_hash = _required_string(source_run, "review_db_sha256", source_path, issues)
     for field, value in (("config_sha256", config_hash), ("review_db_sha256", review_hash)):
@@ -1198,11 +1264,46 @@ def _validate_satellite_checkpoint(
         value = checkpoint.get(field)
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
             _error(issues, "satellite_checkpoint.integer_invalid", f"{checkpoint_path}.{field}", "Expected a nonnegative integer.")
-    for field in ("state_hash_sha256", "runtime_state_hash_sha256"):
+    for field in ("state_hash_sha256", "runtime_state_hash_sha256", "implementation_hash"):
         value = _required_string(checkpoint, field, checkpoint_path, issues)
         if value and not _SHA256_RE.fullmatch(value):
             _error(issues, "satellite_checkpoint.hash_invalid", f"{checkpoint_path}.{field}", "Expected 64 lowercase hex.")
     snapshot = _required_mapping(checkpoint, "fsw_snapshot", checkpoint_path, issues)
+    snapshot_path = f"{checkpoint_path}.fsw_snapshot"
+    _closed_mapping(
+        snapshot,
+        {
+            "stack_id",
+            "stack_version",
+            "boot_id",
+            "invocation_id",
+            "active_load_id",
+            "active_load_revision",
+            "state_bytes",
+            "state_hash_sha256",
+            "host_implementation_hash",
+            "schema",
+        },
+        snapshot_path,
+        issues,
+    )
+    snapshot_schema = snapshot.get("schema")
+    if snapshot_schema not in {"oel.flight_software.snapshot.v1", "oel.flight_software.native_snapshot.v1"}:
+        _error(issues, "satellite_checkpoint.fsw_schema", f"{snapshot_path}.schema", "Unsupported flight-software snapshot schema.")
+    for field in ("stack_id", "stack_version", "boot_id"):
+        _required_string(snapshot, field, snapshot_path, issues)
+    if snapshot.get("stack_id") != checkpoint.get("stack_id") or snapshot.get("stack_version") != checkpoint.get("stack_version"):
+        _error(issues, "satellite_checkpoint.fsw_identity", snapshot_path, "FSW snapshot identity does not match the checkpoint row.")
+    if snapshot.get("boot_id") != checkpoint.get("boot_id"):
+        _error(issues, "satellite_checkpoint.fsw_boot", snapshot_path, "FSW snapshot boot does not match the checkpoint row.")
+    if snapshot_schema == "oel.flight_software.native_snapshot.v1":
+        host_hash = _required_string(snapshot, "host_implementation_hash", snapshot_path, issues)
+        if host_hash and not _SHA256_RE.fullmatch(host_hash):
+            _error(issues, "satellite_checkpoint.hash_invalid", f"{snapshot_path}.host_implementation_hash", "Expected 64 lowercase hex.")
+        if host_hash and host_hash != checkpoint.get("implementation_hash"):
+            _error(issues, "satellite_checkpoint.native_identity", snapshot_path, "Native host implementation identity does not match the checkpoint row.")
+    elif "host_implementation_hash" in snapshot and snapshot.get("host_implementation_hash") is not None:
+        _error(issues, "satellite_checkpoint.fsw_schema", snapshot_path, "Python snapshot v1 cannot carry native host identity metadata.")
     encoded_state = dict(snapshot.get("state_bytes", {}) or {}).get("$bytes_base64")
     if not isinstance(encoded_state, str):
         _error(issues, "satellite_checkpoint.fsw_state_missing", f"{checkpoint_path}.fsw_snapshot.state_bytes", "Expected canonical base64 state bytes.")

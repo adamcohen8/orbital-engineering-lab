@@ -54,6 +54,12 @@ class AnimationQualityPolicy:
             raise ValueError("Animation quality file limits are inconsistent.")
         if self.contact_sheet_frames < 2:
             raise ValueError("Animation contact sheets must include at least two frames.")
+        if self.contact_sheet_thumbnail_width_px <= 0:
+            raise ValueError("Animation contact sheet thumbnail width must be positive.")
+        if not math.isfinite(float(self.camera_span_relative_tolerance)) or self.camera_span_relative_tolerance < 0.0:
+            raise ValueError("Animation camera tolerance must be finite and nonnegative.")
+        if self.max_reported_failed_frames < 0:
+            raise ValueError("Animation max_reported_failed_frames cannot be negative.")
 
 
 STRICT_AGENT_ANIMATION_QUALITY = AnimationQualityPolicy()
@@ -216,6 +222,8 @@ def save_animation_with_quality(
     key_frame_indices: Iterable[int] = (),
     source: Mapping[str, Any] | None = None,
     policy: AnimationQualityPolicy = STRICT_AGENT_ANIMATION_QUALITY,
+    logical_contact_sheet_path: str | Path | None = None,
+    logical_quality_receipt_path: str | Path | None = None,
 ) -> AnimationQualityReport:
     """Inspect, encode, verify, and document one saved animation."""
 
@@ -330,6 +338,16 @@ def save_animation_with_quality(
     )
     status = "passed" if all(bool(item["passed"]) for item in checks) else "failed"
     receipt_path = target.with_suffix(".quality.json")
+    report_contact_path = (
+        Path(logical_contact_sheet_path)
+        if logical_contact_sheet_path is not None
+        else contact_path
+    )
+    report_receipt_path = (
+        Path(logical_quality_receipt_path)
+        if logical_quality_receipt_path is not None
+        else receipt_path
+    )
     report = AnimationQualityReport(
         policy_id=policy.policy_id,
         policy_version=policy.version,
@@ -343,8 +361,8 @@ def save_animation_with_quality(
         repairs=tuple(dict.fromkeys(repairs)),
         numeric_formatting=tuple(numeric_formatting),
         contact_sheet_frame_indices=contact_indices,
-        contact_sheet_path=str(contact_path),
-        quality_receipt_path=str(receipt_path),
+        contact_sheet_path=str(report_contact_path),
+        quality_receipt_path=str(report_receipt_path),
         encoding=encoding,
         source=dict(source or {}),
     )
@@ -360,7 +378,7 @@ def verify_animation_encoding(
     policy: AnimationQualityPolicy = STRICT_AGENT_ANIMATION_QUALITY,
     encoding_error: str = "",
 ) -> AnimationEncodingReport:
-    """Decode enough metadata to establish that a saved GIF or MP4 is usable."""
+    """Decode every encoded frame and verify the expected movie is present."""
 
     target = Path(path)
     exists = target.is_file()
@@ -376,6 +394,7 @@ def verify_animation_encoding(
     error = encoding_error
     if exists and not error:
         try:
+            expected_frame_count = max(int(expected_frames), 1)
             if suffix == "gif":
                 from PIL import Image
 
@@ -385,12 +404,16 @@ def verify_animation_encoding(
                     frame_durations_ms: list[float] = []
                     for frame_index in range(frame_count):
                         image.seek(frame_index)
+                        decoded = image.convert("RGB")
+                        if decoded.size != (width, height):
+                            raise ValueError(
+                                f"GIF frame {frame_index} has dimensions {decoded.size}, "
+                                f"expected {(width, height)}."
+                            )
                         frame_durations_ms.append(float(image.info.get("duration", 1000.0 / expected_fps)))
                     total_duration_s = sum(frame_durations_ms) / 1000.0
                     actual_fps = frame_count / total_duration_s if total_duration_s > 0.0 else None
                     duration = total_duration_s if total_duration_s > 0.0 else None
-                    image.seek(max(frame_count - 1, 0))
-                    image.convert("RGB").getbbox()
             elif suffix == "mp4":
                 import imageio.v2 as imageio
 
@@ -400,13 +423,25 @@ def verify_animation_encoding(
                     first = np.asarray(reader.get_data(0))
                     height, width = (int(first.shape[0]), int(first.shape[1]))
                     frame_count = int(reader.count_frames())
+                    for frame_index in range(frame_count):
+                        frame = np.asarray(reader.get_data(frame_index))
+                        if frame.ndim < 2 or tuple(frame.shape[:2]) != (height, width):
+                            raise ValueError(
+                                f"MP4 frame {frame_index} has dimensions {tuple(frame.shape[:2])}, "
+                                f"expected {(height, width)}."
+                            )
                     actual_fps = float(metadata.get("fps", expected_fps))
                     duration = float(metadata.get("duration", frame_count / actual_fps))
                 finally:
                     reader.close()
             else:
                 raise ValueError("Strict animation quality supports only GIF and MP4 artifacts.")
-            decode_ok = bool(width and height and frame_count and frame_count >= min(expected_frames, 1))
+            decode_ok = bool(
+                width
+                and height
+                and frame_count
+                and frame_count >= expected_frame_count
+            )
         except Exception as exc:  # pragma: no cover - backend failures vary by platform
             error = f"{type(exc).__name__}: {exc}"
     return AnimationEncodingReport(

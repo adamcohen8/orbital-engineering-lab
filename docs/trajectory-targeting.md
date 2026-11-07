@@ -48,11 +48,15 @@ with wheel 0.13.0 or newer for RK4 finite-difference trials using two-body
 and ordered built-in J2/J3/J4 forces. Fixed-duration trials use one native
 batch. Event coasts prepare bounded native coarse samples while Python retains
 crossing detection, angular unwrapping, refinement decisions, failure receipts,
-and propagation accounting. Direct `execute_trajectory` callers can select the
-same numerical backend. The solver retains Python iteration, line search,
-terminal constraints, and independent authoritative repropagation. Adaptive
-integrators reject explicit native Jacobian selection. The default is `numeric_backend="rust"`; select `numeric_backend="python"`
-for the independent Python reference implementation.
+and propagation accounting. Direct `execute_trajectory` callers may select
+`numeric_backend="rust"` for the same fixed-step RK4 envelope. Direct Rust
+trajectory execution and Rust targeting Jacobians reject `rkf78`, `dopri5`,
+and the `adaptive` alias before native probing or trajectory work; they do not
+fall back automatically. Select `numeric_backend="python"` to execute those
+explicit adaptive/non-RK4 paths. The solver retains Python iteration, line
+search, terminal constraints, and independent authoritative repropagation. The
+default is `numeric_backend="rust"`; select `numeric_backend="python"` for the
+independent Python reference implementation.
 
 ## Problem Contract
 

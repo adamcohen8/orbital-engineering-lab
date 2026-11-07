@@ -13,6 +13,7 @@ from sim.study_planning import (
     preflight_study_plan,
 )
 from sim.study_planning.config_validation import validate_config_path
+from sim.study_planning.edge_compiler import StudyEdgeCompilationError, verify_typed_operation_edges
 from sim.study_planning.feedback import prepare_capability_request
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -59,6 +60,8 @@ def test_valid_preflight_is_free_nonexecuting_and_requires_user_review() -> None
     assert result["config_receipts"][0]["execution_advanced"] is False
     assert result["config_receipts"][0]["charge_created"] is False
     assert result["config_receipts"][0]["plugins_imported"] is False
+    assert result["resource_accounting"]["metrics"]["total_cases"]["status"] == "assessed"
+    assert result["resource_accounting"]["metrics"]["cpu_time_s"]["status"] == "unassessed"
 
 
 @pytest.mark.parametrize(
@@ -171,6 +174,92 @@ def test_non_scenario_operation_rejects_config_reference_without_requesting_scen
     codes = {item["code"] for item in result["findings"]}
     assert "config.reference_not_applicable" in codes
     assert "config.validation_receipt_missing" not in codes
+
+
+def test_request_content_digest_overrides_untrusted_metadata_digest() -> None:
+    digest = "2" * 64
+    request_input = {
+        "input_id": "completed_run_input",
+        "kind": "completed_run",
+        "content_sha256": digest,
+        "description": "Exact completed run.",
+        "required": True,
+    }
+    operations = compile_typed_operation_edges(
+        [
+            {
+                "operation_id": "inspect",
+                "capability_id": "oel.run.inspect.v1",
+                "depends_on": [],
+                "config_ref": None,
+                "parameters": {},
+                "bounds": {"max_cases": 1, "max_wall_time_s": 30.0},
+            }
+        ],
+        request_inputs=[request_input],
+        catalog=discovery_capability_catalog(),
+    )["operations"]
+    operations[0]["input_refs"][0]["metadata"]["content_sha256"] = "f" * 64
+
+    with pytest.raises(StudyEdgeCompilationError, match="edge.input_source_identity_mismatch"):
+        verify_typed_operation_edges(
+            operations,
+            request_inputs=[request_input],
+            catalog=discovery_capability_catalog(),
+        )
+
+
+def test_validated_scenario_consumer_cannot_skip_config_receipt_binding() -> None:
+    receipt, normalized = validate_config_path(
+        "scenario_main", ROOT / "configs" / "automation_smoke.yaml", workspace_root=ROOT
+    )
+    assert normalized is not None
+    plan = _load("passive_plan.json")
+    plan["operations"][1]["config_ref"] = "unvalidated_config"
+    result = preflight_study_plan(
+        _load("passive_request.json"),
+        plan,
+        catalog=discovery_capability_catalog(),
+        normalized_configs={"scenario_main": normalized},
+        config_receipts=[receipt],
+    )
+    codes = {item["code"] for item in result["findings"]}
+    assert "config.validation_receipt_missing" in codes
+
+
+def test_normalized_config_must_match_its_validation_receipt() -> None:
+    receipt, normalized = validate_config_path(
+        "scenario_main", ROOT / "configs" / "automation_smoke.yaml", workspace_root=ROOT
+    )
+    assert normalized is not None
+    tampered = deepcopy(normalized)
+    tampered["scenario_name"] = "tampered_after_validation"
+    result = preflight_study_plan(
+        _load("passive_request.json"),
+        _load("passive_plan.json"),
+        catalog=discovery_capability_catalog(),
+        normalized_configs={"scenario_main": tampered},
+        config_receipts=[receipt],
+    )
+    assert "config.normalized_digest_mismatch" in {item["code"] for item in result["findings"]}
+
+
+@pytest.mark.parametrize("resource_value", ["unknown", True, -1, 10**1000])
+def test_invalid_resource_metadata_is_reported_as_a_planning_finding(resource_value) -> None:
+    receipt, normalized = validate_config_path(
+        "scenario_main", ROOT / "configs" / "automation_smoke.yaml", workspace_root=ROOT
+    )
+    assert normalized is not None
+    plan = _load("passive_plan.json")
+    plan["operations"][1]["input_refs"][0]["metadata"]["input_bytes"] = resource_value
+    result = preflight_study_plan(
+        _load("passive_request.json"),
+        plan,
+        catalog=discovery_capability_catalog(),
+        normalized_configs={"scenario_main": normalized},
+        config_receipts=[receipt],
+    )
+    assert "edge.resource_metadata_invalid" in {item["code"] for item in result["findings"]}
 
 
 def test_preflight_rejects_an_operation_that_does_not_contribute_to_promised_evidence() -> None:

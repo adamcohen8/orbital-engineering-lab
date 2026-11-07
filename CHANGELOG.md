@@ -6,6 +6,107 @@ This project uses semantic versioning while it is pre-1.0: minor versions may
 still introduce API or workflow changes, and release notes should call out
 migration-sensitive behavior explicitly.
 
+## 0.36.0 - 2026-11-06
+
+- Transport complete signed installation inventories with bounded lossless
+  compression, retaining the existing 4 MiB metadata limit.
+- Migrate v0.31-v0.35 managed installations through the new official installer;
+  retain older engines without signed inventories for inspection.
+- Authenticate relocated wheel headers and verify each provisioned installer
+  profile against its signed runtime inventory before release signing.
+- Rebind authenticated command wrappers and their installed RECORD entries
+  when publishing a staged runtime, then verify the published runtime again.
+- Follow the public repository's required GitHub release redirects through
+  independently pinned HTTPS endpoints; retain redirect refusal elsewhere.
+- Check dependency consistency from installed metadata when a signed runtime
+  intentionally omits provisioning-time pip.
+
+- Resolve signed installer profiles with distribution-scoped dependency extras,
+  including explicit transitive extras without enabling unrelated optional sets.
+
+- Refresh the pinned RPO Duel deployment toolchain to Wrangler 4.158.0
+  and remove the reported transitive Undici advisories.
+
+- Preserve protected review and evidence-capsule reads on Python 3.10 using
+  verified snapshot bytes, a private immutable copy and SQLite backup into
+  memory when the interpreter lacks deserialize support.
+
+- Require patched setuptools 84.1 and filelock 4.2.1 on Python 3.11+;
+  Python 3.10 retains legacy functional compatibility without dependency
+  security qualification.
+
+- Advance the changed native orbit and Trainer runtimes to 0.18.4 and 0.5.1.
+
+- Improve Linux resource handling, protected output publication and numerical
+  parity while preserving existing validation tolerances.
+
+- Enforce authenticated wheel hashes in pip during signed offline runtime
+  installation, independently of source constraints.
+
+- Add experimental local-first `oel data` acquisition with OS credential
+  references, bounded Space-Track retrieval, retained historical coverage,
+  pinned EGM96/EGM2008 sources, EOP/weather preparation, licensed-file
+  registration, and input identity checks retained in deterministic run evidence.
+  Existing offline IO, physics and MCP network boundaries remain intact.
+
+- Preserve ideal-wrench physical clipping while excluding floating-point norm
+  boundary noise from saturation faults in both Python and Rust, preventing
+  false attitude isolation during the flagship RIC transfer.
+
+- Run reviewed independent local release checks concurrently with bounded
+  resource admission, isolated caches, serial barriers, and resumable evidence.
+
+- Bind CPython 3.14's Unicode interpreter alias in signed runtime inventories
+  and install authenticated wheel closures independently of source constraints.
+- Canonicalize rounded zero values in Trainer reference fixtures across hosts.
+- Preserve native/Python scalar arithmetic parity for actuator flow, screening
+  and SLR geometry; keep process covariance kernels invariant to row ordering.
+- Refresh current-host native and retained-GMAT replay evidence without
+  replacing historical qualification records, and improve plot title spacing.
+
+- Initialize position filters causally by default, with explicit velocity or
+  full-state priors and an opt-in, labeled batch initializer. Preserve raw
+  invalid Gaussian measurements with usability flags; reject conflicting FOV
+  definitions and unsupported native targeting integrators before execution.
+- Bind native FSW snapshots to verified host implementation identity. Keep
+  generated evidence timestamps opt-in, distinguish export time from missing
+  source time, and report bounded Trainer catch-up and dropped simulation time.
+- Use retained directory descriptors for protected input reads and durable
+  control records, with explicit trusted compatibility routes where supported.
+- Verify official managed source and runtime against signed release inventories
+  and externally anchored release keys before launch. Require explicit trusted
+  key rotation and re-verification of older installations.
+
+- Enforce documented plan-wide observation and station caps with exact-content
+  deduplication and fail-closed handling of incomplete count declarations.
+- Reject malformed trajectory, controller, actuator and covariance inputs;
+  preserve precise tracking epochs and consistent conjunction event states.
+- Preserve protected review artifacts across output-directory replacement,
+  bound review queries, verify complete animation decoding, and verify cached
+  hosted-result imports against their content identities.
+- Repair tiny-duration stepping and dynamic-history rollover; retain the
+  standalone OGP fallback when a full native wheel is unavailable.
+- Strengthen installer, FSW-package and hosted-job recovery integrity.
+
+- Fix mission attitude fallbacks, non-Earth element targets, sensor timing,
+  and per-object final review queries; reject malformed orbital, geometry,
+  and native-backend inputs before computation.
+- Harden workspace imports and bind FSW test evidence to the unchanged
+  candidate identity.
+- Harden installer archive destinations and managed source selection; improve
+  Pro checkpoint recovery, input validation and evidence reporting.
+
+- Make bounded Rust OGP-SGP4/SDP4 propagation threads public within one
+  simulation through `simulator.execution.ogp_parallelism`, with a buildable
+  OGP-only Rust extension and a mixed LEO/GEO example. ONP object workers,
+  campaigns, Monte Carlo and hierarchical scheduling remain Pro.
+
+- Extend public FSW authoring to trusted local C, C++, and Rust candidates with
+  a shared typed stdio boundary, editable ADCS/RPO SDK starters, offline native
+  builds, native component tests, source/binary-bound receipts, and bounded
+  Controller Bench, tuning, and qualification retain their Pro scope. Native
+  execution evidence is host-specific and does not establish flight readiness.
+
 ## 0.35.0 - 2026-10-21
 
 - Require Pillow 13 for Python 3.11-3.14 core and media profiles to address eight

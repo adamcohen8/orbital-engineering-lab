@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Event
 from unittest.mock import patch
@@ -9,6 +11,7 @@ from unittest.mock import patch
 import pytest
 import yaml
 
+from integrations.oel_mcp.approval_grants import ApprovalGrant, ApprovalGrantStore, canonical_request_digest
 from integrations.oel_mcp.execution import ExecutionApprovalPolicy, bounded_config_path_policy
 from integrations.oel_mcp.policy import MCPPathPolicy
 from integrations.oel_mcp.public_handlers import PublicOELMCPHandlers
@@ -105,6 +108,48 @@ def test_mcp_config_policy_does_not_union_repository_or_config_roots(tmp_path: P
     prompt.write_text("prompt", encoding="utf-8")
     with pytest.raises(ConfigPathSecurityError):
         bounded.resolve_ai_prompt_file(prompt, purpose="AI prompt")
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS compatibility aliases are platform-specific")
+@pytest.mark.parametrize(
+    ("alias_root", "canonical_root"),
+    ((Path("/tmp"), Path("/private/tmp")), (Path("/var"), Path("/private/var"))),
+)
+def test_mcp_write_policy_accepts_mac_compatibility_alias(
+    alias_root: Path,
+    canonical_root: Path,
+) -> None:
+    configured_root = alias_root / "oel-mcp-policy-alias-regression"
+    policy = MCPPathPolicy.configured(write_roots=(configured_root,))
+
+    assert policy.resolve_write(configured_root / "new-output") == (
+        canonical_root / "oel-mcp-policy-alias-regression" / "new-output"
+    )
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS compatibility aliases are platform-specific")
+def test_mcp_write_policy_accepts_mac_compatibility_alias_without_following_descendants(
+    tmp_path: Path,
+) -> None:
+    """Configured /private roots and lexical /var aliases must agree safely."""
+
+    resolved_root = tmp_path.resolve()
+    private_var = Path("/private/var")
+    try:
+        relative_root = resolved_root.relative_to(private_var)
+    except ValueError:
+        pytest.skip("pytest temporary roots are not under the macOS /private/var alias")
+
+    alias_root = Path("/var") / relative_root
+    policy = MCPPathPolicy.configured(write_roots=(alias_root,))
+    assert policy.resolve_write(alias_root / "new-output") == resolved_root / "new-output"
+
+    outside = tmp_path.parent / "mcp-alias-outside"
+    outside.mkdir()
+    redirected = tmp_path / "redirected"
+    redirected.symlink_to(outside, target_is_directory=True)
+    with pytest.raises(PermissionError):
+        policy.resolve_write(alias_root / "redirected" / "artifact.json")
 
 
 def test_plan_validate_and_run_require_external_approval_and_bound_identity(tmp_path: Path) -> None:
@@ -224,6 +269,56 @@ def test_plan_validate_and_run_require_external_approval_and_bound_identity(tmp_
     )
     assert tampered_packet["status"] == "failed"
     assert "artifact records do not match" in tampered_packet["error"]["message"]
+
+
+def test_bounded_resource_ceiling_rejects_before_public_run_output_creation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A host-computed ceiling must stop an effect before its output root exists."""
+
+    validation_handlers = _handlers(tmp_path)
+    scenario = _scenario_arguments(tmp_path, "bounded-run")
+    validated = validation_handlers.validate_scenario(
+        **scenario,
+        trust_plugins=True,
+        trust_approval=TRUST_APPROVAL,
+    )
+    validation_id = validated["result"]["identity"]["validation_id"]
+    assert validated["status"] == "completed"
+
+    approval = {"approval_id": "bounded-execute", "scope": "execute"}
+    run_arguments = {
+        **scenario,
+        "validation_id": validation_id,
+        "trust_approval": TRUST_APPROVAL,
+        "approval": approval,
+    }
+    grant = ApprovalGrant(
+        grant_id="bounded-execute",
+        scopes=frozenset({"execute"}),
+        tool_ids=frozenset({"oel.run_scenario.v1"}),
+        reviewed_arguments_sha256=canonical_request_digest("oel.run_scenario.v1", run_arguments),
+        resource_ceiling={"runs": 0},
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+    ledger_root = tmp_path.parent / "bounded-resource-private-ledger"
+    monkeypatch.setenv("OEL_MCP_OPERATION_LEDGER_ROOT", str(ledger_root))
+    bounded_handlers = PublicOELMCPHandlers(
+        read_roots=(ROOT, tmp_path),
+        write_roots=(tmp_path,),
+        approval_policy=ExecutionApprovalPolicy(
+            trust_approval_ids=frozenset({TRUST_APPROVAL["approval_id"]}),
+            grant_store=ApprovalGrantStore([grant]),
+        ),
+    )
+
+    result = bounded_handlers.run_scenario(**run_arguments)
+
+    assert result["status"] == "failed"
+    assert result["error"]["type"] == "ApprovalGrantMismatch"
+    assert "runs ceiling" in result["error"]["message"]
+    assert not Path(str(scenario["output_dir"])).exists()
 
 
 def test_m5_2_completed_run_product_export_and_inspection(tmp_path: Path) -> None:
@@ -464,8 +559,8 @@ def test_partial_plot_writes_incomplete_manifest(tmp_path: Path) -> None:
             handling=HANDLING,
         )
 
+    assert plot["status"] == "partial", json.dumps(plot, indent=2)
     manifest = json.loads((review / "mcp_plots" / "failed_plot.manifest.json").read_text(encoding="utf-8"))
-    assert plot["status"] == "partial"
     assert manifest["status"] == "partial"
     assert manifest["artifacts"] == []
     assert manifest["artifacts_complete"] is False

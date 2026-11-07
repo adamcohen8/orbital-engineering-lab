@@ -2,6 +2,7 @@
 
 from .candidate import CandidateValidationError, inspect_candidate, load_candidate, validate_candidate
 from .contracts import AUTHORING_CONTRACT_VERSION, AuthoringIssue, AuthoringReceipt, FlightSoftwareCandidate
+from .native import build_candidate
 from .services import (
     describe_capabilities,
     doctor,
@@ -20,6 +21,7 @@ __all__ = [
     "CandidateValidationError",
     "FlightSoftwareCandidate",
     "describe_capabilities",
+    "build_candidate",
     "doctor",
     "init_candidate",
     "inspect_candidate",

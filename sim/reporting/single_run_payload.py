@@ -395,6 +395,17 @@ def build_single_run_payload(context: SingleRunPayloadContext) -> dict[str, Any]
         "plot_outputs": {},
         "animation_outputs": {},
     }
+    if dict(getattr(context.cfg, "metadata", {}) or {}).get("acquisition_inputs"):
+        from sim.data_acquisition.binding import verify_config
+
+        summary["acquisition_provenance"] = verify_config(context.cfg)
+        if context.cfg.metadata.get("acquisition_source_receipts"):
+            from sim.data_acquisition.contracts import strict_json
+
+            summary["acquisition_source_receipts"] = {
+                identity: strict_json(record["receipt_json"])
+                for identity, record in context.cfg.metadata["acquisition_source_receipts"].items()
+            }
     reentry_summary = _summarize_reentry_metrics(t_s=context.t_s, reentry_metrics=context.reentry_metrics)
     if reentry_summary:
         summary["reentry_summary_by_object"] = reentry_summary

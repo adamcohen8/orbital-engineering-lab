@@ -5,7 +5,8 @@ Engineering Lab. OEL supports CPython 3.10 through 3.14 on its declared Windows,
 macOS, and Linux compatibility targets. Python 3.14 is recommended.
 
 Python 3.10 retains legacy functional compatibility with Pillow 12.3.0, whose
-known advisories block dependency security qualification, including core, media
+known advisories, together with the legacy filelock used by ML/full profiles,
+block dependency security qualification, including core, media
 and full profiles. Use Python 3.11 or newer with Pillow 13 for the current
 dependency security baseline.
 No Python 3.10 managed bundle or clean-audit claim is provided. See
@@ -13,24 +14,27 @@ No Python 3.10 managed bundle or clean-audit claim is provided. See
 
 ## Managed Installation
 
-The v0.35.0 managed bundle is qualified for macOS arm64 with CPython 3.11.
+The v0.36.0 managed bundle is qualified for macOS arm64 with CPython 3.11.
 The signed bootstrap selects that installed Python minor, downloads the
 versioned GitHub bundle, verifies its manifest and every dependency wheel,
 and installs without consulting a package index. Install CPython 3.11 first
 if it is unavailable. The engine's broader Python compatibility and the
 Windows/Linux native diagnostic results do not qualify this managed bundle
-for those other targets.
+for those other targets. Linux, Windows, and Intel Mac users should follow
+[Developer Source Installation](#developer-source-installation) and
+[Building public native source](native-source-build.md).
 
-For an existing v0.32.0, v0.33.0 or v0.33.1 managed installation, run `oel update install latest`
-then `oel update activate 0.35.0`. This preserves the previously active version for rollback.
+For an existing v0.31.0 through v0.35.0 managed installation, rerun the official
+installer below with the same data and config roots. Use `--profile <profile>`
+to retain a nondefault dependency profile. The v0.36 trust transition uses the
+new installer to verify the signed source/runtime inventories and
+publish the trusted launcher. Earlier updaters predate this provisioning
+contract. Workspace files and pins remain unchanged. Older engines remain on
+disk for inspection; releases without signed inventories cannot serve as
+authenticated rollback targets under the new launcher.
 
-For an existing v0.31.0 managed installation using Python 3.11, download
-`oel-public-0.35.0-arm64-py311.bundle.zip` from the official v0.35.0 release,
-then run `oel update install-bundle <downloaded-bundle> --profile game`
-and `oel update activate 0.35.0`. This preserves the older version for
-rollback. The v0.31 updater's online `install latest` path predates bundled
-native dependencies; use this bundle route or rerun the official installer.
-From v0.32 onward, online updates fetch and verify the declared bundle wheels.
+After this migration, the v0.36 managed launcher supports the ordinary
+`oel update install latest` and explicit activation workflow.
 
 An official public release publishes a small `install.sh`, `install.ps1`,
 signed `release-manifest.json`, source artifact, and offline bundle as immutable
@@ -71,7 +75,14 @@ The bootstrap requires an existing supported CPython. It verifies the embedded
 bootstrap digest, signed release manifest, artifact size and SHA-256, and safe
 archive shape before importing release code. It installs immutable versions
 side by side under platform-native application data and writes a stable
-launcher. The rendered installer also records the official signed-channel URL
+launcher. The stable launcher runs an external stdlib-only verifier before it
+imports the selected managed version; source/runtime inventories reject
+pre-existing Python bytecode caches, and provisioning uses `pip --no-compile`.
+Official runtime provisioning passes each signed wheel's authenticated SHA-256
+to `pip --require-hashes`, independently of source constraints. CPython 3.14's
+optional `𝜋thon` alias is bound to the interpreter provider in the signed
+runtime inventory and verified along with the ordinary interpreter aliases.
+The rendered installer also records the official signed-channel URL
 beside OEL's trusted release keys, so future update checks do not require users
 to copy URLs or key paths. The channel URL locates signed metadata; it is not a
 replacement trust root. The bootstrap does not edit a workspace.
@@ -107,6 +118,11 @@ oel --workspace path/to/my-oel-workspace review outputs/quickstart_5min --saved-
 | Ubuntu 22.04 or 24.04 | x64 | Ubuntu 22.04/24.04 x64 | Ubuntu 22.04 x64 |
 | macOS 14 or newer | arm64 or x64 | macOS 14+ arm64/x64 | macOS 15 arm64 and Intel diagnostics |
 
+On other Linux x64/arm64 distributions, doctor warns about missing host
+qualification and attempts functional runtime checks. Passing those checks does
+not qualify that host or admit a signed bundle built for another host. Other
+unsupported OS/architecture combinations remain failures.
+
 Admission and package metadata are not release evidence. A claim for a row
 requires its retained packet; external integrations remain separately
 qualified.
@@ -118,9 +134,10 @@ workspace adoption are separate operations by design.
 ## Developer Source Installation
 
 Source installations require native wheels built from the bundled Rust crates.
-Install Rust first. In the platform steps below, create the virtual environment
-and upgrade pip, then follow [Building public native source](native-source-build.md)
-with that same environment before the `pip install ".[dev]"` step.
+The platform blocks below create the environment, build both wheels, and install
+OEL with the matching constraints. See
+[Building public native source](native-source-build.md) for native tests and
+offline build guidance.
 The signed managed bundle already contains its qualified native wheels.
 
 ### Get The Source
@@ -137,6 +154,9 @@ directory containing `pyproject.toml` and `run_simulation.py`.
 The Python distribution is named `orbital-engineering-lab`. Existing checkout
 URLs and `oel` command names remain usable during the repository transition.
 
+Source installation requires Rust/Cargo 1.85 or newer and Maturin. Both native
+wheels must be built locally before installing OEL; they are not on PyPI.
+
 ## Windows PowerShell
 
 List the Python installations known to the Windows Python launcher:
@@ -151,7 +171,10 @@ minor, then create, install, diagnose, and run OEL with that same interpreter:
 ```powershell
 py -3.14 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
-.\.venv\Scripts\python.exe -m pip install ".[dev]"
+.\.venv\Scripts\python.exe -m pip install "maturin>=1.10,<2"
+.\.venv\Scripts\python.exe -m maturin build --release --locked --manifest-path rust/oel-orbit/Cargo.toml --interpreter .\.venv\Scripts\python.exe --out dist/native
+.\.venv\Scripts\python.exe -m maturin build --release --locked --manifest-path rust/oel-game/Cargo.toml --interpreter .\.venv\Scripts\python.exe --out dist/native
+.\.venv\Scripts\python.exe -m pip install -c constraints\py314.txt --find-links dist/native ".[dev]"
 .\.venv\Scripts\python.exe run_simulation.py --doctor
 .\.venv\Scripts\python.exe run_simulation.py --quickstart
 ```
@@ -167,7 +190,10 @@ Select a supported interpreter installed on the host:
 ```bash
 python3.14 -m venv .venv
 .venv/bin/python -m pip install --upgrade pip
-.venv/bin/python -m pip install ".[dev]"
+.venv/bin/python -m pip install "maturin>=1.10,<2"
+.venv/bin/python -m maturin build --release --locked --manifest-path rust/oel-orbit/Cargo.toml --interpreter .venv/bin/python --out dist/native
+.venv/bin/python -m maturin build --release --locked --manifest-path rust/oel-game/Cargo.toml --interpreter .venv/bin/python --out dist/native
+.venv/bin/python -m pip install -c constraints/py314.txt --find-links dist/native ".[dev]"
 .venv/bin/python run_simulation.py --doctor
 .venv/bin/python run_simulation.py --quickstart
 ```
@@ -203,14 +229,16 @@ OEL maintains one approved constraints file per supported minor:
 | 3.13 | `constraints/py313.txt` |
 | 3.14 | `constraints/py314.txt` |
 
-Use the matching file when you need the approved cross-platform dependency
-graph or release-compatible evidence.
+Use the matching file for the first OEL install and subsequent profile changes.
+When choosing another Python minor, replace `py314.txt` in every install command
+with its matching file. The commands below reuse the native wheels built above;
+rebuild them if you change host or interpreter compatibility.
 
 PowerShell:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install --only-binary=:all: `
-  -c constraints/py314.txt ".[cross-platform]"
+  -c constraints/py314.txt --find-links dist/native ".[cross-platform]"
 .\.venv\Scripts\python.exe -m pip check
 ```
 
@@ -218,7 +246,7 @@ POSIX:
 
 ```bash
 .venv/bin/python -m pip install --only-binary=:all: \
-  -c constraints/py314.txt ".[cross-platform]"
+  -c constraints/py314.txt --find-links dist/native ".[cross-platform]"
 .venv/bin/python -m pip check
 ```
 
@@ -263,7 +291,7 @@ for the current platform.
 
 ## Native numeric runtime
 
-Version 0.35.0 requires matching `oel-rust-orbit` >=0.18.3,<0.19 and `oel-rust-game`
+Version 0.36.0 requires matching `oel-rust-orbit` >=0.18.3,<0.19 and `oel-rust-game`
 0.5.x wheels for core installation and runtime-built flight-software stacks. Source
 installations must first install wheels built for their host from the native
 crates; signed offline bundles retain the exact qualified wheel inventory.
@@ -279,6 +307,7 @@ Choose only the profile required by the workflow:
 | Command | Purpose |
 | --- | --- |
 | `python -m pip install .` | Core CLI, YAML/API runtime, plotting, and review store |
+| `python -m pip install ".[acquisition]"` | Experimental local data connections with an OS credential backend; public downloads and local registration also work without the extra |
 | `python -m pip install ".[dev]"` | Core plus tests and Ruff |
 | `python -m pip install ".[game]"` | RPO trainer, native Rust backend, and media dependencies |
 | `python -m pip install ".[accel]"` | Separately qualified Numba acceleration |
@@ -289,6 +318,29 @@ Choose only the profile required by the workflow:
 
 See [Compatibility And Install Profiles](compatibility.md) before using
 acceleration, ML, `full`, or an external integration as support evidence.
+
+### CPU-only Linux ML environments
+
+For a Linux host without an NVIDIA GPU, install the official CPU build of the
+approved Torch version before adding `.[ml]` or `.[full]`. The default PyPI
+Torch build can pull CUDA packages that are unnecessary on a CPU-only host;
+some of those packages can also fail platform checks on Linux ARM64.
+
+From the source root, after building the native wheels, use:
+
+```bash
+.venv/bin/python -m pip install "torch==2.13.0+cpu" \
+  --index-url https://download.pytorch.org/whl/cpu
+.venv/bin/python -m pip install -c constraints/py312.txt \
+  --find-links dist/native ".[full]"
+.venv/bin/python -m pip check
+```
+
+This example uses Python 3.12; select the matching constraints file for another
+supported minor. Keep the CPU index limited to the Torch installation command.
+The installed CPU build satisfies OEL's bounded Torch requirement. It does not
+qualify CUDA, model inference, or an additional operating-system/architecture
+target. See the [official PyTorch wheel index](https://download.pytorch.org/whl/cpu/torch/).
 
 ## Classroom Or Restricted Environment Check
 

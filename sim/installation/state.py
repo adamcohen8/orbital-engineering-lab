@@ -11,7 +11,125 @@ from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Any
 
+from sim.platform_compat import canonicalize_platform_compatibility_root as _canonicalize_platform_root
+from sim.security.output_writes import SecureWriteRoot, secure_write_primitives_available
+
 from .contracts import INSTALLATION_STATE_SCHEMA
+
+
+def secure_state_write_available() -> bool:
+    """Return whether descriptor-relative state replacement is available."""
+
+    return secure_write_primitives_available() and os.rename in getattr(os, "supports_dir_fd", set())
+
+
+def _atomic_write_text_descriptor_bound(
+    path: str | Path,
+    text: str,
+    *,
+    approved_root: str | Path,
+) -> Path:
+    """Replace one installer-owned file through a retained parent descriptor.
+
+    This is intentionally opt-in for installer state and launchers.  The
+    legacy path-only helpers below remain available for workspace/CLI callers
+    and for hosts without POSIX descriptor primitives.
+    """
+
+    destination = Path(path)
+    if not secure_state_write_available():
+        return atomic_write_text(destination, text)
+    secure_destination = _canonicalize_platform_root(destination)
+    secure_approved_root = _canonicalize_platform_root(Path(approved_root))
+    temporary_name: str | None = None
+    temporary_fd: int | None = None
+    with SecureWriteRoot.open(
+        secure_destination.parent,
+        approved_roots=(secure_approved_root,),
+        create=True,
+    ) as parent:
+        try:
+            temporary_name = f".{destination.name}.{uuid.uuid4().hex}.tmp"
+            temporary_fd = os.open(
+                temporary_name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+                dir_fd=parent.fd,
+            )
+            with os.fdopen(temporary_fd, "w", encoding="utf-8") as stream:
+                temporary_fd = None
+                stream.write(text)
+                stream.flush()
+                os.fsync(stream.fileno())
+            # ``rename`` is in supports_dir_fd on POSIX and has the required
+            # same-directory replacement semantics without following a
+            # destination symlink.
+            os.rename(
+                temporary_name,
+                secure_destination.name,
+                src_dir_fd=parent.fd,
+                dst_dir_fd=parent.fd,
+            )
+            os.fsync(parent.fd)
+            temporary_name = None
+            return destination
+        finally:
+            if temporary_fd is not None:
+                try:
+                    os.close(temporary_fd)
+                except OSError:
+                    pass
+            if temporary_name is not None:
+                try:
+                    os.unlink(temporary_name, dir_fd=parent.fd)
+                except OSError:
+                    pass
+
+
+def atomic_write_text_descriptor_bound(
+    path: str | Path,
+    text: str,
+    *,
+    approved_root: str | Path,
+) -> Path:
+    """Write installer-owned text with a retained parent when supported."""
+
+    return _atomic_write_text_descriptor_bound(path, text, approved_root=approved_root)
+
+
+def atomic_write_json_descriptor_bound(
+    path: str | Path,
+    payload: dict[str, Any],
+    *,
+    approved_root: str | Path,
+) -> Path:
+    """Serialize installer-owned JSON and replace it through a retained parent."""
+
+    text = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    return _atomic_write_text_descriptor_bound(path, text, approved_root=approved_root)
+
+
+def unlink_descriptor_bound(path: str | Path, *, approved_root: str | Path) -> None:
+    """Remove one installer-owned leaf relative to a retained parent."""
+
+    destination = Path(path)
+    if not secure_state_write_available():
+        destination.unlink(missing_ok=True)
+        return
+    secure_destination = _canonicalize_platform_root(destination)
+    secure_approved_root = _canonicalize_platform_root(Path(approved_root))
+    try:
+        with SecureWriteRoot.open(
+            secure_destination.parent,
+            approved_roots=(secure_approved_root,),
+            create=False,
+        ) as parent:
+            try:
+                os.unlink(secure_destination.name, dir_fd=parent.fd)
+            except FileNotFoundError:
+                pass
+    except FileNotFoundError:
+        pass
 
 
 def atomic_write_json(path: str | Path, payload: dict[str, Any]) -> Path:

@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
 
 from sim.fsw_authoring import inspect_candidate
+from sim.fsw_authoring import services as authoring_services
 from sim.fsw_authoring.services import (
     describe_capabilities,
     init_candidate,
@@ -31,7 +33,7 @@ def test_public_authoring_capabilities_stop_before_private_verification() -> Non
 
     assert capabilities["product"] == "OEL Public FSW Authoring Kit"
     assert {item["id"] for item in capabilities["templates"]} == {"adcs", "rpo"}
-    assert capabilities["candidate_kinds"] == ["python_stack"]
+    assert capabilities["candidate_kinds"] == ["python_stack", "native_stack"]
     assert "controller_bench" in capabilities["private_operations"]
     assert "qualification" in capabilities["private_operations"]
     assert "cfs" + "_sil" in capabilities["private_operations"]
@@ -127,6 +129,65 @@ def test_public_authoring_adcs_lifecycle_tests_smoke_and_receipt_currentness(tmp
     stale = verify_receipt(receipt_path, workspace_root=tmp_path)
     assert stale["status"] == "failed"
     assert stale["candidate_current"] is False
+
+
+def test_component_tests_reject_source_changed_during_execution(tmp_path: Path, monkeypatch) -> None:
+    manifest = _scaffold(tmp_path, name="changing_tests")
+    validated = validate_candidate_service(
+        manifest,
+        workspace_root=tmp_path,
+        trusted_import=True,
+        write_receipt=False,
+    )
+    source = next(manifest.parent.joinpath("stacks").glob("*_stack.py"))
+    original = source.read_text(encoding="utf-8")
+
+    def fake_run(*_args, **_kwargs):
+        source.write_text(original + "\n# changed while tests were running\n", encoding="utf-8")
+        return {"command": ["pytest"], "returncode": 0, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(authoring_services, "_run_subprocess", fake_run)
+    try:
+        with pytest.raises(PermissionError, match="identity changed during execution"):
+            run_contract_tests(
+                manifest,
+                workspace_root=tmp_path,
+                output_dir=tmp_path / "test-output",
+                validation_id=validated["result"]["validation_id"],
+            )
+    finally:
+        source.write_text(original, encoding="utf-8")
+
+
+def test_smoke_rejects_source_changed_during_execution(tmp_path: Path, monkeypatch) -> None:
+    manifest = _scaffold(tmp_path, name="changing_smoke")
+    validated = validate_candidate_service(
+        manifest,
+        workspace_root=tmp_path,
+        trusted_import=True,
+        write_receipt=False,
+    )
+    source = next(manifest.parent.joinpath("stacks").glob("*_stack.py"))
+    original = source.read_text(encoding="utf-8")
+
+    def fake_run(_workspace, _scenario):
+        source.write_text(original + "\n# changed while smoke was running\n", encoding="utf-8")
+        return SimpleNamespace(
+            payload={"output_dir": str(tmp_path / "smoke-output" / "run")},
+            summary={"samples": 1},
+        )
+
+    monkeypatch.setattr(authoring_services.SimulationWorkspace, "run", fake_run)
+    try:
+        with pytest.raises(PermissionError, match="identity changed during execution"):
+            run_smoke(
+                manifest,
+                workspace_root=tmp_path,
+                output_dir=tmp_path / "smoke-output",
+                validation_id=validated["result"]["validation_id"],
+            )
+    finally:
+        source.write_text(original, encoding="utf-8")
 
 
 def test_public_rpo_scaffold_passes_trusted_contract_validation(tmp_path: Path) -> None:

@@ -40,6 +40,32 @@ def _box_mesh(lx_m: float, ly_m: float, lz_m: float) -> tuple[np.ndarray, np.nda
 
 
 class TestRectangularPrismCoupling(unittest.TestCase):
+    def test_prism_rejects_nonfinite_dimensions(self):
+        for bad_dimension in (np.nan, np.inf, -np.inf):
+            with self.subTest(bad_dimension=bad_dimension):
+                with self.assertRaises(ValueError):
+                    RectangularPrismGeometry(bad_dimension, 1.0, 1.0)
+
+    def test_geometry_profile_rejects_nonfinite_mesh_inputs(self):
+        triangles = np.array(
+            [[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]],
+            dtype=float,
+        )
+        directions = np.array([[1.0, 0.0, 0.0]], dtype=float)
+
+        bad_triangles = triangles.copy()
+        bad_triangles[0, 1, 2] = np.nan
+        with self.assertRaises(ValueError):
+            GeometryAreaProfile.from_triangles(bad_triangles, directions_body=directions)
+
+        bad_normals = np.array([[np.inf, 0.0, 1.0]], dtype=float)
+        with self.assertRaises(ValueError):
+            GeometryAreaProfile.from_triangles(
+                triangles,
+                bad_normals,
+                directions_body=directions,
+            )
+
     def test_projected_area_matches_expected_faces(self):
         g = RectangularPrismGeometry(lx_m=2.0, ly_m=3.0, lz_m=4.0)
         self.assertAlmostEqual(g.projected_area_m2(np.array([1.0, 0.0, 0.0])), 12.0, places=12)

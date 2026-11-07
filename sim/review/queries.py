@@ -63,21 +63,24 @@ SAVED_REVIEW_QUERIES: dict[str, SavedReviewQuery] = {
         name="passive_final_state",
         description="Compatibility alias for final ECI state; the run may be passive or controlled.",
         sql=(
-            "SELECT object_id, time_s, pos_x_eci_km, pos_y_eci_km, pos_z_eci_km, "
-            "vel_x_eci_km_s, vel_y_eci_km_s, vel_z_eci_km_s FROM object_state "
-            "WHERE sample_index = (SELECT MAX(sample_index) FROM object_state) "
-            "ORDER BY object_id"
+            "WITH bounds AS (SELECT object_id, MAX(sample_index) AS last_i FROM object_state "
+            "GROUP BY object_id) SELECT s.object_id, s.time_s, s.pos_x_eci_km, s.pos_y_eci_km, "
+            "s.pos_z_eci_km, s.vel_x_eci_km_s, s.vel_y_eci_km_s, s.vel_z_eci_km_s "
+            "FROM object_state s JOIN bounds b ON s.object_id = b.object_id "
+            "AND s.sample_index = b.last_i ORDER BY s.object_id"
         ),
     ),
     "object_final_state": SavedReviewQuery(
         name="object_final_state",
         description="Final ECI state with derived radius and speed for every object.",
         sql=(
-            "SELECT s.object_id, s.time_s, s.pos_x_eci_km, s.pos_y_eci_km, s.pos_z_eci_km, "
-            "s.vel_x_eci_km_s, s.vel_y_eci_km_s, s.vel_z_eci_km_s, "
+            "WITH bounds AS (SELECT object_id, MAX(sample_index) AS last_i FROM object_state "
+            "GROUP BY object_id) SELECT s.object_id, s.time_s, s.pos_x_eci_km, s.pos_y_eci_km, "
+            "s.pos_z_eci_km, s.vel_x_eci_km_s, s.vel_y_eci_km_s, s.vel_z_eci_km_s, "
             "e.radius_km, e.speed_km_s FROM object_state s "
+            "JOIN bounds b ON s.object_id = b.object_id AND s.sample_index = b.last_i "
             "LEFT JOIN object_orbital_elements e USING (sample_index, time_s, object_id) "
-            "WHERE s.sample_index = (SELECT MAX(sample_index) FROM object_state) ORDER BY s.object_id"
+            "ORDER BY s.object_id"
         ),
     ),
     "object_eci_radius_extrema": SavedReviewQuery(
@@ -169,10 +172,12 @@ SAVED_REVIEW_QUERIES: dict[str, SavedReviewQuery] = {
         name="relative_final_state",
         description="Final relative-state sample.",
         sql=(
-            "SELECT time_s, deputy_id, chief_id, r_radial_km, i_intrack_km, "
-            "c_crosstrack_km, range_km, range_rate_km_s FROM relative_state "
-            "WHERE sample_index = (SELECT MAX(sample_index) FROM relative_state) "
-            "ORDER BY deputy_id, chief_id"
+            "WITH bounds AS (SELECT deputy_id, chief_id, MAX(sample_index) AS last_i "
+            "FROM relative_state GROUP BY deputy_id, chief_id) SELECT r.time_s, r.deputy_id, "
+            "r.chief_id, r.r_radial_km, r.i_intrack_km, r.c_crosstrack_km, r.range_km, "
+            "r.range_rate_km_s FROM relative_state r JOIN bounds b "
+            "ON r.deputy_id = b.deputy_id AND r.chief_id = b.chief_id "
+            "AND r.sample_index = b.last_i ORDER BY r.deputy_id, r.chief_id"
         ),
     ),
     "burn_activity": SavedReviewQuery(

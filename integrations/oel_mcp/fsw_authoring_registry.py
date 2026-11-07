@@ -15,6 +15,7 @@ FSW_AUTHORING_TOOL_IDS = (
     "oel.fsw.run_candidate_tests.v1",
     "oel.fsw.run_candidate_smoke.v1",
     "oel.fsw.verify_receipt.v1",
+    "oel.fsw.build_candidate.v1",
 )
 
 FSW_AUTHORING_TRUST_TOOL_IDS = frozenset(
@@ -22,6 +23,7 @@ FSW_AUTHORING_TRUST_TOOL_IDS = frozenset(
         "oel.fsw.validate_candidate.v1",
         "oel.fsw.run_candidate_tests.v1",
         "oel.fsw.run_candidate_smoke.v1",
+        "oel.fsw.build_candidate.v1",
     }
 )
 
@@ -31,6 +33,10 @@ _APPROVAL = object_schema(
     {
         "approval_id": {"type": "string", "minLength": 1, "maxLength": 120},
         "scope": {"type": "string", "enum": ["trust", "write", "execute"]},
+        "operation_id": {
+            "type": "string", "minLength": 1, "maxLength": 160,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$",
+        },
     },
     required=("approval_id", "scope"),
 )
@@ -62,7 +68,8 @@ def _contract(
         input_schema=object_schema(handling_properties(properties), required=(*required, "handling")),
         result_schema=_RESULT,
         limits={
-            "public_python_stack_only": True,
+            "public_python_stack_only": False,
+            "candidate_kinds": ["python_stack", "native_stack"],
             "hidden_truth_access": False,
             "private_orchestration": False,
             "new_output_required": writes,
@@ -99,7 +106,7 @@ FSW_AUTHORING_TOOL_CONTRACTS: tuple[ToolContract, ...] = (
         api="sim.fsw_authoring.plan_workflow",
         properties={
             "manifest_path": _PATH,
-            "operation": {"enum": ["validate", "test", "smoke"]},
+            "operation": {"enum": ["validate", "test", "smoke", "build"]},
             "output_dir": _PATH,
         },
         required=("manifest_path", "operation"),
@@ -112,6 +119,7 @@ FSW_AUTHORING_TOOL_CONTRACTS: tuple[ToolContract, ...] = (
         properties={
             "name": {"type": "string", "minLength": 1, "maxLength": 80},
             "template": {"enum": ["adcs", "rpo"]},
+            "language": {"enum": ["python", "c", "cpp", "rust"]},
             "output_dir": _PATH,
             "class_name": {"type": "string", "minLength": 1, "maxLength": 120},
             "approval": _APPROVAL,
@@ -173,6 +181,22 @@ FSW_AUTHORING_TOOL_CONTRACTS: tuple[ToolContract, ...] = (
         api="sim.fsw_authoring.verify_receipt",
         properties={"receipt_path": _PATH},
         required=("receipt_path",),
+    ),
+    _contract(
+        tool_id=FSW_AUTHORING_TOOL_IDS[8],
+        title="Build a trusted public native FSW candidate",
+        description="Build reviewed native source offline with fixed local toolchain commands and bind the executable identity.",
+        api="sim.fsw_authoring.build_candidate",
+        properties={
+            "manifest_path": _PATH,
+            "output_dir": _PATH,
+            "trusted_build": {"const": True},
+            "trust_approval": _APPROVAL,
+            "approval": _APPROVAL,
+        },
+        required=("manifest_path", "output_dir", "trusted_build", "trust_approval", "approval"),
+        writes=True,
+        executes=True,
     ),
 )
 

@@ -47,6 +47,8 @@ mod nrlmsise00_stage;
 #[cfg(feature = "python")]
 mod numeric_bytes;
 #[cfg(feature = "python")]
+mod ogp_python;
+#[cfg(feature = "python")]
 pub mod output;
 pub mod ogp;
 pub mod passive;
@@ -296,48 +298,6 @@ mod python {
             .map_err(|_| PyValueError::new_err(format!("{name} must have {N} values")))
     }
 
-    #[pyfunction]
-    fn ogp_propagate_batch_bytes(
-        py: Python<'_>,
-        element_bytes: &[u8],
-        time_bytes: &[u8],
-        samples_per_object: usize,
-    ) -> PyResult<(Py<PyBytes>, Py<PyBytes>, Vec<(usize, String)>)> {
-        let elements = decode_f64_bytes(element_bytes)?;
-        let times = decode_f64_bytes(time_bytes)?;
-        let result = py
-            .detach(|| ogp::propagate_batch(&elements, &times, samples_per_object))
-            .map_err(PyValueError::new_err)?;
-        Ok((
-            output_bytes(py, &result.positions)?,
-            output_bytes(py, &result.velocities)?,
-            result.errors,
-        ))
-    }
-
-    #[pyfunction]
-    fn ogp_propagate_batch_parallel_bytes(
-        py: Python<'_>,
-        element_bytes: &[u8],
-        time_bytes: &[u8],
-        samples_per_object: usize,
-        workers: usize,
-    ) -> PyResult<(Py<PyBytes>, Py<PyBytes>, Vec<(usize, String)>, usize)> {
-        let elements = decode_f64_bytes(element_bytes)?;
-        let times = decode_f64_bytes(time_bytes)?;
-        let result = py
-            .detach(|| {
-                ogp::propagate_batch_with_workers(&elements, &times, samples_per_object, workers)
-            })
-            .map_err(PyValueError::new_err)?;
-        Ok((
-            output_bytes(py, &result.positions)?,
-            output_bytes(py, &result.velocities)?,
-            result.errors,
-            result.workers_used,
-        ))
-    }
-
     #[pyclass(name = "OGPObservationBatch")]
     struct OgpObservationBatch {
         batch: ogp::ObservationBatch,
@@ -372,99 +332,6 @@ mod python {
                 .detach(|| self.batch.residuals(elements))
                 .map_err(PyValueError::new_err)?;
             output_bytes(py, &result)
-        }
-    }
-
-    #[pyclass(name = "OGPContext")]
-    struct OgpContext {
-        propagator: ogp::Propagator,
-    }
-
-    #[pymethods]
-    impl OgpContext {
-        #[new]
-        fn new(values: Vec<f64>) -> PyResult<Self> {
-            let elements = ogp::Elements::from_array(fixed(values, "OGP elements")?)
-                .map_err(PyValueError::new_err)?;
-            let propagator = ogp::Propagator::new(elements).map_err(PyValueError::new_err)?;
-            Ok(Self { propagator })
-        }
-
-        fn propagate(&mut self, tsince_min: f64) -> PyResult<(Vec<f64>, Vec<f64>)> {
-            let (position, velocity) = self
-                .propagator
-                .propagate(tsince_min)
-                .map_err(PyValueError::new_err)?;
-            Ok((position.to_vec(), velocity.to_vec()))
-        }
-
-        fn propagate_bytes(&mut self, py: Python<'_>, tsince_min: f64) -> PyResult<Py<PyBytes>> {
-            let (position, velocity) = self
-                .propagator
-                .propagate(tsince_min)
-                .map_err(PyValueError::new_err)?;
-            let values = [
-                position[0],
-                position[1],
-                position[2],
-                velocity[0],
-                velocity[1],
-                velocity[2],
-            ];
-            output_bytes(py, &values)
-        }
-
-        fn propagate_many_bytes(
-            &mut self,
-            py: Python<'_>,
-            time_bytes: &[u8],
-        ) -> PyResult<(Py<PyBytes>, Py<PyBytes>, Vec<(usize, String)>)> {
-            let times = decode_f64_bytes(time_bytes)?;
-            let (positions, velocities, errors) = py.detach(|| {
-                let mut positions = Vec::with_capacity(times.len() * 3);
-                let mut velocities = Vec::with_capacity(times.len() * 3);
-                let mut errors = Vec::new();
-                for (index, time) in times.iter().copied().enumerate() {
-                    match self.propagator.propagate(time) {
-                        Ok((position, velocity)) => {
-                            positions.extend_from_slice(&position);
-                            velocities.extend_from_slice(&velocity);
-                        }
-                        Err(error) => {
-                            positions.extend_from_slice(&[0.0; 3]);
-                            velocities.extend_from_slice(&[0.0; 3]);
-                            errors.push((index, error));
-                        }
-                    }
-                }
-                (positions, velocities, errors)
-            });
-            Ok((
-                output_bytes(py, &positions)?,
-                output_bytes(py, &velocities)?,
-                errors,
-            ))
-        }
-
-        fn propagate_many(&mut self, times_min: Vec<f64>) -> (Vec<f64>, Vec<f64>, Vec<String>) {
-            let mut positions = Vec::with_capacity(times_min.len() * 3);
-            let mut velocities = Vec::with_capacity(times_min.len() * 3);
-            let mut errors = Vec::with_capacity(times_min.len());
-            for time in times_min {
-                match self.propagator.propagate(time) {
-                    Ok((position, velocity)) => {
-                        positions.extend_from_slice(&position);
-                        velocities.extend_from_slice(&velocity);
-                        errors.push(String::new());
-                    }
-                    Err(error) => {
-                        positions.extend_from_slice(&[0.0; 3]);
-                        velocities.extend_from_slice(&[0.0; 3]);
-                        errors.push(error);
-                    }
-                }
-            }
-            (positions, velocities, errors)
         }
     }
 
@@ -1121,7 +988,7 @@ mod python {
         super::tracking::register(module)?;
         super::vehicle::register(module)?;
         super::output::register(module)?;
-        module.add_class::<OgpContext>()?;
+        super::ogp_python::register(module)?;
         module.add_class::<super::planetary_binding::NativePlanetaryPlan>()?;
         module.add("PlanetaryGravityDomainError", module.py().get_type::<super::planetary_binding::PlanetaryGravityDomainError>())?;
         module.add_class::<super::additional_gravity_binding::NativeAdditionalGravity>()?;
@@ -1130,8 +997,6 @@ mod python {
         module.add_function(wrap_pyfunction!(super::planetary_binding::planetary_atmosphere_sample, module)?)?;
         module.add_class::<OgpObservationBatch>()?;
         module.add("MAX_HARMONIC_DEGREE", super::harmonics::MAX_DEGREE)?;
-        module.add_function(wrap_pyfunction!(ogp_propagate_batch_bytes, module)?)?;
-        module.add_function(wrap_pyfunction!(ogp_propagate_batch_parallel_bytes, module)?)?;
         module.add_function(wrap_pyfunction!(rk4_step_eci, module)?)?;
         module.add_function(wrap_pyfunction!(propagate_history_eci, module)?)?;
         module.add_function(wrap_pyfunction!(propagate_history_eci_bytes, module)?)?;

@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from jsonschema import Draft202012Validator
 
+import sim.analysis.study_lifecycle as study_lifecycle
 from sim.analysis.study_lifecycle import (
     CAPABILITY_CONTRACTS,
     STUDY_CLAIMS_SCHEMA,
@@ -644,6 +645,28 @@ def test_verify_rejects_evidence_directory_and_file_symlinks_before_reading(tmp_
     evidence_file.symlink_to(external_file)
     with pytest.raises(StudyLifecycleError, match="Study evidence artifact must be a regular file"):
         verify_study_bundle(file_bundle)
+
+
+def test_verify_rejects_evidence_replaced_during_verification(monkeypatch, tmp_path: Path) -> None:
+    artifacts = _build(tmp_path / "race")
+    retained = artifacts.output_dir / "evidence" / "trajectory-targeting.json"
+    original = study_lifecycle._evidence_record
+    calls = 0
+
+    def mutate_after_first_read(*args, **kwargs):
+        nonlocal calls
+        result = original(*args, **kwargs)
+        calls += 1
+        if calls == 1:
+            value = json.loads(retained.read_text(encoding="utf-8"))
+            value["problem_name"] = "tampered-after-evidence-read"
+            retained.write_text(json.dumps(value) + "\n", encoding="utf-8")
+        return result
+
+    monkeypatch.setattr(study_lifecycle, "_evidence_record", mutate_after_first_read)
+    with pytest.raises(StudyLifecycleError, match="evidence changed during verification"):
+        verify_study_bundle(artifacts.output_dir)
+    assert calls == 2
 
 
 def test_study_is_a_unified_oel_dispatch_command() -> None:

@@ -32,6 +32,30 @@ def test_installed_version_prefers_dist_info_over_stale_checkout_egg_info(monkey
     assert project_version.installed_project_version() == "0.26.0"
 
 
+def test_installed_version_preserves_first_dist_info_discovery_order(monkeypatch) -> None:
+    monkeypatch.setattr(
+        project_version.metadata,
+        "distributions",
+        lambda **_kwargs: [
+            _DistributionFixture("0.30.0", "orbital_engineering_lab.egg-info"),
+            _DistributionFixture(
+                "0.35.0",
+                "/Users/adam/build/worktrees/v0.36.0/.venv/lib/python3.14/site-packages/"
+                "orbital_engineering_lab-0.35.0.dist-info",
+            ),
+            _DistributionFixture(
+                "0.34.0",
+                "/Users/adam/.venv/lib/python3.14/site-packages/"
+                "orbital_engineering_lab-0.34.0.dist-info",
+            ),
+        ],
+    )
+
+    # The first modern entry is the one discovered on the active sys.path;
+    # do not replace that precedence with lexicographic path sorting.
+    assert project_version.installed_project_version() == "0.35.0"
+
+
 def test_project_version_status_accepts_matching_source_and_metadata(monkeypatch) -> None:
     source_version = project_version.source_project_version(source_root=ROOT)
     assert source_version

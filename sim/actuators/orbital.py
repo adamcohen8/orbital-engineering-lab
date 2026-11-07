@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from decimal import ROUND_FLOOR, Decimal, InvalidOperation, localcontext
 from typing import Literal
 
 import numpy as np
@@ -141,6 +142,15 @@ class OrbitalActuator(Actuator):
     _rcs_staging_cache: tuple | None = field(default=None, init=False, repr=False)
 
     def apply(self, command: Command, limits: dict, dt_s: float) -> Command:
+        try:
+            dt_s = float(dt_s)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("dt_s must be finite and nonnegative") from exc
+        if not np.isfinite(dt_s):
+            raise ValueError("dt_s must be finite")
+        if dt_s < 0.0:
+            raise ValueError("dt_s must be nonnegative")
+
         lim: OrbitalActuatorLimits = limits["orbital"]
         accel_filtered = np.array(command.thrust_eci_km_s2, dtype=float)
         torque_applied = np.array(command.torque_body_nm, dtype=float)
@@ -403,12 +413,66 @@ class OrbitalActuator(Actuator):
         # RCS allocations, so this path intentionally remains Python even when
         # the requested numeric backend is Rust.
         forces = _bounded_nonnegative_lstsq(solve_allocation, solve_target, np.array(max_forces))
-        duty = float(np.clip(cluster.duty_cycle, 0.0, 1.0))
+        try:
+            duty_raw = float(cluster.duty_cycle)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("RCS duty_cycle must be finite") from exc
+        if not np.isfinite(duty_raw):
+            raise ValueError("RCS duty_cycle must be finite")
+        duty = float(np.clip(duty_raw, 0.0, 1.0))
         forces *= duty
-        if cluster.pulse_quantum_s > 0.0 and dt_s > 0.0:
-            on_time = np.round((forces / np.maximum(max_forces, 1e-12)) * dt_s / cluster.pulse_quantum_s)
-            on_time = np.clip(on_time * cluster.pulse_quantum_s, 0.0, dt_s)
-            forces = np.array(max_forces, dtype=float) * (on_time / dt_s)
+        try:
+            quantum_s = float(cluster.pulse_quantum_s)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("RCS pulse_quantum_s must be finite and nonnegative") from exc
+        if not np.isfinite(quantum_s):
+            raise ValueError("RCS pulse_quantum_s must be finite")
+        if quantum_s < 0.0:
+            raise ValueError("RCS pulse_quantum_s must be nonnegative")
+        if quantum_s > 0.0 and dt_s > 0.0:
+            requested_on_time_s = (forces / np.maximum(max_forces, 1e-12)) * dt_s
+            with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+                requested_pulses_real = requested_on_time_s / quantum_s
+            if not np.all(np.isfinite(requested_pulses_real)):
+                raise ValueError("RCS pulse quantization ratio is not representable")
+            requested_pulses = np.rint(requested_pulses_real)
+            # Duty cycle is an availability cap, so pulse quantization must
+            # never round the realized on-time back above the duty-limited
+            # value. Keep the result on the pulse grid as well: if the duty
+            # window is shorter than one quantum, no pulse is feasible.
+            # Use the short decimal spellings of the finite inputs for the
+            # boundary calculation. This recovers an intended 0.3 / 0.1 = 3
+            # pulse boundary without adding a scale-dependent ULP allowance
+            # that could admit many pulses at large, finite ratios.
+            try:
+                with localcontext() as context:
+                    context.prec = 80
+                    max_pulses_decimal = (
+                        Decimal(str(dt_s)) * Decimal(str(duty)) / Decimal(str(quantum_s))
+                    )
+                    max_pulses_decimal = max_pulses_decimal.to_integral_value(rounding=ROUND_FLOOR)
+                max_pulses = float(max_pulses_decimal)
+            except (InvalidOperation, OverflowError, ValueError) as exc:
+                raise ValueError("RCS pulse quantization ratio is not representable") from exc
+            if not np.isfinite(max_pulses):
+                raise ValueError("RCS pulse quantization ratio is not representable")
+            # A float that rounded the integer cap upward could admit a pulse
+            # beyond the duty window. If the integer pulse count itself is not
+            # exactly representable, fail closed rather than inventing a
+            # scale-dependent scalar cutoff or silently violating the cap.
+            if Decimal.from_float(max_pulses) != max_pulses_decimal:
+                raise ValueError("RCS pulse quantization ratio is not representable")
+            pulse_count = np.clip(requested_pulses, 0.0, max_pulses)
+            on_time = pulse_count * quantum_s
+            if not np.all(np.isfinite(on_time)):
+                raise ValueError("RCS pulse quantization ratio is not representable")
+            realized_fraction = on_time / dt_s
+            forces = np.array(max_forces, dtype=float) * realized_fraction
+            # Multiplication/division can place a mathematically exact pulse
+            # boundary one float above the duty cap (e.g. 3 * 0.1 > 0.3).
+            # Clamp only that final representation to the cap; pulse_count and
+            # on_time remain whole-quantum values.
+            forces = np.minimum(forces, np.array(max_forces, dtype=float) * duty)
         if dt_s > 0.0:
             for idx, min_impulse in enumerate(min_impulses):
                 if 0.0 < forces[idx] * dt_s < min_impulse:

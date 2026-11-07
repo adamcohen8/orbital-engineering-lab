@@ -8,6 +8,7 @@ from typing import Any, Mapping
 
 import numpy as np
 
+from sim.interchange.manifests import bind_output_path, write_json_document
 from sim.interchange.provenance import sha256_file
 from sim.review import ReviewWorkspace
 
@@ -31,6 +32,8 @@ def build_maneuver_readiness_packet(
     chief_id: str,
     thresholds: Mapping[str, Any],
     output_path: str | Path | None = None,
+    logical_output_path: str | Path | None = None,
+    writer: Any | None = None,
 ) -> dict[str, Any]:
     """Evaluate explicit evidence gates; never infer operational readiness silently."""
 
@@ -40,6 +43,7 @@ def build_maneuver_readiness_packet(
     if not thresholds:
         raise ValueError("At least one explicit maneuver-readiness threshold is required.")
     workspace = ReviewWorkspace.open(completed_run)
+    review_identity = workspace.evidence_identity()
     summary_path = workspace.output_dir / "master_run_summary.json"
     if not summary_path.is_file():
         raise ValueError("Completed run has no master_run_summary.json.")
@@ -173,8 +177,8 @@ def build_maneuver_readiness_packet(
         "metrics": metrics,
         "gates": gates,
         "evidence": {
-            "review_store_path": str(workspace.db_path),
-            "review_store_sha256": sha256_file(workspace.db_path),
+            "review_store_path": str(workspace.logical_db_path),
+            "review_store_sha256": str(review_identity["sha256"]),
             "summary_path": str(summary_path),
             "summary_sha256": sha256_file(summary_path),
             "final_relative_state_query": (
@@ -195,10 +199,13 @@ def build_maneuver_readiness_packet(
         ],
     }
     if output_path is not None:
-        target = Path(output_path).expanduser().resolve()
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(json.dumps(packet, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        packet["packet_path"] = str(target)
+        target, logical_target = bind_output_path(
+            output_path,
+            logical_output_path,
+            writer=writer,
+        )
+        packet["packet_path"] = str(logical_target)
+        write_json_document(packet, target, writer=writer, overwrite=True)
     return packet
 
 

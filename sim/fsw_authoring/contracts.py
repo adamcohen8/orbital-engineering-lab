@@ -1,8 +1,8 @@
 """Public contracts for the OEL FSW Authoring Kit.
 
 The authoring kit stops at local component checks and one deterministic smoke
-scenario.  Controller comparison, qualification, baseline promotion, external
-processes, cFS/SIL, and evidence packaging belong to the private FSWDK layer.
+scenario.  Controller comparison, qualification, baseline promotion, mission-specific
+integrations, cFS/SIL, and evidence packaging belong to the private FSWDK layer.
 """
 
 from __future__ import annotations
@@ -94,7 +94,7 @@ class CandidateEntrypoint:
 class CandidateSource:
     root: Path
     revision_id: str
-    entrypoint: CandidateEntrypoint
+    entrypoint: CandidateEntrypoint | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,10 +121,11 @@ class FlightSoftwareCandidate:
     source_sha256: str
     verification_sha256: str
     candidate_sha256: str
+    native: Mapping[str, Any] | None = None
 
     @property
     def kind(self) -> str:
-        return "python_stack"
+        return "native_stack" if self.native is not None else "python_stack"
 
     def identity(self) -> dict[str, Any]:
         return {

@@ -249,16 +249,7 @@ class PredictiveBurnExecution:
                 logger.warning("Failed to set predictive burn attitude target: %s", exc)
         att_belief_eff = att_belief
         if (not attitude_disabled) and att_belief_eff is None and attitude_controller is not None:
-            att_belief_eff = StateBelief(
-                state=np.hstack(
-                    (
-                        np.array(truth.attitude_quat_bn, dtype=float),
-                        np.array(truth.angular_rate_body_rad_s, dtype=float),
-                    )
-                ),
-                covariance=np.eye(7) * 1e-6,
-                last_update_t_s=float(truth.t_s),
-            )
+            att_belief_eff = _attitude_belief_from_truth(truth)
         c_att = (
             attitude_controller.act(att_belief_eff, float(t_s), float(max(self.attitude_controller_budget_ms, 1e-9)))
             if (not attitude_disabled) and attitude_controller is not None and att_belief_eff is not None

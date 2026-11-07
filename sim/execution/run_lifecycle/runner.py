@@ -16,6 +16,7 @@ from sim.config import SimulationScenarioConfig
 from sim.config.scenario.loader import scenario_config_from_dict
 from sim.execution.service import SimulationExecutionService
 from sim.installation.provenance import execution_provenance
+from sim.platform_compat import canonicalize_platform_compatibility_root
 from sim.public_api.workspace import SimulationWorkspace
 from sim.resource_limits import (
     ResourceEstimate,
@@ -23,6 +24,7 @@ from sim.resource_limits import (
     estimate_resource_requirements,
 )
 from sim.security import ConfigPathPolicy
+from sim.security.output_writes import SecureWriteRoot
 
 from .models import (
     ForegroundResult,
@@ -100,8 +102,19 @@ class _OwnerHeartbeat:
             name=f"oel-run-heartbeat-{self.run_id[:8]}",
             daemon=True,
         )
+        try:
+            self._thread.start()
+        except BaseException:
+            # A failed start must not turn cleanup into join-before-start,
+            # hiding the original resource/startup failure.
+            try:
+                self.store.heartbeat_owner(
+                    self.run_id, owner_token=self.owner_token, status="exited",
+                )
+            except (OSError, LifecycleError):
+                pass
+            raise
         self._started = True
-        self._thread.start()
 
     def _run(self) -> None:
         while not self._stop.wait(OWNER_HEARTBEAT_INTERVAL_S):
@@ -155,6 +168,34 @@ def _force_lifecycle_outputs(root: dict[str, Any], output_dir: Path) -> dict[str
     return result
 
 
+def _reject_symlink_components(path: Path, *, authorized_root: Path) -> None:
+    """Reject lexical symlink routing below an authorized root.
+
+    The caller supplies the lexical form of the authorized root so a trusted
+    host alias such as macOS ``/tmp`` can remain in that prefix.  Walking the
+    lexical child path first catches existing and dangling links without
+    allowing ``Path.resolve()`` to make an unsafe route look ordinary.
+    """
+
+    try:
+        relative = path.relative_to(authorized_root)
+    except ValueError:
+        # The final containment check below will report an ordinary outside
+        # path.  If the path only becomes inside after resolution, however,
+        # inspect every lexical component now so an external alias cannot
+        # redirect the request into the authorized root.
+        candidates = (path, *path.parents)
+        for current in candidates:
+            if current.is_symlink():
+                raise RunPolicyError("Lifecycle output paths cannot contain symlink components.") from None
+        return
+    current = authorized_root
+    for part in relative.parts:
+        current = current / part
+        if current.is_symlink():
+            raise RunPolicyError("Lifecycle output paths cannot contain symlink components.")
+
+
 def prepare_foreground_run(
     *,
     config_path: str | Path,
@@ -171,10 +212,17 @@ def prepare_foreground_run(
     source = Path(config_path).expanduser().resolve()
     if not source.is_file():
         raise RunPolicyError("Lifecycle scenario configuration was not found.")
-    root_path = Path(output_root).expanduser().resolve()
+    root_input = canonicalize_platform_compatibility_root(
+        Path(os.path.abspath(os.fspath(Path(output_root).expanduser())))
+    )
+    root_path = root_input.resolve()
     target = Path(output_dir).expanduser()
     if not target.is_absolute():
-        target = root_path / target
+        target = root_input / target
+    target = canonicalize_platform_compatibility_root(
+        Path(os.path.abspath(os.fspath(target)))
+    )
+    _reject_symlink_components(target, authorized_root=root_input)
     target = target.resolve()
     if target == root_path or root_path not in target.parents:
         raise RunPolicyError("Lifecycle output must be a child of the authorized output root.")
@@ -256,27 +304,36 @@ def _identity(prepared: PreparedLifecycleRun, store: LifecycleStore) -> RunIdent
 def _artifact_inventory(output_dir: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     excluded = {MANIFEST_NAME, EVENTS_NAME, ".run.lock", ".run.lock.guard"}
     files: list[dict[str, Any]] = []
-    for path in sorted(item for item in output_dir.rglob("*") if item.is_file()):
-        if path.parent == output_dir / LIFECYCLE_DIR_NAME and path.name in excluded:
-            continue
-        digest = hashlib.sha256()
-        with path.open("rb") as stream:
-            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                digest.update(chunk)
-        files.append(
-            {
-                "path": path.relative_to(output_dir).as_posix(),
-                "bytes": path.stat().st_size,
-                "sha256": digest.hexdigest(),
-            }
-        )
-    review_path = output_dir / "review" / "run.sqlite"
+    regular_files: set[Path] = set()
+    # Keep the directory descriptor open while discovering and hashing the
+    # tree.  ``list_files`` and ``file_record`` both reject symlinks/special
+    # files and bind the hash to the opened regular-file descriptor, so a
+    # replacement after discovery cannot redirect the evidence read.
+    with SecureWriteRoot.open(
+        output_dir,
+        approved_roots=(output_dir,),
+        create=False,
+    ) as secure_root:
+        for relative in secure_root.list_files():
+            regular_files.add(relative)
+            if relative.parent == Path(LIFECYCLE_DIR_NAME) and relative.name in excluded:
+                continue
+            record = secure_root.file_record(relative)
+            files.append(
+                {
+                    "path": relative.as_posix(),
+                    "bytes": int(record["bytes"]),
+                    "sha256": str(record["sha256"]),
+                }
+            )
+    review_relative = Path("review") / "run.sqlite"
+    review_available = review_relative in regular_files
     return (
         {"complete": True, "file_count": len(files), "files": files},
         {
-            "available": review_path.is_file(),
-            "evidence_complete": "available" if review_path.is_file() else "missing",
-            "path": "review/run.sqlite" if review_path.is_file() else None,
+            "available": review_available,
+            "evidence_complete": "available" if review_available else "missing",
+            "path": "review/run.sqlite" if review_available else None,
         },
     )
 

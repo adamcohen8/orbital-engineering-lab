@@ -27,7 +27,11 @@ fn limited(x: &[f64], limit: f64) -> (Vec<f64>, bool) {
     if n <= limit || n == 0.0 {
         (x.to_vec(), false)
     } else {
-        (x.iter().map(|v| v * (limit / n)).collect(), true)
+        // Clip exactly as before, but do not escalate controller/norm roundoff
+        // into a physical saturation fault. Match the Python relative band;
+        // there is no absolute allowance for a disabled (zero-limit) device.
+        let saturated = n - limit > limit * (8.0 * f64::EPSILON);
+        (x.iter().map(|v| v * (limit / n)).collect(), saturated)
     }
 }
 fn shape(x: &[f64], n: usize) -> PyResult<()> {

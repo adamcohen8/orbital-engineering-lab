@@ -96,7 +96,7 @@ def main(argv: list[str] | None = None) -> int:
             with _operation_stdout(args.json):
                 payload = inspect_output(
                     args.output_dir,
-                    query_names=tuple(args.queries or ()),
+                    query_names=None if args.queries is None else tuple(args.queries),
                     max_rows=args.max_rows,
                 )
             _print_packet(payload, json_mode=args.json)

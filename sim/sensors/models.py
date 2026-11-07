@@ -9,12 +9,42 @@ from sim.core.models import Measurement, StateTruth
 from sim.sensors.access import AccessModel
 
 
+def _noise_vector(value: object, field_name: str, *, allow_empty: bool) -> np.ndarray:
+    try:
+        vector = np.asarray(value, dtype=float)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{field_name} must be a one-dimensional finite numeric vector.") from exc
+    if vector.ndim != 1 or (not allow_empty and vector.size == 0) or not np.all(np.isfinite(vector)):
+        raise ValueError(f"{field_name} must be a one-dimensional finite numeric vector.")
+    return np.array(vector, dtype=float, copy=True)
+
+
 @dataclass
 class SensorNoiseConfig:
     sigma: np.ndarray
     bias: np.ndarray = field(default_factory=lambda: np.zeros(0))
     dropout_prob: float = 0.0
     latency_s: float = 0.0
+
+    def __post_init__(self) -> None:
+        sigma = _noise_vector(self.sigma, "sigma", allow_empty=False)
+        bias = _noise_vector(self.bias, "bias", allow_empty=True)
+        if np.any(sigma < 0.0):
+            raise ValueError("sigma must be nonnegative.")
+        if isinstance(self.dropout_prob, (bool, np.bool_)):
+            raise ValueError("dropout_prob must be finite within [0, 1].")
+        dropout = float(self.dropout_prob)
+        if not np.isfinite(dropout) or not 0.0 <= dropout <= 1.0:
+            raise ValueError("dropout_prob must be finite within [0, 1].")
+        if isinstance(self.latency_s, (bool, np.bool_)):
+            raise ValueError("latency_s must be finite and nonnegative.")
+        latency = float(self.latency_s)
+        if not np.isfinite(latency) or latency < 0.0:
+            raise ValueError("latency_s must be finite and nonnegative.")
+        self.sigma = sigma
+        self.bias = bias
+        self.dropout_prob = dropout
+        self.latency_s = latency
 
 
 @dataclass

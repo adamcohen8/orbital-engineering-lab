@@ -9,7 +9,7 @@ mod frames;
 mod packets;
 #[cfg(any(feature = "python", test))]
 mod preview;
-#[cfg(feature = "python")]
+#[cfg(any(feature = "python", test))]
 mod scoring;
 
 type V3 = [f64; 3];

@@ -6,6 +6,7 @@ from typing import Any
 import numpy as np
 
 from sim.config.plugin_specs import instantiate_plugin_spec
+from sim.control.attitude._validation import require_finite_vector
 from sim.core.interfaces import Controller
 from sim.core.models import Command, StateBelief
 
@@ -27,6 +28,15 @@ class CMGSteeringController(Controller):
 
     def __post_init__(self) -> None:
         self.base_controller = _construct_controller(self.base_controller)
+        require_finite_vector(self._vec(self.max_torque_nm), "max_torque_nm", size=3, allow_positive_inf=True)
+        require_finite_vector(self._vec(self.momentum_nms), "momentum_nms", size=3, allow_positive_inf=True)
+        # Positive infinity remains a valid unlimited gimbal-rate value.
+        require_finite_vector(
+            self._vec(self.gimbal_rate_limit_rad_s),
+            "gimbal_rate_limit_rad_s",
+            size=3,
+            allow_positive_inf=True,
+        )
 
     @staticmethod
     def _vec(value: np.ndarray | float, default: float = 0.0) -> np.ndarray:
@@ -39,8 +49,27 @@ class CMGSteeringController(Controller):
 
     def act(self, belief: StateBelief, t_s: float, budget_ms: float) -> Command:
         cmd = self.base_controller.act(belief, t_s, budget_ms)
-        torque = np.array(cmd.torque_body_nm, dtype=float).reshape(3)
-        cap = np.minimum(np.abs(self._vec(self.max_torque_nm)), np.abs(self._vec(self.momentum_nms) * self._vec(self.gimbal_rate_limit_rad_s)))
+        torque = require_finite_vector(cmd.torque_body_nm, "base controller torque", size=3)
+        require_finite_vector(self._vec(self.max_torque_nm), "max_torque_nm", size=3, allow_positive_inf=True)
+        require_finite_vector(self._vec(self.momentum_nms), "momentum_nms", size=3, allow_positive_inf=True)
+        require_finite_vector(
+            self._vec(self.gimbal_rate_limit_rad_s),
+            "gimbal_rate_limit_rad_s",
+            size=3,
+            allow_positive_inf=True,
+        )
+        max_torque = np.abs(self._vec(self.max_torque_nm))
+        momentum = np.abs(self._vec(self.momentum_nms))
+        rate = np.abs(self._vec(self.gimbal_rate_limit_rad_s))
+        gimbal_cap = np.zeros(3, dtype=float)
+        finite_product = np.isfinite(momentum) & np.isfinite(rate)
+        gimbal_cap[finite_product] = momentum[finite_product] * rate[finite_product]
+        unlimited_product = (~finite_product) & (momentum > 0.0) & (rate > 0.0)
+        gimbal_cap[unlimited_product] = np.inf
+        cap = np.minimum(
+            max_torque,
+            gimbal_cap,
+        )
         torque = np.clip(torque, -cap, cap)
         mode_flags = dict(cmd.mode_flags or {})
         mode_flags.update(

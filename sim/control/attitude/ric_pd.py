@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from sim.control.attitude._validation import require_finite_vector
 from sim.control.attitude.baseline import ReactionWheelPDController
 from sim.core.interfaces import Controller
 from sim.core.models import Command, StateBelief
@@ -37,12 +38,8 @@ class RICFramePDController(Controller):
     state_rv_slice: tuple[int, int] = (0, 6)
 
     def __post_init__(self) -> None:
-        e = np.array(self.desired_ric_euler_rad, dtype=float).reshape(-1)
-        if e.size != 3:
-            raise ValueError("desired_ric_euler_rad must be [yaw_R, roll_I, pitch_C].")
-        w = np.array(self.desired_ric_rate_rad_s, dtype=float).reshape(-1)
-        if w.size != 3:
-            raise ValueError("desired_ric_rate_rad_s must be length-3 in RIC axes.")
+        e = require_finite_vector(self.desired_ric_euler_rad, "desired_ric_euler_rad", size=3)
+        w = require_finite_vector(self.desired_ric_rate_rad_s, "desired_ric_rate_rad_s", size=3)
         if self.state_rv_slice[1] - self.state_rv_slice[0] != 6:
             raise ValueError("state_rv_slice must select [r_eci(3), v_eci(3)].")
         self.desired_ric_euler_rad = e
@@ -55,20 +52,21 @@ class RICFramePDController(Controller):
         pitch_c_rad: float,
         w_ric_rad_s: np.ndarray | None = None,
     ) -> None:
-        self.desired_ric_euler_rad = np.array([yaw_r_rad, roll_i_rad, pitch_c_rad], dtype=float)
+        self.desired_ric_euler_rad = require_finite_vector(
+            [yaw_r_rad, roll_i_rad, pitch_c_rad],
+            "desired_ric_euler_rad",
+            size=3,
+        )
         if w_ric_rad_s is not None:
-            w = np.array(w_ric_rad_s, dtype=float).reshape(-1)
-            if w.size != 3:
-                raise ValueError("w_ric_rad_s must be length-3.")
-            self.desired_ric_rate_rad_s = w
+            self.desired_ric_rate_rad_s = require_finite_vector(w_ric_rad_s, "w_ric_rad_s", size=3)
 
     def act(self, belief: StateBelief, t_s: float, budget_ms: float) -> Command:
         i0, i1 = self.state_rv_slice
         if belief.state.size < i1:
             return Command.zero()
 
-        r_eci = np.array(belief.state[i0 : i0 + 3], dtype=float)
-        v_eci = np.array(belief.state[i0 + 3 : i0 + 6], dtype=float)
+        r_eci = require_finite_vector(belief.state[i0 : i0 + 3], "belief position", size=3)
+        v_eci = require_finite_vector(belief.state[i0 + 3 : i0 + 6], "belief velocity", size=3)
         r_norm = float(np.linalg.norm(r_eci))
         if r_norm <= 0.0:
             return Command.zero()

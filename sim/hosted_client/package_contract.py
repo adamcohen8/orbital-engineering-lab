@@ -20,7 +20,7 @@ from sim.study_planning import (
 )
 from sim.study_planning.config_validation import validate_config_path
 from sim.study_planning.schema_validation import validate_schema
-from sim.utils.io import SafeReadError, read_regular_file_nofollow, sha256_regular_file_nofollow
+from sim.utils.io import SafeReadError, read_regular_file_nofollow
 
 HOSTED_PRO_PACKAGE_SCHEMA_ID = "oel.hosted_pro_package.v1"
 HOSTED_EXECUTION_PACKAGE_SCHEMA_ID = "oel.hosted_execution_package.v1"
@@ -259,7 +259,13 @@ def validate_hosted_execution_package(
             continue
         source = resolved[input_id]
         try:
-            digest, byte_count = sha256_regular_file_nofollow(source, min_bytes=1, max_bytes=MAX_INPUT_BYTES)
+            source_bytes = read_regular_file_nofollow(
+                source,
+                min_bytes=1,
+                max_bytes=MAX_INPUT_BYTES,
+            )
+            digest = hashlib.sha256(source_bytes).hexdigest()
+            byte_count = len(source_bytes)
         except (OSError, ValueError) as exc:
             issues.append(PackageIssue("package.input_unreadable", f"$.inputs[{index}]", str(exc)))
             continue
@@ -272,7 +278,20 @@ def validate_hosted_execution_package(
                     f"Input {input_id!r} does not match its declared SHA-256.",
                 )
             )
-        metadata = dict(request_input.get("metadata", {}) or {})
+        raw_metadata = request_input.get("metadata", {})
+        if raw_metadata is None:
+            metadata: dict[str, Any] = {}
+        elif isinstance(raw_metadata, Mapping):
+            metadata = dict(raw_metadata)
+        else:
+            metadata = {}
+            issues.append(
+                PackageIssue(
+                    "package.input_metadata_invalid",
+                    f"$.request.inputs[{index}].metadata",
+                    "Input metadata must be a JSON object.",
+                )
+            )
         if metadata.get("content_sha256") not in {None, digest} or metadata.get("input_bytes") not in {None, byte_count}:
             issues.append(
                 PackageIssue(
@@ -288,6 +307,7 @@ def validate_hosted_execution_package(
             issues.append(PackageIssue("package.input_metadata_invalid", item.path, item.message))
         _inspect_payload_identity(
             source,
+            content=source_bytes,
             request_input=request_input,
             media_type=str(package_input["media_type"]),
             issue_path=f"$.inputs[{index}]",
@@ -301,7 +321,40 @@ def validate_hosted_execution_package(
                 issues.append(PackageIssue("package.config_ref_duplicate", f"$.inputs[{index}].config_ref", "Scenario config_ref values must be unique."))
             else:
                 seen_config_refs.add(str(config_ref))
-                receipt, document = validate_config_path(str(config_ref), source, workspace_root=authorized_root)
+                receipt, document = validate_config_path(
+                    str(config_ref),
+                    source,
+                    workspace_root=authorized_root,
+                    content=source_bytes,
+                )
+                try:
+                    verified_bytes = read_regular_file_nofollow(
+                        source,
+                        min_bytes=1,
+                        max_bytes=MAX_INPUT_BYTES,
+                    )
+                    verified_digest = hashlib.sha256(verified_bytes).hexdigest()
+                except (OSError, ValueError) as exc:
+                    issues.append(
+                        PackageIssue(
+                            "package.input_changed_during_validation",
+                            f"$.inputs[{index}]",
+                            f"Scenario input could not be reverified after config validation: {exc}",
+                        )
+                    )
+                    verified_digest = None
+                if (
+                    verified_digest != digest
+                    or receipt.get("source_sha256") != digest
+                ):
+                    issues.append(
+                        PackageIssue(
+                            "package.input_changed_during_validation",
+                            f"$.inputs[{index}]",
+                            "Scenario config validation did not use the same stable bytes as the package inventory.",
+                        )
+                    )
+                    document = None
                 config_receipts.append(receipt)
                 if document is not None:
                     if str(document.get("simulator", {}).get("central_body", "earth")).lower() != "earth":
@@ -543,6 +596,7 @@ def _decode_json_object(content: bytes, *, label: str) -> dict[str, Any]:
 def _inspect_payload_identity(
     path: Path,
     *,
+    content: bytes | None = None,
     request_input: Mapping[str, Any],
     media_type: str,
     issue_path: str,
@@ -551,7 +605,8 @@ def _inspect_payload_identity(
     if media_type != "application/json":
         return
     try:
-        content = read_regular_file_nofollow(path, min_bytes=1, max_bytes=MAX_CONTROL_DOCUMENT_BYTES)
+        if content is None:
+            content = read_regular_file_nofollow(path, min_bytes=1, max_bytes=MAX_CONTROL_DOCUMENT_BYTES)
         payload = _decode_json_object(content, label=f"input {request_input.get('input_id', '')!r}")
     except SafeReadError:
         return

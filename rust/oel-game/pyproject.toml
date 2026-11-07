@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "oel-rust-game"
-version = "0.5.0"
+version = "0.5.1"
 description = "Optional native Trainer flight software numerical backend"
 requires-python = ">=3.10,<3.15"
 

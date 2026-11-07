@@ -54,8 +54,10 @@ class CandidateValidationError(ValueError):
 
 def _load_mapping(path: Path) -> dict[str, Any]:
     try:
-        raw = json.loads(path.read_text(encoding="utf-8")) if path.suffix.lower() == ".json" else yaml.safe_load(
-            path.read_text(encoding="utf-8")
+        raw = (
+            json.loads(path.read_text(encoding="utf-8"))
+            if path.suffix.lower() == ".json"
+            else yaml.safe_load(path.read_text(encoding="utf-8"))
         )
     except (OSError, json.JSONDecodeError, yaml.YAMLError) as exc:
         raise CandidateValidationError(
@@ -78,7 +80,11 @@ def _inside(path: Path, root: Path, *, label: str, must_exist: bool = True) -> P
         resolved.relative_to(root)
     except ValueError as exc:
         raise CandidateValidationError(
-            [AuthoringIssue("path_outside_workspace", f"{label} must remain inside the authorized workspace.", str(path))]
+            [
+                AuthoringIssue(
+                    "path_outside_workspace", f"{label} must remain inside the authorized workspace.", str(path)
+                )
+            ]
         ) from exc
     if must_exist and not resolved.exists():
         raise CandidateValidationError([AuthoringIssue("path_missing", f"{label} was not found.", str(resolved))])
@@ -92,7 +98,9 @@ def _candidate_path(value: Any, *, candidate_root: Path, workspace_root: Path, l
     raw = Path(text)
     path = raw if raw.is_absolute() else candidate_root / raw
     if path.is_symlink():
-        raise CandidateValidationError([AuthoringIssue("symlink_input", f"{label} may not be a symbolic link.", str(path))])
+        raise CandidateValidationError(
+            [AuthoringIssue("symlink_input", f"{label} may not be a symbolic link.", str(path))]
+        )
     return _inside(path, workspace_root, label=label)
 
 
@@ -195,6 +203,10 @@ def load_candidate(manifest: str | Path, *, workspace_root: str | Path = ROOT) -
         )
     manifest_path = _inside(unresolved_manifest, workspace, label="candidate manifest")
     raw = _load_mapping(manifest_path)
+    if raw.get("kind") == "native_stack":
+        from .native import load_native_candidate
+
+        return load_native_candidate(raw, manifest_path, workspace)
     schema_errors = sorted(Draft202012Validator(_schema()).iter_errors(raw), key=lambda item: list(item.path))
     if schema_errors:
         raise CandidateValidationError(
@@ -210,7 +222,11 @@ def load_candidate(manifest: str | Path, *, workspace_root: str | Path = ROOT) -
         )
     if raw["schema_version"] != CANDIDATE_SCHEMA_ID or raw["kind"] != "python_stack":
         raise CandidateValidationError(
-            [AuthoringIssue("public_contract_required", "The public authoring kit accepts Python stack candidates only.")]
+            [
+                AuthoringIssue(
+                    "public_contract_required", "The public authoring kit accepts Python stack candidates only."
+                )
+            ]
         )
     candidate_id = str(raw["candidate_id"])
     if not _ID_RE.fullmatch(candidate_id):
@@ -314,7 +330,8 @@ def inspect_candidate(manifest: str | Path, *, workspace_root: str | Path = ROOT
             "component_suite": str(candidate.verification.component_suite),
             "smoke_case": str(candidate.verification.smoke_case),
         },
-        "entrypoint": candidate.source.entrypoint.to_dict(),
+        "entrypoint": candidate.source.entrypoint.to_dict() if candidate.source.entrypoint else None,
+        "native": dict(candidate.native) if candidate.native else None,
         "safe_inspection": True,
         "candidate_code_imported": False,
         "candidate_code_executed": False,
@@ -344,6 +361,11 @@ def validate_candidate(
     trusted_import: bool = False,
 ) -> tuple[FlightSoftwareCandidate, list[AuthoringIssue], dict[str, Any]]:
     candidate = load_candidate(manifest, workspace_root=workspace_root)
+    if candidate.native is not None:
+        from .native import validate_native
+
+        issues, checks = validate_native(candidate, trusted_plugins=trusted_import)
+        return candidate, issues, checks
     issues: list[AuthoringIssue] = []
     checks: dict[str, Any] = {
         "manifest_schema": "passed",

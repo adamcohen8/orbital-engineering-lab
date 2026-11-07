@@ -96,6 +96,29 @@ def _arguments(output: Path, **overrides: object) -> dict[str, object]:
     return values
 
 
+def _snapshot_existing_render_sidecars(output: Path) -> tuple[Path, bytes, Path, bytes]:
+    index = output / "index.md"
+    generated = output / "review" / "generated_artifacts.json"
+    generated.write_bytes(b'{"artifacts":[{"artifact_id":"preexisting"}]}\n')
+    return index, index.read_bytes(), generated, generated.read_bytes()
+
+
+def _assert_preserved_render_sidecars(snapshot: tuple[Path, bytes, Path, bytes]) -> None:
+    index, index_before, generated, generated_before = snapshot
+    assert index.read_bytes() == index_before
+    assert generated.read_bytes() == generated_before
+
+
+def _assert_manifest_outputs(manifest: Path, files: dict[str, object]) -> None:
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    expected = {str(Path(str(value))) for value in files.values()}
+    assert payload["status"] == "completed"
+    assert payload["artifacts_complete"] is True
+    assert set(payload["artifacts"]) == expected
+    assert {entry["path"] for entry in payload["artifact_records"]} == expected
+    assert all(Path(path).is_file() for path in expected)
+
+
 def test_cr3bp_registry_is_public_local_experimental_and_bounded() -> None:
     assert tuple(contract.tool_id for contract in CR3BP_TOOL_CONTRACTS) == (
         CR3BP_PLAN_TOOL_ID,
@@ -196,7 +219,12 @@ def test_public_handler_central_hook_exposes_cr3bp_plan(cr3bp_output: Path, tmp_
     assert response["result"]["render_authorized"] is False
 
 
-def test_render_writes_static_artifact_receipt_manifest_and_index(cr3bp_output: Path, tmp_path: Path) -> None:
+def test_render_writes_static_artifact_receipt_manifest_and_index(
+    cr3bp_output: Path, tmp_path: Path
+) -> None:
+    """Retain the established node ID while requiring existing indexes to survive."""
+
+    sidecars = _snapshot_existing_render_sidecars(cr3bp_output)
     harness = _CR3BPHarness(tmp_path)
     arguments = _arguments(cr3bp_output)
     plan = harness.call(CR3BP_PLAN_TOOL_ID, arguments)
@@ -217,15 +245,14 @@ def test_render_writes_static_artifact_receipt_manifest_and_index(cr3bp_output: 
     assert figure.is_file() and figure.parent.name == "figures"
     assert receipt.is_file() and receipt.parent == figure.parent
     assert manifest.is_file() and manifest.parent.name == "mcp_cr3bp"
-    assert (cr3bp_output / "review" / "generated_artifacts.json").is_file()
-    index = (cr3bp_output / "index.md").read_text(encoding="utf-8")
-    assert "OEL_REVIEW_GENERATED_ARTIFACTS_START" in index
+    _assert_manifest_outputs(manifest, result["artifact"]["files"])
+    _assert_preserved_render_sidecars(sidecars)
     receipt_payload = json.loads(receipt.read_text(encoding="utf-8"))
     assert receipt_payload["review_store"]["sha256"] == plan["result"]["evidence_identity"]["sha256"]
     assert receipt_payload["inertial_alignment"] == "CR3BP model axes, not J2000"
 
-
 def test_render_writes_gif_and_contact_sheet(cr3bp_output: Path, tmp_path: Path) -> None:
+    sidecars = _snapshot_existing_render_sidecars(cr3bp_output)
     harness = _CR3BPHarness(tmp_path)
     arguments = _arguments(cr3bp_output, movie_format="gif", frames=6, fps=3, axes="inertial", origin="p2")
     plan = harness.call(CR3BP_PLAN_TOOL_ID, arguments)
@@ -243,9 +270,11 @@ def test_render_writes_gif_and_contact_sheet(cr3bp_output: Path, tmp_path: Path)
     movie = Path(files["movie"])
     contact_sheet = Path(files["contact_sheet"])
     quality = Path(files["movie_quality_receipt"])
+    manifest = Path(rendered["result"]["manifest_path"])
     assert movie.is_file() and movie.suffix == ".gif"
     assert contact_sheet.is_file() and contact_sheet.stat().st_size > 0
     assert quality.is_file()
+    _assert_manifest_outputs(manifest, files)
     from PIL import Image
 
     durations_ms: list[int] = []
@@ -278,16 +307,17 @@ def test_render_writes_gif_and_contact_sheet(cr3bp_output: Path, tmp_path: Path)
         + "\n",
         encoding="utf-8",
     )
+    _assert_preserved_render_sidecars(sidecars)
     receipt = json.loads(Path(files["receipt"]).read_text(encoding="utf-8"))
     assert receipt["movie_qa"]["automated_status"] == "passed"
     assert receipt["inertial_alignment"] == "CR3BP model axes, not J2000"
-
 
 def test_concurrent_render_reservation_keeps_one_terminal_receipt(
     monkeypatch, cr3bp_output: Path, tmp_path: Path
 ) -> None:
     import integrations.oel_mcp.cr3bp_handlers as cr3bp_handlers
 
+    sidecars = _snapshot_existing_render_sidecars(cr3bp_output)
     harness = _CR3BPHarness(tmp_path)
     arguments = _arguments(cr3bp_output)
     plan = harness.call(CR3BP_PLAN_TOOL_ID, arguments)
@@ -313,11 +343,18 @@ def test_concurrent_render_reservation_keeps_one_terminal_receipt(
 
     assert sorted(result["status"] for result in results) == ["completed", "failed"]
     failed = next(result for result in results if result["status"] == "failed")
-    assert failed["error"]["type"] == "FileExistsError"
+    # The descriptor-bound reservation reports its typed FileExistsError subclass.
+    assert failed["error"]["type"] == "SecureWriteConflict"
     manifests = list((cr3bp_output / "review" / "mcp_cr3bp").glob("*.manifest.json"))
     assert len(manifests) == 1
     receipt = json.loads(manifests[0].read_text(encoding="utf-8"))
     assert receipt["status"] == "completed"
+    completed = next(result for result in results if result["status"] == "completed")
+    _assert_manifest_outputs(
+        manifests[0],
+        completed["result"]["artifact"]["files"],
+    )
+    _assert_preserved_render_sidecars(sidecars)
 
 
 def test_render_rejects_stale_plan_and_spec_mismatch(cr3bp_output: Path, tmp_path: Path) -> None:
@@ -458,6 +495,7 @@ def test_official_sdk_lists_cr3bp_and_preserves_structured_content(cr3bp_output:
     import anyio
     from mcp import Client
 
+    sidecars = _snapshot_existing_render_sidecars(cr3bp_output)
     harness = _CR3BPHarness(tmp_path)
     arguments = _arguments(cr3bp_output)
     plan = harness.call(CR3BP_PLAN_TOOL_ID, arguments)
@@ -483,3 +521,8 @@ def test_official_sdk_lists_cr3bp_and_preserves_structured_content(cr3bp_output:
     assert payload["tool_id"] == CR3BP_RENDER_TOOL_ID
     assert payload["status"] == "completed"
     assert Path(payload["result"]["artifact"]["path"]).is_file()
+    _assert_manifest_outputs(
+        Path(payload["result"]["manifest_path"]),
+        payload["result"]["artifact"]["files"],
+    )
+    _assert_preserved_render_sidecars(sidecars)

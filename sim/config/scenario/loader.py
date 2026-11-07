@@ -83,6 +83,10 @@ def scenario_config_from_dict(
         path_policy = ConfigPathPolicy.default(config_path=source_path)
     root = _resolve_agent_presets(root, base_dir=base_dir, path_policy=path_policy)
     _validate_config_read_paths(root, path_policy)
+    if dict(root.get("metadata", {}) or {}).get("acquisition_inputs"):
+        from sim.data_acquisition.binding import verify_bindings
+
+        verify_bindings(root, path_policy=path_policy)
     _enforce_strict_booleans(root)
     analysis = _parse_analysis_section(root.get("analysis"))
     normalized_mc = _monte_carlo_from_analysis(analysis)
@@ -132,16 +136,8 @@ def scenario_config_from_dict(
     _validate_object_references(cfg)
     _validate_orbital_analysis_references(cfg)
     return cfg
-def load_simulation_yaml_bytes(
-    content: bytes,
-    *,
-    source_path: str | Path,
-    path_policy: ConfigPathPolicy | None = None,
-    allow_external_config_paths: bool = False,
-    allow_external_ai_prompt_files: bool = False,
-) -> SimulationScenarioConfig:
-    """Parse a scenario from exact caller-supplied bytes with path provenance."""
-
+def _parse_yaml_mapping(content: bytes, source_path: str | Path) -> dict[str, Any]:
+    """Syntax-only scenario parsing shared by validation and draft composition."""
     p = Path(source_path)
     try:
         text = content.decode("utf-8")
@@ -189,6 +185,21 @@ def load_simulation_yaml_bytes(
     raw = yaml.load(text, Loader=_UniqueKeySafeLoader)
     if not isinstance(raw, dict):
         raise ValueError("Simulation YAML root must be a mapping/object.")
+    return raw
+
+
+def load_simulation_yaml_bytes(
+    content: bytes,
+    *,
+    source_path: str | Path,
+    path_policy: ConfigPathPolicy | None = None,
+    allow_external_config_paths: bool = False,
+    allow_external_ai_prompt_files: bool = False,
+) -> SimulationScenarioConfig:
+    """Parse a scenario from exact caller-supplied bytes with path provenance."""
+
+    p = Path(source_path)
+    raw = _parse_yaml_mapping(content, p)
     policy = path_policy or ConfigPathPolicy.default(
         config_path=p,
         allow_external_config_paths=allow_external_config_paths,
@@ -205,10 +216,21 @@ def load_simulation_yaml(
     allow_external_ai_prompt_files: bool = False,
 ) -> SimulationScenarioConfig:
     p = Path(path)
+    policy = path_policy or ConfigPathPolicy.default(
+        config_path=p,
+        allow_external_config_paths=allow_external_config_paths,
+        allow_external_ai_prompt_files=allow_external_ai_prompt_files,
+    )
+    logical, content = policy.read_input_bytes(
+        p,
+        purpose="simulation scenario config",
+        base_dir=Path.cwd() if not p.is_absolute() else None,
+        max_bytes=2_000_000,
+    )
     return load_simulation_yaml_bytes(
-        p.read_bytes(),
-        source_path=p,
-        path_policy=path_policy,
+        content,
+        source_path=logical,
+        path_policy=policy,
         allow_external_config_paths=allow_external_config_paths,
         allow_external_ai_prompt_files=allow_external_ai_prompt_files,
     )

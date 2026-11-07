@@ -36,6 +36,8 @@ _FRAME_MODEL_ALIASES = {
     "iau76_fk5_iau80_eop": FRAME_MODEL_IAU76_80_EOP,
 }
 
+_RUNTIME_FRAME_ALIASES = frozenset({"eci", "ecef", "itrf"})
+
 
 @dataclass(frozen=True)
 class FrameContext:
@@ -57,12 +59,39 @@ class FrameContext:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "model", normalize_frame_model(self.model))
+        if self.jd_utc_start is not None:
+            try:
+                jd_utc_start = float(self.jd_utc_start)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError("jd_utc_start must be finite when provided.") from exc
+            if not np.isfinite(jd_utc_start):
+                raise ValueError("jd_utc_start must be finite when provided.")
+            object.__setattr__(self, "jd_utc_start", jd_utc_start)
         if self.eop_path in ("",):
             object.__setattr__(self, "eop_path", None)
         policy = str(self.eop_extrapolation or "error").strip().lower()
         if policy not in {"error", "hold"}:
             raise ValueError("eop_extrapolation must be 'error' or 'hold'.")
         object.__setattr__(self, "eop_extrapolation", policy)
+        for name in (
+            "tt_minus_utc_s",
+            "dut1_s",
+            "xp_arcsec",
+            "yp_arcsec",
+            "dat_s",
+            "ddpsi_rad",
+            "ddeps_rad",
+        ):
+            value = getattr(self, name)
+            if value is None:
+                continue
+            try:
+                numeric = float(value)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError(f"{name} must be finite when provided.") from exc
+            if not np.isfinite(numeric):
+                raise ValueError(f"{name} must be finite when provided.")
+            object.__setattr__(self, name, numeric)
 
     @property
     def legacy_frame_model(self) -> str:
@@ -88,10 +117,16 @@ class FrameContext:
         )
 
     def at(self, t_s: float) -> FrameContext:
+        try:
+            elapsed_s = float(t_s)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("frame elapsed time must be finite.") from exc
+        if not np.isfinite(elapsed_s):
+            raise ValueError("frame elapsed time must be finite.")
         if self.jd_utc_start is None or self.model != FRAME_MODEL_IAU76_80_EOP or not self.eop_path:
             return self
-        _validate_eop_elapsed_interval(self.jd_utc_start, t_s, self.eop_path)
-        jd_utc = float(self.jd_utc_start) + float(t_s) / _DAYSEC
+        _validate_eop_elapsed_interval(self.jd_utc_start, elapsed_s, self.eop_path)
+        jd_utc = float(self.jd_utc_start) + elapsed_s / _DAYSEC
         xp_arcsec, yp_arcsec, dut1_s, dat_s = _interp_eop(
             jd_utc - _MJD0,
             self.eop_path,
@@ -137,12 +172,13 @@ class FrameContext:
         return data
 
 
-def _eop_file_signature(path_value: str) -> tuple[int, int, int, int]:
+def _eop_file_signature(path_value: str) -> tuple:
     """Return metadata that changes when an EOP file is replaced or rewritten."""
     # stat follows symlinks and preserves inode/mtime invalidation without
     # repeating realpath resolution at every integrator stage.
-    stat = os.stat(os.path.expanduser(path_value))
-    return (int(stat.st_ino), int(stat.st_size), int(stat.st_mtime_ns), int(stat.st_ctime_ns))
+    from sim.utils.file_version import file_version
+
+    return file_version(os.path.expanduser(path_value))
 
 
 @lru_cache(maxsize=16)
@@ -950,8 +986,8 @@ def rotation_between(
     t_s: float,
     context: FrameContext,
 ) -> np.ndarray:
-    source = str(source_frame or "").strip().lower()
-    target = str(target_frame or "").strip().lower()
+    source = _normalize_runtime_frame(source_frame)
+    target = _normalize_runtime_frame(target_frame)
     if source == target:
         return np.eye(3, dtype=float)
     if source == "eci" and target in {"ecef", "itrf"}:
@@ -981,8 +1017,8 @@ def transform_state(
     t_s: float,
     context: FrameContext,
 ) -> tuple[np.ndarray, np.ndarray]:
-    source = str(source_frame or "").strip().lower()
-    target = str(target_frame or "").strip().lower()
+    source = _normalize_runtime_frame(source_frame)
+    target = _normalize_runtime_frame(target_frame)
     pos = np.array(position_km, dtype=float).reshape(3)
     vel = np.array(velocity_km_s, dtype=float).reshape(3)
     if source == target:
@@ -998,6 +1034,14 @@ def transform_state(
         vel_eci = rot.T @ (vel - rot_dot @ pos_eci)
         return pos_eci, vel_eci
     raise ValueError(f"Unsupported frame state transform {source_frame!r} -> {target_frame!r}.")
+
+
+def _normalize_runtime_frame(value: str) -> str:
+    frame = str(value or "").strip().lower()
+    if frame not in _RUNTIME_FRAME_ALIASES:
+        choices = ", ".join(sorted(_RUNTIME_FRAME_ALIASES))
+        raise ValueError(f"Unsupported runtime frame {value!r}; expected one of: {choices}.")
+    return frame
 
 
 def _eci_to_ecef_rotation_derivative_context(t_s: float, context: FrameContext) -> np.ndarray:
