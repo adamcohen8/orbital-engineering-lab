@@ -1,7 +1,8 @@
 [package]
 name = "oel-rust-game"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
+rust-version = "1.85"
 license = "Apache-2.0"
 description = "Optional native Trainer flight software numerical backend"
 

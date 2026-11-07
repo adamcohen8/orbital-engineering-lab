@@ -24,6 +24,10 @@ repository directly.
 
 ## Check And Install The Latest Release
 
+These commands apply to the v0.36.0 or newer managed launcher. For a v0.31.0
+through v0.35.0 installation, first rerun the official installer as described in
+[installation](installation.md) to establish the signed-inventory trust boundary.
+
 ```text
 oel update status --full
 oel update check
@@ -31,12 +35,29 @@ oel update install latest
 ```
 
 The official installer persists the stable signed-channel URL and trusted
-release keys. `check` therefore needs no URL or key arguments for an ordinary
-managed installation. It performs a network read and rejects an invalid
-signature, wrong edition/channel, expired or revoked trust key, or release-feed
-rollback. `install latest` checks that channel, downloads the exact referenced
-manifest and artifact, verifies their identity, and installs the release side
-by side. It does not activate the release or edit a workspace.
+release keys. The release-key file is an operator/channel trust anchor beneath
+the platform config root, outside every version directory. `check` therefore
+needs no URL or key arguments for an ordinary managed installation. It performs
+a network read and rejects an invalid signature, wrong edition/channel,
+expired or revoked trust key, or release-feed rollback. `install latest` checks
+that channel, downloads the exact referenced manifest and artifact, verifies
+their identity, and installs the release side by side. It does not activate the
+release or edit a workspace.
+
+Official manifests also carry a signed source and runtime inventory. Activation
+and managed dispatch verify the extracted source bytes, wheel metadata and
+installed `RECORD` files against that inventory. The installation record and
+`installed-tree.json` remain useful local diagnostics but cannot establish
+official trust. A release created before this inventory was introduced is
+retained for inspection and reported as `untrusted`/`reverification_required`;
+it is never made official by hashing its current tree locally.
+
+The complete inventories use a lossless XZ/base64 transport inside the signed
+manifest, with a 32 MiB decoded bound and a 64 MiB decoder memory bound. The
+standalone bootstrap and managed verifier use the same decoder implementation.
+The existing 4 MiB manifest download limit remains in force, and the builder
+rejects a manifest that exceeds it. Decoding preserves all source, wheel,
+profile and runtime digests; it does not modify the signed manifest.
 
 An installation created before channel persistence can configure its official
 endpoint once:
@@ -60,6 +81,23 @@ and SHA-256. None of these commands activates a release or edits a workspace.
 Key rotation is explicit: a new `oel.trusted-key-registry.v1` must be signed by
 a currently trusted, non-revoked key and is installed with
 `oel update rotate-trusted-keys <registry.json>`.
+An incoming bundle may carry a future embedded key list, but its manifest must
+still verify against the current anchor until that signed rotation is
+completed. Revoking a release signer in the current anchor also prevents
+activation and dispatch of installations signed by that key. The installer never
+replaces an existing anchor merely because a bundle contains a different registry.
+For an installation created before replay timestamps existed, the one
+supported migration baseline is the external bare `{"keys": [...]}` anchor;
+the first valid signed rotation must include a timezone-aware `published_at`
+and establishes the replay timestamp. A versioned or malformed anchor without
+that timestamp is rejected and requires explicit operator repair.
+Existing installations remain eligible after an authorized non-revoking
+rotation: the current external anchor re-verifies the signed manifest and
+inventory, while the installation record's `trust_anchor_sha256` is retained
+as historical provenance and may differ from the current anchor after
+rotation. A changed historical digest is reported as a diagnostic; signer,
+manifest, integrity, runtime, and external receipt mismatches still fail
+closed.
 
 ## Install And Activate
 
@@ -70,10 +108,18 @@ oel update rollback
 
 Install extracts into an incomplete transaction directory, validates host and
 Python compatibility, checks the archive source version against the signed
-manifest, creates a constrained environment, runs `pip check`, writes a
-content-bound installation record, and only then publishes the version.
+manifest, creates a constrained environment, runs `pip check`, records
+provenance against the external trust anchor, and only then publishes the
+version.
 Activation replaces the stable launcher and current selector as a recoverable
-transaction. Global activation does not change registered workspace pins.
+transaction. The launcher invokes an operator-owned Python in isolated mode,
+which verifies the external key anchor, signed source inventory, and managed
+runtime inventory before importing the selected version. Desktop entries use
+the same launcher gate. Global activation does not change registered workspace
+pins. Official provisioning uses `pip --no-compile` and removes only
+provisioning-time derived caches from its trusted staging runtime before the
+signed check; any bytecode cache found in the published source or runtime is
+an authentication failure.
 
 Pro releases also require `--license` and `--license-public-keys`. The license
 must be valid, unexpired, for `oel-pro`, and permit the target version through

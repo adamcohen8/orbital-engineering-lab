@@ -52,6 +52,38 @@ _ANGULAR_QUANTITIES = {
     "argument_of_periapsis_deg",
     "true_anomaly_deg",
 }
+_TARGETING_PROBLEM_FIELDS = {
+    "schema_version",
+    "name",
+    "initial_state_eci_km_km_s",
+    "propagation",
+    "segments",
+    "variables",
+    "constraints",
+    "solver",
+}
+_TARGETING_PROPAGATION_FIELDS = {
+    "step_s",
+    "integrator",
+    "force_model",
+    "mu_km3_s2",
+    "central_body_radius_km",
+    "mass_kg",
+    "event_time_tolerance_s",
+    "event_value_tolerance",
+    "event_max_iterations",
+}
+_TARGETING_VARIABLE_FIELDS = {"name", "segment", "field", "initial", "perturbation"}
+_TARGETING_CONSTRAINT_FIELDS = {"name", "quantity", "target", "tolerance"}
+_TARGETING_SOLVER_FIELDS = {
+    "max_iterations",
+    "rank_rcond",
+    "minimum_line_search_scale",
+    "correction_limit",
+}
+_TARGETING_IMPULSIVE_SEGMENT_FIELDS = {"type", "name", "frame", "delta_v_m_s"}
+_TARGETING_COAST_SEGMENT_FIELDS = {"type", "name", "duration_s", "stop"}
+_TARGETING_STOP_FIELDS = {"quantity", "target", "direction", "max_duration_s", "minimum_elapsed_s"}
 
 
 class TrajectoryTargetingError(ValueError):
@@ -74,6 +106,44 @@ class EventRefinementError(TrajectoryTargetingError):
         self.receipt = dict(receipt or {})
 
 
+def _mapping_with_known_fields(
+    value: Any, *, field: str, allowed_fields: set[str]
+) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise TrajectoryTargetingError(f"{field} must be a mapping.")
+    raw = dict(value)
+    unknown = sorted(set(raw) - allowed_fields, key=str)
+    if unknown:
+        raise TrajectoryTargetingError(
+            f"{field} contains unknown fields: {', '.join(str(item) for item in unknown)}."
+        )
+    return raw
+
+
+def _reject_boolean_values(value: Any, field: str) -> None:
+    """Reject booleans before Python/NumPy numeric conversion erases their type."""
+
+    if isinstance(value, (bool, np.bool_)):
+        raise TrajectoryTargetingError(f"{field} must not contain boolean values.")
+    if isinstance(value, np.ndarray):
+        if value.dtype.kind == "b":
+            raise TrajectoryTargetingError(f"{field} must not contain boolean values.")
+        if value.dtype.kind == "O":
+            for item in value.flat:
+                _reject_boolean_values(item, field)
+    elif isinstance(value, Mapping):
+        for key, item in value.items():
+            _reject_boolean_values(item, f"{field}.{key}")
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            _reject_boolean_values(item, field)
+
+
+def _reject_boolean_fields(raw: Mapping[str, Any], field: str) -> None:
+    for key, value in raw.items():
+        _reject_boolean_values(value, f"{field}.{key}")
+
+
 @dataclass(frozen=True)
 class PropagationSettings:
     step_s: float = 10.0
@@ -88,7 +158,12 @@ class PropagationSettings:
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any] | None) -> PropagationSettings:
-        raw = dict(data or {})
+        raw = _mapping_with_known_fields(
+            {} if data is None else data,
+            field="propagation",
+            allowed_fields=_TARGETING_PROPAGATION_FIELDS,
+        )
+        _reject_boolean_fields(raw, "propagation")
         settings = cls(
             step_s=float(raw.get("step_s", 10.0)),
             integrator=str(raw.get("integrator", "rk4")).strip().lower(),
@@ -113,10 +188,24 @@ class PropagationSettings:
             raise TrajectoryTargetingError(
                 f"Unsupported public targeting force_model entries: {unsupported}; supported: {sorted(_FORCE_PLUGINS)}."
             )
-        if self.mu_km3_s2 <= 0.0 or self.central_body_radius_km <= 0.0 or self.mass_kg <= 0.0:
-            raise TrajectoryTargetingError("Propagation mu, central-body radius, and mass must be positive.")
-        if self.event_time_tolerance_s <= 0.0 or self.event_value_tolerance <= 0.0:
-            raise TrajectoryTargetingError("Event tolerances must be positive.")
+        if (
+            not math.isfinite(self.mu_km3_s2)
+            or not math.isfinite(self.central_body_radius_km)
+            or not math.isfinite(self.mass_kg)
+            or self.mu_km3_s2 <= 0.0
+            or self.central_body_radius_km <= 0.0
+            or self.mass_kg <= 0.0
+        ):
+            raise TrajectoryTargetingError(
+                "Propagation mu, central-body radius, and mass must be positive and finite."
+            )
+        if (
+            not math.isfinite(self.event_time_tolerance_s)
+            or not math.isfinite(self.event_value_tolerance)
+            or self.event_time_tolerance_s <= 0.0
+            or self.event_value_tolerance <= 0.0
+        ):
+            raise TrajectoryTargetingError("Event tolerances must be positive and finite.")
         if self.event_max_iterations <= 0:
             raise TrajectoryTargetingError("event_max_iterations must be positive.")
 
@@ -144,7 +233,12 @@ class DecisionVariable:
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any]) -> DecisionVariable:
-        raw = dict(data)
+        raw = _mapping_with_known_fields(
+            data,
+            field="decision variable",
+            allowed_fields=_TARGETING_VARIABLE_FIELDS,
+        )
+        _reject_boolean_fields(raw, "decision variable")
         variable = cls(
             name=str(raw.get("name", "")).strip(),
             segment=str(raw.get("segment", "")).strip(),
@@ -179,7 +273,12 @@ class TerminalConstraint:
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any]) -> TerminalConstraint:
-        raw = dict(data)
+        raw = _mapping_with_known_fields(
+            data,
+            field="terminal constraint",
+            allowed_fields=_TARGETING_CONSTRAINT_FIELDS,
+        )
+        _reject_boolean_fields(raw, "terminal constraint")
         constraint = cls(
             name=str(raw.get("name", "")).strip(),
             quantity=str(raw.get("quantity", "")).strip().lower(),
@@ -216,7 +315,12 @@ class SolverSettings:
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any] | None) -> SolverSettings:
-        raw = dict(data or {})
+        raw = _mapping_with_known_fields(
+            {} if data is None else data,
+            field="solver",
+            allowed_fields=_TARGETING_SOLVER_FIELDS,
+        )
+        _reject_boolean_fields(raw, "solver")
         settings = cls(
             max_iterations=int(raw.get("max_iterations", 12)),
             rank_rcond=float(raw.get("rank_rcond", 1.0e-10)),
@@ -255,7 +359,12 @@ class TrajectoryTargetingProblem:
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any]) -> TrajectoryTargetingProblem:
-        raw = dict(data)
+        raw = _mapping_with_known_fields(
+            data,
+            field="trajectory targeting problem",
+            allowed_fields=_TARGETING_PROBLEM_FIELDS,
+        )
+        _reject_boolean_fields(raw, "trajectory targeting problem")
         schema = str(raw.get("schema_version", TRAJECTORY_TARGETING_PROBLEM_SCHEMA)).strip()
         if schema != TRAJECTORY_TARGETING_PROBLEM_SCHEMA:
             raise TrajectoryTargetingError(
@@ -303,8 +412,26 @@ class TrajectoryTargetingProblem:
 def _validate_segment(data: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(data, Mapping):
         raise TrajectoryTargetingError("Every segment must be a JSON object.")
-    raw = dict(data)
-    segment_type = str(raw.get("type", "")).strip().lower()
+    segment_type = str(data.get("type", "")).strip().lower()
+    if segment_type == "impulsive_burn":
+        raw = _mapping_with_known_fields(
+            data,
+            field="impulsive burn segment",
+            allowed_fields=_TARGETING_IMPULSIVE_SEGMENT_FIELDS,
+        )
+    elif segment_type == "coast":
+        raw = _mapping_with_known_fields(
+            data,
+            field="coast segment",
+            allowed_fields=_TARGETING_COAST_SEGMENT_FIELDS,
+        )
+    else:
+        raw = _mapping_with_known_fields(
+            data,
+            field="segment",
+            allowed_fields=_TARGETING_IMPULSIVE_SEGMENT_FIELDS | _TARGETING_COAST_SEGMENT_FIELDS,
+        )
+    _reject_boolean_fields(raw, f"{segment_type or 'segment'} segment")
     name = str(raw.get("name", "")).strip()
     if not name:
         raise TrajectoryTargetingError("Every segment requires a non-empty name.")
@@ -334,7 +461,12 @@ def _validate_segment(data: Mapping[str, Any]) -> dict[str, Any]:
 def _validate_stop_event(data: Mapping[str, Any], *, segment_name: str) -> dict[str, Any]:
     if not isinstance(data, Mapping):
         raise TrajectoryTargetingError(f"Coast segment {segment_name!r} stop must be a JSON object.")
-    raw = dict(data)
+    raw = _mapping_with_known_fields(
+        data,
+        field=f"Coast segment {segment_name!r} stop",
+        allowed_fields=_TARGETING_STOP_FIELDS,
+    )
+    _reject_boolean_fields(raw, f"Coast segment {segment_name!r} stop")
     quantity = str(raw.get("quantity", "")).strip().lower()
     if quantity not in _STATE_QUANTITIES:
         raise TrajectoryTargetingError(f"Coast segment {segment_name!r} has unsupported stop quantity {quantity!r}.")
@@ -836,7 +968,7 @@ def execute_trajectory(
     if backend not in {"python", "rust"}:
         raise TrajectoryTargetingError("numeric_backend must be python or rust.")
     if backend == "rust":
-        _validate_native_jacobian_envelope(parsed)
+        _validate_native_rust_integrator(parsed, operation="direct trajectory execution")
     values = (
         np.asarray([variable.initial for variable in parsed.variables], dtype=float)
         if decision_values is None
@@ -1065,11 +1197,19 @@ def finite_difference_jacobian(
     }
 
 
-def _validate_native_jacobian_envelope(problem: TrajectoryTargetingProblem) -> None:
-    if problem.propagation.integrator != "rk4":
+def _validate_native_rust_integrator(problem: TrajectoryTargetingProblem, *, operation: str) -> None:
+    """Reject unsupported targeting integrators before native selection or execution."""
+
+    integrator = problem.propagation.integrator
+    if integrator != "rk4":
         raise TrajectoryTargetingError(
-            "Rust targeting Jacobians require RK4 trajectories with built-in zonal forces."
+            f"Rust {operation} supports only RK4 (propagation.integrator='rk4'); received {integrator!r}. "
+            "Use numeric_backend='python' for explicit RKF78, DOPRI5, or adaptive propagation."
         )
+
+
+def _validate_native_jacobian_envelope(problem: TrajectoryTargetingProblem) -> None:
+    _validate_native_rust_integrator(problem, operation="targeting Jacobian evaluation")
 
 
 def _canonical_sha256(value: Mapping[str, Any]) -> str:

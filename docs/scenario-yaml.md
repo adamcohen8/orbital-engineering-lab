@@ -683,7 +683,14 @@ The legacy per-force settings `drag_frame_model`, `drag_eop_path`, and
 scenario-level default for that subsystem. Payload and review output record the
 resolved model, EOP path, and time-scale assumptions in `frame_provenance`.
 
-The public core uses deterministic serial object stepping. Automatic within-scenario object workers and hierarchical campaign/object process planning are available in OEL Pro; see `docs/public-vs-pro.md` for the product boundary.
+Public OGP supports `simulator.execution.ogp_parallelism` with `enabled: true`
+and a nonnegative `workers` count when OGP objects select
+`general.numeric_backend: rust`. It prepares bounded native OGP history rows
+inside one scenario; ONP stepping and owner-side lifecycle handling stay serial.
+See [Parallel OGP](ogp-parallelism.md) for the optional source build, example,
+resource limits and actual-worker evidence. Campaign execution remains Pro.
+
+Public OGP supports bounded native history preparation threads; see docs/ogp-parallelism.md. ONP object workers and hierarchical campaign/object process planning are available in OEL Pro; see `docs/public-vs-pro.md` for the product boundary.
 
 
 Controller timing is configured independently:

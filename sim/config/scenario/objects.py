@@ -437,11 +437,29 @@ def _parse_initial_state_section(value: Any, role: str) -> dict[str, Any]:
         rel_path = f"{path}.relative_to_target_ric"
         rel = _as_dict(state[form], rel_path)
         _reject_unknown_fields(rel, rel_path, {"state", "frame", "reference_frame", "origin"})
+        if "state" not in rel:
+            raise ValueError(f"{rel_path}.state must be a length-6 finite numeric list.")
+        raw_relative_state = rel["state"]
+        if not isinstance(raw_relative_state, (list, tuple)) or len(raw_relative_state) != 6:
+            raise ValueError(f"{rel_path}.state must be a length-6 finite numeric list.")
+        rel["state"] = [
+            _parse_float(item, f"{rel_path}.state[{index}]")
+            for index, item in enumerate(raw_relative_state)
+        ]
         state[form] = rel
     if form == "relative_to_target_cislunar":
         rel_path = f"{path}.relative_to_target_cislunar"
         rel = _as_dict(state[form], rel_path)
         _reject_unknown_fields(rel, rel_path, {"state"})
+        if "state" not in rel:
+            raise ValueError(f"{rel_path}.state must be a length-6 finite numeric list.")
+        raw_relative_state = rel["state"]
+        if not isinstance(raw_relative_state, (list, tuple)) or len(raw_relative_state) != 6:
+            raise ValueError(f"{rel_path}.state must be a length-6 finite numeric list.")
+        rel["state"] = [
+            _parse_float(item, f"{rel_path}.state[{index}]")
+            for index, item in enumerate(raw_relative_state)
+        ]
         state[form] = rel
     if form == "coes":
         state["coes"] = _parse_coes_initial_state(state["coes"], f"{path}.coes")

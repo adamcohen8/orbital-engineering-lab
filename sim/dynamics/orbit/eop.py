@@ -35,6 +35,7 @@ class EopRecord:
     quality: str = "observed"
     ddpsi_mas: float = 0.0
     ddeps_mas: float = 0.0
+    dat_s: float | None = None
 
 
 @dataclass(frozen=True)
@@ -157,11 +158,51 @@ def load_iers_eop(path: str | Path, *, source_format: str = "auto") -> EopSeries
         selected = "c04_csv" if "," in next((line for line in text.splitlines() if line.strip()), "") else "finals2000a"
     if selected == "finals2000a":
         records = tuple(_parse_finals2000a(text.splitlines()))
+    elif selected == "celestrak-csv":
+        return parse_celestrak_eop(text, source_label=source.name, source_sha256=digest)
     elif selected == "c04_csv":
         records = tuple(_parse_c04_csv(text))
     else:
         raise EopError("source_format must be auto, finals2000a, or c04_csv.")
     return EopSeries(records, selected, source.name, digest)
+
+
+def parse_celestrak_eop(text: str, *, source_label: str, source_sha256: str) -> EopSeries:
+    """CelesTrak CSV uses arcseconds and seconds; C04 uses different units."""
+    reader = csv.DictReader(io.StringIO(text))
+    fields = {"DATE", "MJD", "X", "Y", "UT1-UTC", "LOD", "DPSI", "DEPS", "DX", "DY", "DAT", "DATA_TYPE"}
+    if reader.fieldnames is None or len(reader.fieldnames) != len(set(reader.fieldnames)) or set(reader.fieldnames) != fields:
+        raise EopError("Expected the documented CelesTrak EOP CSV columns.")
+    records = []
+    for line, row in enumerate(reader, 2):
+        try:
+            if None in row or any(v is None for v in row.values()):
+                raise ValueError("row length")
+            day = datetime.strptime(row["DATE"], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            mjd = float(row["MJD"])
+            if abs(mjd - _datetime_to_mjd(day)) > 1e-8 or row["DATA_TYPE"] not in {"O", "P"}:
+                raise ValueError("date/quality")
+            records.append(EopRecord(mjd, float(row["X"]), float(row["Y"]), float(row["UT1-UTC"]),
+                dx_mas=1000 * float(row["DX"]), dy_mas=1000 * float(row["DY"]),
+                lod_ms=1000 * float(row["LOD"]), quality="observed" if row["DATA_TYPE"] == "O" else "predicted",
+                ddpsi_mas=1000 * float(row["DPSI"]), ddeps_mas=1000 * float(row["DEPS"]), dat_s=float(row["DAT"])))
+        except (ValueError, TypeError) as exc:
+            raise EopError(f"Invalid CelesTrak EOP row {line}.") from exc
+    return EopSeries(tuple(records), "celestrak-csv", source_label, source_sha256)
+
+
+def encode_eop_all(series: EopSeries) -> bytes:
+    """Serialize explicit DAT/equinox fields for OEL's existing frame owner."""
+    lines = ["# Derived from " + series.source_sha256, "NUM_OBSERVED_POINTS " + str(len(series.records))]
+    for row in series.records:
+        if row.dat_s is None:
+            raise EopError("EOP-All export requires source-provided TAI-UTC; no leap-second guessing.")
+        day = datetime.fromtimestamp((row.mjd_utc - 40587) * 86400, timezone.utc)
+        values = [day.year, day.month, day.day, row.mjd_utc, row.xp_arcsec, row.yp_arcsec, row.dut1_s,
+                  (row.lod_ms or 0) / 1000, row.ddpsi_mas / 1000, row.ddeps_mas / 1000,
+                  row.dx_mas / 1000, row.dy_mas / 1000, row.dat_s]
+        lines.append(" ".join(format(v, ".15g") for v in values))
+    return ("\n".join(lines) + "\n").encode()
 
 
 def audit_eop_series(
@@ -265,6 +306,8 @@ def _validate_record(record: EopRecord, line_number: int) -> None:
         raise EopError(f"EOP line {line_number} is outside bounded polar-motion/DUT1 limits.")
     if record.lod_ms is not None and not math.isfinite(float(record.lod_ms)):
         raise EopError(f"EOP line {line_number} contains a non-finite LOD value.")
+    if record.dat_s is not None and (not math.isfinite(record.dat_s) or not 0 <= record.dat_s <= 100 or record.dat_s != int(record.dat_s)):
+        raise EopError(f"EOP line {line_number} has invalid TAI-UTC.")
     if record.quality not in {"observed", "observed-final", "observed-rapid", "predicted"}:
         raise EopError(f"EOP line {line_number} has unsupported quality {record.quality!r}.")
 

@@ -304,6 +304,20 @@ class PassiveHistoryCache:
         provider = next(
             item for item in self.engine.general_propagation.values() if id(item) == definition[0]
         )
+        intervals, truth_times = self.ogp_schedule(definition, initial, t_s, t_next)
+        try:
+            states = provider.canonical_states_at(truth_times)
+        except (ValueError, ArithmeticError, RuntimeError):
+            # Preserve current-step failure/termination order when an error
+            # belongs to a later speculative epoch.
+            return None
+        self.preparation_count += 1
+        return _PreparedHistory(definition, intervals, truth_times, states)
+
+    def ogp_schedule(
+        self, definition: tuple[Any, ...], initial: StateTruth, t_s: float, t_next: float,
+    ) -> tuple[list[tuple[float, float]], list[float]]:
+        """Bound OGP lookahead without advancing the scenario timeline."""
         duration = definition[7]
         dt = float(t_next) - float(t_s)
         intervals = []
@@ -316,14 +330,7 @@ class PassiveHistoryCache:
             stop = float(start + min(dt, max(duration - start, 0.0)))
             if stop <= start:
                 break
-        try:
-            states = provider.canonical_states_at(truth_times)
-        except (ValueError, ArithmeticError, RuntimeError):
-            # Preserve current-step failure/termination order when an error
-            # belongs to a later speculative epoch.
-            return None
-        self.preparation_count += 1
-        return _PreparedHistory(definition, intervals, truth_times, states)
+        return intervals, truth_times
 
     def _matching_entry(
         self, aid: str, definition: tuple[Any, ...], initial: StateTruth, t_s: float, t_next: float,

@@ -249,7 +249,13 @@ Conventions:
 - When enabled, measurement histories are station-indexed, then target-indexed.
   V0 measurement rows include `time_s`, optional `jd_utc`, `azimuth_deg`,
   `elevation_deg`, `range_km`, optional `range_rate_km_s`, component names,
-  configured sigmas, and matching truth geometry fields for validation.
+  configured sigmas, matching truth geometry fields for validation, and
+  `valid`/`validity_reason` disposition fields. Seeded Gaussian draws remain
+  raw evidence, including physically impossible range or angular values; rows
+  with `valid: false` are retained for audit but are rejected before
+  observation-packet conversion or receiver delivery. `measurement_count`
+  counts raw rows and `usable_measurement_count` counts rows eligible for
+  downstream conversion.
 - Ground-station access does not modify truth, belief, knowledge, control, or
   termination behavior.
 - Ground-station measurements are synthetic observation evidence. They do not

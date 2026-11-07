@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -9,12 +10,25 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Event
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 import yaml
 
+from integrations.oel_mcp.approval_grants import (
+    ApprovalDecision,
+    ApprovalGrant,
+    ApprovalGrantStore,
+    canonical_request_digest,
+)
 from integrations.oel_mcp.policy import MCPPathPolicy
 from integrations.oel_mcp.recovery import annotate_error
+from integrations.oel_mcp.secure_writes import (
+    SecureOutputTransaction,
+    SecureWriteConflict,
+    SecureWriteRoot,
+    bind_output_writer,
+    staged_output,
+)
 from sim.api import SimulationWorkspace
 from sim.config import scenario_config_from_dict
 from sim.resource_limits import apply_resource_profile_to_config_dict, estimate_resource_requirements
@@ -33,40 +47,249 @@ class MCPExecutionCancelled(RuntimeError):
 
 @dataclass(frozen=True)
 class ExecutionApprovalPolicy:
+    """Standing IDs plus host-configured, content-bound approval grants.
+
+    The three ID fields remain the v1 constructor and environment contract.
+    Bounded grants are additional server configuration; request data can only
+    select a preconfigured grant and can never define one.
+    """
+
     write_approval_ids: frozenset[str] = frozenset()
     execution_approval_ids: frozenset[str] = frozenset()
     trust_approval_ids: frozenset[str] = frozenset()
+    bounded_grants: tuple[ApprovalGrant, ...] = ()
+    revoked_grant_ids: frozenset[str] = frozenset()
+    grant_store: ApprovalGrantStore | None = None
+
+    def __post_init__(self) -> None:
+        if self.grant_store is None:
+            object.__setattr__(
+                self,
+                "grant_store",
+                ApprovalGrantStore(self.bounded_grants, revoked_ids=self.revoked_grant_ids),
+            )
 
     @classmethod
     def configured(cls) -> ExecutionApprovalPolicy:
+        store = ApprovalGrantStore.from_environment()
         return cls(
             write_approval_ids=_approval_ids("OEL_MCP_WRITE_APPROVAL_IDS"),
             execution_approval_ids=_approval_ids("OEL_MCP_EXECUTION_APPROVAL_IDS"),
             trust_approval_ids=_approval_ids("OEL_MCP_TRUST_APPROVAL_IDS"),
+            bounded_grants=tuple(store.grants),
+            revoked_grant_ids=frozenset(store.revoked_ids),
+            grant_store=store,
         )
 
-    def require(self, approval: dict[str, Any] | None, *, executes: bool) -> str:
+    def authorize(
+        self,
+        approval: dict[str, Any] | None,
+        *,
+        executes: bool,
+        tool_id: str = "",
+        arguments: dict[str, Any] | None = None,
+        path_policy: MCPPathPolicy | None = None,
+    ) -> ApprovalDecision:
         if not isinstance(approval, dict):
-            raise annotate_error(PermissionError("Operator approval metadata is required for this operation."), "approval.required")
-        approval_id = str(approval.get("approval_id", "")).strip()
+            raise annotate_error(
+                PermissionError("Operator approval metadata is required for this operation."),
+                "approval.required",
+            )
+        approval_id = str(approval.get("approval_id", approval.get("grant_id", ""))).strip()
+        explicit_grant_id = str(approval.get("grant_id", "")).strip()
+        grant_id = explicit_grant_id or approval_id
         scope = str(approval.get("scope", "")).strip()
         expected_scope = "execute" if executes else "write"
+        requested_operation_id = str(approval.get("operation_id", "")).strip()
+        request_arguments = dict(arguments or {})
+        store = self.grant_store
+        grant = store.get(grant_id) if store is not None and grant_id else None
+        if explicit_grant_id and grant is None:
+            raise annotate_error(
+                PermissionError("The explicitly selected MCP approval grant is not configured by the host."),
+                "approval.required",
+            )
+        if grant is not None:
+            if scope != expected_scope:
+                raise annotate_error(
+                    PermissionError("The approval scope does not match this operation effect."),
+                    "approval.required",
+                )
+            if approval_id and approval_id != grant_id:
+                raise annotate_error(
+                    PermissionError("The approval id and configured grant id must match."),
+                    "approval.required",
+                )
+            try:
+                store.authorize(
+                    grant_id=grant_id,
+                    scope=scope,
+                    tool_id=str(tool_id),
+                    arguments=request_arguments,
+                    # A host-configured operation is a reviewed plan identity;
+                    # the request must supply it and the grant checks exact equality.
+                    operation_id=requested_operation_id,
+                    path_policy=path_policy,
+                    # Preparation occurs inside the handler operation.  Defer
+                    # only the host-metric ceiling; exact tool/argument/content
+                    # binding is still checked before entering the operation.
+                    defer_resource_ceiling=True,
+                )
+            except PermissionError as exc:
+                annotate_error(exc, "approval.required")
+                raise
+            return ApprovalDecision(
+                approval_id=grant_id,
+                scope=scope,
+                grant_id=grant_id,
+                operation_id=requested_operation_id or None,
+                request_digest=canonical_request_digest(tool_id, request_arguments),
+                bounded=grant.bounded,
+                tool_id=str(tool_id),
+            )
         allowed = self.execution_approval_ids if executes else self.write_approval_ids
         if scope != expected_scope or not approval_id or approval_id not in allowed:
-            raise annotate_error(PermissionError("The operation is not enabled by the server's operator approval policy."), "approval.required")
-        return approval_id
+            raise annotate_error(
+                PermissionError("The operation is not enabled by the server's operator approval policy."),
+                "approval.required",
+            )
+        return ApprovalDecision(
+            approval_id=approval_id,
+            scope=scope,
+            grant_id=None,
+            operation_id=requested_operation_id or None,
+            request_digest=canonical_request_digest(tool_id, request_arguments),
+            bounded=False,
+            tool_id=str(tool_id),
+        )
 
-    def require_trust(self, approval: dict[str, Any] | None) -> str:
+    def authorize_trust(
+        self,
+        approval: dict[str, Any] | None,
+        *,
+        tool_id: str = "",
+        arguments: dict[str, Any] | None = None,
+        path_policy: MCPPathPolicy | None = None,
+    ) -> ApprovalDecision:
         if not isinstance(approval, dict):
-            raise annotate_error(PermissionError("Operator trust approval is required before importing scenario plugins."), "trust.required")
-        approval_id = str(approval.get("approval_id", "")).strip()
-        if (
-            str(approval.get("scope", "")).strip() != "trust"
-            or not approval_id
-            or approval_id not in self.trust_approval_ids
-        ):
-            raise annotate_error(PermissionError("Plugin trust is not enabled by the server's operator approval policy."), "trust.required")
-        return approval_id
+            raise annotate_error(
+                PermissionError("Operator trust approval is required before importing scenario plugins."),
+                "trust.required",
+            )
+        approval_id = str(approval.get("approval_id", approval.get("grant_id", ""))).strip()
+        explicit_grant_id = str(approval.get("grant_id", "")).strip()
+        grant_id = explicit_grant_id or approval_id
+        requested_operation_id = str(approval.get("operation_id", "")).strip()
+        scope = str(approval.get("scope", "")).strip()
+        store = self.grant_store
+        grant = store.get(grant_id) if store is not None and grant_id else None
+        if explicit_grant_id and grant is None:
+            raise annotate_error(
+                PermissionError("The explicitly selected MCP approval grant is not configured by the host."),
+                "trust.required",
+            )
+        if grant is not None:
+            if scope != "trust":
+                raise annotate_error(
+                    PermissionError("The approval scope does not authorize plugin trust."),
+                    "trust.required",
+                )
+            if approval_id and approval_id != grant_id:
+                raise annotate_error(
+                    PermissionError("The approval id and configured grant id must match."),
+                    "trust.required",
+                )
+            try:
+                store.authorize(
+                    grant_id=grant_id,
+                    scope="trust",
+                    tool_id=str(tool_id),
+                    arguments=dict(arguments or {}),
+                    operation_id=requested_operation_id,
+                    path_policy=path_policy,
+                    # Preparation occurs inside the handler operation.  Defer
+                    # only the host-metric ceiling; exact tool/argument/content
+                    # binding is still checked before entering the operation.
+                    defer_resource_ceiling=True,
+                )
+            except PermissionError as exc:
+                annotate_error(exc, "trust.required")
+                raise
+            return ApprovalDecision(
+                approval_id=grant_id,
+                scope="trust",
+                grant_id=grant_id,
+                operation_id=requested_operation_id or None,
+                request_digest=canonical_request_digest(tool_id, dict(arguments or {})),
+                bounded=grant.bounded,
+                tool_id=str(tool_id),
+            )
+        if str(approval.get("scope", "")).strip() != "trust" or not approval_id or approval_id not in self.trust_approval_ids:
+            raise annotate_error(
+                PermissionError("Plugin trust is not enabled by the server's operator approval policy."),
+                "trust.required",
+            )
+        return ApprovalDecision(
+            approval_id=approval_id,
+            scope="trust",
+            grant_id=None,
+            operation_id=requested_operation_id or None,
+            request_digest=canonical_request_digest(tool_id, dict(arguments or {})),
+            bounded=False,
+            tool_id=str(tool_id),
+        )
+
+    def enforce_resource_ceiling(
+        self,
+        decision: ApprovalDecision | None,
+        metrics: Mapping[str, Any] | None,
+    ) -> None:
+        """Enforce a configured grant ceiling against trusted host metrics.
+
+        Bounded request authorization intentionally defers this check because
+        preparation may be required to compute the actual resource plan.
+        Handlers must call this before the first effect; unsupported paths pass
+        no metrics and fail closed.
+        """
+
+        if decision is None or not decision.grant_id:
+            return
+        store = self.grant_store
+        if store is None:
+            raise PermissionError("Host resource-ceiling configuration is unavailable.")
+        store.enforce_resource_ceiling(grant_id=decision.grant_id, metrics=metrics)
+
+    def require(
+        self,
+        approval: dict[str, Any] | None,
+        *,
+        executes: bool,
+        tool_id: str = "",
+        arguments: dict[str, Any] | None = None,
+        path_policy: MCPPathPolicy | None = None,
+    ) -> str:
+        return self.authorize(
+            approval,
+            executes=executes,
+            tool_id=tool_id,
+            arguments=arguments,
+            path_policy=path_policy,
+        ).approval_id
+
+    def require_trust(
+        self,
+        approval: dict[str, Any] | None,
+        *,
+        tool_id: str = "",
+        arguments: dict[str, Any] | None = None,
+        path_policy: MCPPathPolicy | None = None,
+    ) -> str:
+        return self.authorize_trust(
+            approval,
+            tool_id=tool_id,
+            arguments=arguments,
+            path_policy=path_policy,
+        ).approval_id
 
 
 @dataclass(frozen=True)
@@ -102,6 +325,10 @@ def bounded_config_path_policy(
         allow_external_config_paths=False,
         allow_external_ai_prompt_files=False,
         restrict_ai_prompt_to_read_roots=True,
+        # MCP is a hostile-boundary adapter.  It must fail closed on hosts
+        # without descriptor-bound input primitives instead of inheriting the
+        # trusted local CLI's bounded path-compatibility fallback.
+        require_secure_reads=True,
     )
 
 
@@ -112,8 +339,10 @@ def prepare_scenario(
     resource_profile: str,
     path_policy: MCPPathPolicy,
 ) -> PreparedScenario:
-    source = path_policy.resolve_read(config_path, kind="file")
-    raw_bytes = _read_file_nofollow(source, maximum=MAX_SCENARIO_BYTES)
+    source, raw_bytes = path_policy.read_authorized_bytes(
+        config_path,
+        maximum=MAX_SCENARIO_BYTES,
+    )
     output = path_policy.resolve_write(output_dir)
     profile = str(resource_profile).strip()
     if profile not in M4_RESOURCE_PROFILES:
@@ -216,17 +445,39 @@ def require_safe_resource_estimate(estimate: dict[str, Any]) -> None:
         raise ValueError("The scenario failed the active resource-safety preflight.")
 
 
-def ensure_new_output_dir(path: Path) -> None:
-    _ensure_directory_nofollow(path, require_empty=True)
+def ensure_new_output_dir(
+    path: Path,
+    *,
+    approved_roots: tuple[str | Path, ...] | None = None,
+) -> None:
+    if approved_roots is None:
+        _ensure_directory_nofollow(path, require_empty=True)
+        return
+    with SecureWriteRoot.open(
+        path,
+        approved_roots=approved_roots,
+        create=True,
+        require_empty=True,
+    ):
+        return
 
 
-def write_materialized_config(prepared: PreparedScenario) -> Path:
-    target = prepared.output_dir / "mcp_execution_config.yaml"
-    _write_child_nofollow(
-        prepared.output_dir,
-        target.name,
-        yaml.safe_dump(prepared.config_dict, sort_keys=False, allow_unicode=False).encode("utf-8"),
-    )
+def write_materialized_config(
+    prepared: PreparedScenario,
+    *,
+    writer: SecureWriteRoot | None = None,
+    output_dir: Path | None = None,
+) -> Path:
+    target_dir = Path(output_dir) if output_dir is not None else prepared.output_dir
+    config_dict = dict(prepared.config_dict)
+    outputs = dict(config_dict.get("outputs", {}) or {})
+    outputs["output_dir"] = str(target_dir)
+    config_dict["outputs"] = outputs
+    serialized = yaml.safe_dump(config_dict, sort_keys=False, allow_unicode=False).encode("utf-8")
+    if writer is not None:
+        return writer.write_bytes("mcp_execution_config.yaml", serialized)
+    target = target_dir / "mcp_execution_config.yaml"
+    _write_child_nofollow(target_dir, target.name, serialized)
     return target
 
 
@@ -243,12 +494,92 @@ def write_execution_manifest(
     payload: dict[str, Any],
     *,
     filename: str = EXECUTION_MANIFEST_NAME,
+    approved_roots: tuple[str | Path, ...] | None = None,
+    writer: SecureWriteRoot | None = None,
+    allow_update: bool = True,
 ) -> Path:
-    _ensure_directory_nofollow(output_dir, require_empty=False)
-    target = output_dir / filename
     serialized = (json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n").encode("utf-8")
-    _write_child_nofollow(output_dir, filename, serialized, atomic=True)
-    return target
+    if writer is not None:
+        try:
+            return writer.write_bytes(filename, serialized)
+        except SecureWriteConflict:
+            if not allow_update:
+                raise
+            return writer.update_existing_bytes(filename, serialized)
+    roots = approved_roots if approved_roots is not None else (output_dir,)
+    with SecureWriteRoot.open(output_dir, approved_roots=roots, create=False) as handle:
+        try:
+            return handle.write_bytes(filename, serialized)
+        except SecureWriteConflict:
+            if not allow_update:
+                raise
+            return handle.update_existing_bytes(filename, serialized)
+
+
+def secure_staged_output(
+    path_policy: MCPPathPolicy,
+    path: str | Path,
+    *,
+    require_empty: bool = True,
+    staging_parent: str | Path | None = None,
+    active_opid: str | None = None,
+):
+    """Create a private staging transaction under an explicit MCP write grant."""
+
+    target = path_policy.resolve_write(path)
+    return staged_output(
+        target,
+        approved_roots=path_policy.write_roots,
+        require_empty=require_empty,
+        staging_parent=staging_parent,
+        active_opid=active_opid,
+    )
+
+
+@contextlib.contextmanager
+def secure_staged_file(
+    path_policy: MCPPathPolicy,
+    path: str | Path,
+    *,
+    active_opid: str | None = None,
+):
+    """Stage a path-facing producer that creates one file.
+
+    The final parent may already contain unrelated evidence, so the
+    transaction is rooted at that parent with ``require_empty=False``.  The
+    producer receives a private staging path; publication still refuses an
+    existing destination entry and rejects symlinks or special files.
+    """
+
+    target = path_policy.resolve_write(path)
+    with secure_staged_output(
+        path_policy,
+        target.parent,
+        require_empty=False,
+        active_opid=active_opid,
+    ) as transaction:
+        yield transaction, transaction.staging_path / target.name
+
+
+@contextlib.contextmanager
+def secure_writer_context(
+    path_policy: MCPPathPolicy,
+    path: str | Path,
+    *,
+    create: bool = True,
+    require_empty: bool = False,
+    active_opid: str | None = None,
+):
+    """Open an approved writer and bind it for helpers that preserve logical paths."""
+
+    with path_policy.open_secure_writer(
+        path,
+        create=create,
+        require_empty=require_empty,
+        active_opid=active_opid,
+    ) as writer:
+        with bind_output_writer(writer):
+            yield writer
 
 
 def _write_child_nofollow(
@@ -323,33 +654,6 @@ def _ensure_directory_nofollow(directory: Path, *, require_empty: bool) -> None:
         os.close(directory_fd)
 
 
-def _read_file_nofollow(path: Path, *, maximum: int) -> bytes:
-    parent_fd = _open_directory_nofollow(path.parent, create=False)
-    try:
-        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-        file_fd = os.open(path.name, flags, dir_fd=parent_fd)
-        try:
-            size = os.fstat(file_fd).st_size
-            if size > int(maximum):
-                raise ValueError("Authorized input exceeds the MCP file-size budget.")
-            chunks: list[bytes] = []
-            remaining = int(maximum) + 1
-            while remaining > 0:
-                chunk = os.read(file_fd, min(1024 * 1024, remaining))
-                if not chunk:
-                    break
-                chunks.append(chunk)
-                remaining -= len(chunk)
-            payload = b"".join(chunks)
-            if len(payload) > int(maximum):
-                raise ValueError("Authorized input exceeds the MCP file-size budget.")
-            return payload
-        finally:
-            os.close(file_fd)
-    finally:
-        os.close(parent_fd)
-
-
 def manifest_base(
     *,
     tool_id: str,
@@ -385,17 +689,57 @@ def complete_manifest(
     status: str,
     cancelled: bool = False,
     artifacts: list[str] | None = None,
+    artifact_files: list[str] | None = None,
+    writer: Any | None = None,
     error_type: str = "",
 ) -> dict[str, Any]:
-    artifact_paths = list(dict.fromkeys(str(path) for path in list(artifacts or []) if str(path)))
+    """Complete a manifest while keeping logical paths separate from hash sources.
+
+    Protected MCP producers write into private staging roots, so the path that
+    belongs in the returned manifest can differ from the physical file that is
+    hashed.  ``artifact_files`` is an optional one-to-one companion list for
+    that case.  The public ``artifacts``-only form retains its historical
+    behavior and hashes the paths it reports.  A supplied ``writer`` instead
+    inventories each logical artifact through its retained directory
+    descriptor, keeping hashes bound across visible path replacement.
+    """
+
+    logical_inputs = [str(path) for path in list(artifacts or []) if str(path)]
+    physical_inputs = (
+        [str(path) for path in list(artifact_files)]
+        if artifact_files is not None
+        else logical_inputs
+    )
+    if len(logical_inputs) != len(physical_inputs):
+        raise ValueError("Logical and physical artifact lists must have the same length.")
+
+    # Preserve the old duplicate suppression while retaining the physical
+    # source paired with the first occurrence of each logical artifact.
+    artifact_pairs: list[tuple[str, str]] = []
+    seen_logical: set[str] = set()
+    for logical_path, physical_path in zip(logical_inputs, physical_inputs):
+        if logical_path in seen_logical:
+            continue
+        seen_logical.add(logical_path)
+        artifact_pairs.append((logical_path, physical_path))
+    artifact_paths = [logical_path for logical_path, _ in artifact_pairs]
     artifact_records: list[dict[str, Any]] = []
-    for raw_path in artifact_paths:
-        path = Path(raw_path)
+    for logical_path, physical_path in artifact_pairs:
+        if writer is not None:
+            logical = Path(os.path.abspath(Path(logical_path).expanduser()))
+            relative = logical.relative_to(writer.logical_root)
+            try:
+                record = writer.file_record(relative)
+            except FileNotFoundError:
+                continue
+            artifact_records.append({"path": logical_path, **record})
+            continue
+        path = Path(physical_path)
         if not path.is_file() or path.is_symlink():
             continue
         artifact_records.append(
             {
-                "path": raw_path,
+                "path": logical_path,
                 "bytes": int(path.stat().st_size),
                 "sha256": _sha256_file(path),
             }
@@ -464,6 +808,10 @@ __all__ = [
     "require_safe_resource_estimate",
     "resource_estimate",
     "safe_artifact_id",
+    "secure_staged_file",
+    "secure_staged_output",
+    "secure_writer_context",
+    "SecureOutputTransaction",
     "validate_prepared_scenario",
     "write_execution_manifest",
     "write_materialized_config",

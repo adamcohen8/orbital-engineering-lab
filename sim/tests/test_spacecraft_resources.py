@@ -124,6 +124,20 @@ def test_earth_solid_angle_and_albedo_geometry():
     assert np.all(dark == 0.0)
 
 
+@pytest.mark.parametrize(
+    "position, sun_position, order",
+    [
+        ([7000.0, 0.0, float("nan")], [AU_KM, 0.0, 0.0], 16),
+        ([7000.0, 0.0, 0.0], [AU_KM, float("inf"), 0.0], 16),
+        ([7000.0, 0.0, 0.0], [AU_KM, 0.0, 0.0], 3),
+        ([7000.0, 0.0, 0.0], [AU_KM, 0.0, 0.0], 65),
+    ],
+)
+def test_earth_radiation_rejects_nonfinite_vectors_and_invalid_order(position, sun_position, order):
+    with pytest.raises(ValueError):
+        earth_radiation(position, sun_position, order, numeric_backend="python")
+
+
 def test_geometry_area_and_rotation():
     cfg = specs()
     cfg.pop("power")

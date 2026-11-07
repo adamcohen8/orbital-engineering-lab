@@ -11,10 +11,12 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from sim.flight_software import FlightSoftwareSnapshot, from_primitive
+from sim.flight_software import FlightSoftwareSnapshot, NativeFlightSoftwareSnapshot, from_primitive
 from sim.interchange.completed_runs import build_completed_run_state_product
+from sim.interchange.manifests import bind_output_path, write_json_document
 from sim.interchange.materialization import (
     _continued_object_specs,
+    _ensure_distinct_materialization_paths,
     _manifest_base,
     materialize_scenario_document,
 )
@@ -36,14 +38,20 @@ def export_satellite_checkpoint(
     completed_run: str | Path,
     *,
     output_path: str | Path,
+    logical_output_path: str | Path | None = None,
+    writer: Any | None = None,
+    export_created_utc: str | None = None,
     object_id: str,
     context_object_ids: Sequence[str] = (),
     overwrite: bool = False,
 ) -> dict[str, Any]:
     """Export the final truth state plus an opaque, hash-bound GNC v2 checkpoint."""
 
-    target = Path(output_path).expanduser().resolve()
-    target.parent.mkdir(parents=True, exist_ok=True)
+    target, logical_target = bind_output_path(
+        output_path,
+        logical_output_path,
+        writer=writer,
+    )
     object_key = str(object_id or "").strip()
     context_ids = [str(item).strip() for item in context_object_ids]
     if not object_key or any(not item for item in context_ids):
@@ -54,6 +62,9 @@ def export_satellite_checkpoint(
     state_product = build_completed_run_state_product(
         completed_run,
         output_path=target,
+        logical_output_path=logical_target,
+        writer=writer,
+        export_created_utc=export_created_utc,
         object_id=object_key,
         selector="final",
     )
@@ -82,7 +93,11 @@ def export_satellite_checkpoint(
     selected_time_ns = int(round(float(selection["time_s"]) * 1.0e9))
     truth_row = _selected_truth_row(workspace, object_key, int(selection["sample_index"]))
     checkpoint = _selected_checkpoint(workspace, object_key, selected_time_ns)
-    snapshot = from_primitive(FlightSoftwareSnapshot, checkpoint["fsw_snapshot"])
+    snapshot_raw = checkpoint["fsw_snapshot"]
+    if isinstance(snapshot_raw, dict) and snapshot_raw.get("schema") == "oel.flight_software.native_snapshot.v1":
+        snapshot = from_primitive(NativeFlightSoftwareSnapshot, snapshot_raw)
+    else:
+        snapshot = from_primitive(FlightSoftwareSnapshot, snapshot_raw)
     configured_stack = str(flight_software.get("stack", "") or "")
     if configured_stack == "fsw.game_pilot_reference":
         raise SatelliteCheckpointError(
@@ -106,7 +121,14 @@ def export_satellite_checkpoint(
         raise SatelliteCheckpointError("Runtime and checkpoint clock identities do not match.")
 
     context_states = [
-        _context_state(completed_run, target, context_id, int(selection["sample_index"]))
+        _context_state(
+            completed_run,
+            target,
+            context_id,
+            int(selection["sample_index"]),
+            logical_output_path=logical_target,
+            writer=writer,
+        )
         for context_id in context_ids
     ]
     selection["truth_row_sha256"] = hashlib.sha256(canonical_json_bytes(truth_row)).hexdigest()
@@ -195,16 +217,16 @@ def export_satellite_checkpoint(
         }
     ]
     product["product_id"] = compute_product_id(product)
-    report = validate_product(product, source_path=target)
+    report = validate_product(product, source_path=logical_target)
     if not report.valid:
         messages = "; ".join(f"{item.path}: {item.message}" for item in report.errors)
         raise SatelliteCheckpointError(f"Generated satellite checkpoint failed validation: {messages}")
-    text = json.dumps(product, indent=2, sort_keys=True) + "\n"
-    if target.exists() and target.read_text(encoding="utf-8") != text and not overwrite:
+    try:
+        write_json_document(product, target, writer=writer, overwrite=overwrite)
+    except FileExistsError as exc:
         raise SatelliteCheckpointError(
             "Checkpoint output exists with different content; pass overwrite=True explicitly to replace it."
-        )
-    target.write_text(text, encoding="utf-8")
+        ) from exc
     return {
         "status": "exported",
         "product_path": str(target),
@@ -225,6 +247,9 @@ def materialize_satellite_checkpoint(
     output_dir: str | Path,
     duration_s: float,
     dt_s: float,
+    logical_scenario_path: str | Path | None = None,
+    logical_manifest_path: str | Path | None = None,
+    logical_output_dir: str | Path | None = None,
     trust_plugins: bool = False,
     overwrite: bool = False,
 ) -> dict[str, Any]:
@@ -233,6 +258,25 @@ def materialize_satellite_checkpoint(
     source = Path(checkpoint_product).expanduser().resolve()
     destination = Path(scenario_path).expanduser().resolve()
     manifest_target = destination.with_name(f"{destination.stem}.handoff_manifest.json")
+    logical_destination = (
+        Path(logical_scenario_path).expanduser().resolve()
+        if logical_scenario_path is not None
+        else destination
+    )
+    logical_manifest_target = (
+        Path(logical_manifest_path).expanduser().resolve()
+        if logical_manifest_path is not None
+        else logical_destination.with_name(f"{logical_destination.stem}.handoff_manifest.json")
+    )
+    logical_output = (
+        Path(logical_output_dir).expanduser().resolve()
+        if logical_output_dir is not None
+        else Path(output_dir).expanduser().resolve()
+    )
+    _ensure_distinct_materialization_paths(
+        (("source product", source), ("scenario", destination), ("manifest", manifest_target)),
+        SatelliteCheckpointError,
+    )
     if not str(scenario_name or "").strip() or float(duration_s) <= 0.0 or float(dt_s) <= 0.0:
         raise SatelliteCheckpointError("scenario_name and positive duration_s/dt_s are required.")
     product = load_interchange_document(source)
@@ -243,10 +287,10 @@ def materialize_satellite_checkpoint(
     scenario = _checkpoint_scenario(
         product,
         scenario_name=str(scenario_name).strip(),
-        output_dir=output_dir,
+        output_dir=logical_output,
         duration_s=float(duration_s),
         dt_s=float(dt_s),
-        manifest_path=manifest_target,
+        manifest_path=logical_manifest_target,
     )
     base = _manifest_base(
         created_utc=str(product["created_utc"]),
@@ -254,8 +298,8 @@ def materialize_satellite_checkpoint(
         source_hash=sha256_file(source),
         product=product,
         scenario_name=scenario_name,
-        destination=destination,
-        output_dir=output_dir,
+        destination=logical_destination,
+        output_dir=logical_output,
         duration_s=duration_s,
         dt_s=dt_s,
         overwrite=overwrite,
@@ -279,6 +323,11 @@ def materialize_satellite_checkpoint(
         scenario=scenario,
         destination=destination,
         manifest_target=manifest_target,
+        protected_paths=(("source product", source),),
+        collision_error_type=SatelliteCheckpointError,
+        logical_destination=logical_destination,
+        logical_manifest_target=logical_manifest_target,
+        logical_output_dir=logical_output,
         base_manifest=base,
         product_report=report.to_dict(),
         output_kind="satellite_checkpoint_scenario",
@@ -388,10 +437,15 @@ def _context_state(
     target: Path,
     object_id: str,
     sample_index: int,
+    *,
+    logical_output_path: str | Path | None = None,
+    writer: Any | None = None,
 ) -> dict[str, Any]:
     product = build_completed_run_state_product(
         completed_run,
         output_path=target,
+        logical_output_path=logical_output_path,
+        writer=writer,
         object_id=object_id,
         selector="sample_index",
         sample_index=sample_index,

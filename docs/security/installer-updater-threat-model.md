@@ -15,12 +15,34 @@ until explicitly trusted for execution; they are never updater-owned.
   keys are separate from license keys and are never shipped privately.
 - Signed channel metadata names a signed release manifest; the manifest binds
   edition, version, contracts, artifacts, sizes, hashes, and compatibility.
+- HTTPS update hops pin DNS results and retain certificate/hostname checks.
+  Redirects remain refused except for at most three hops along this public
+  repository's canonical GitHub release route, including its repository-ID-bound
+  `release-assets.githubusercontent.com` path. Each destination is independently
+  resolved and pinned; authorization and cookie headers are not forwarded.
+- The signed manifest also binds a deterministic source inventory and the
+  wheel archive members, metadata, installed-`RECORD` expectations, generated
+  script mappings, and managed interpreter layout used by the runtime proof.
+- The current release-key registry is an external operator/channel anchor
+  beneath the persistent config root, outside version directories. A bundle
+  with a different embedded registry cannot replace it; adoption requires an
+  explicitly signed rotation by the current non-revoked authority.
 - The rendered official installer persists its HTTPS channel endpoint as local
   configuration. The endpoint is only a locator: every channel response and
   referenced release remains signature-verified against the separate trusted
   key registry, and channel-to-manifest edition/version identity must agree.
 - Extracted source is not imported until signature, artifact, and archive-shape
   checks pass. Ordinary workspace audits do not import user plugins or FSW.
+- Official source and managed-runtime trees reject ``__pycache__``, ``.pyc``,
+  and ``.pyo`` files. Provisioning uses pip ``--no-compile`` and removes
+  provisioning-time derived caches from its trusted staging runtime; disabling
+  writes alone is insufficient because Python can still import a forged
+  pre-existing cache.
+- Activation writes the launcher with an operator-owned Python and a small
+  stdlib-only verifier bundle beneath the external launcher directory. That
+  verifier authenticates the external key anchor, signed manifest, source
+  inventory, and runtime inventory before the managed ``sim`` package is
+  imported. Desktop launchers route through this same gate.
 - Activation and workspace adoption are separate transactions.
 
 ## Addressed Threats
@@ -34,6 +56,8 @@ migration plans, and ineligible Pro versions.
 
 State files and selectors use same-directory atomic replacement. Installs use
 side-by-side incomplete directories and become selectable only after checks.
+Legacy signed manifests without the authenticated inventory remain retained but
+are marked untrusted and require explicit re-verification/migration.
 Migration plans bind original and proposed digests, create backups first, and
 restore already-applied files on failure. Cleanup and uninstall are dry-run by
 default and preserve workspaces.
@@ -54,8 +78,10 @@ default and preserve workspaces.
   download, inspect, then execute; the shorter pipeline is a convenience only.
 - Local administrators and malware with write access to managed roots can
   replace launchers or state. Activation and managed-engine dispatch verify
-  the installed source tree; `oel update status --full` exposes the same check
-  explicitly, but none of these is an OS integrity monitor.
+  source and runtime bytes against the release-signed inventory and external
+  anchor; the interpreter provider and the stable verifier bundle outside the
+  managed virtual environment are explicitly operator-owned and require
+  separate host qualification. This is not an OS integrity monitor.
 - Disk exhaustion and power loss can leave incomplete cache/transaction data.
   They must not change the current selector; stale-lock recovery requires
   confirming no updater is active.

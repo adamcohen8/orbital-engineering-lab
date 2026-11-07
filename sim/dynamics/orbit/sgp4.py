@@ -135,14 +135,9 @@ class SGP4EphemerisProvider:
             raise ValueError("mass_kg must be positive.")
         if float(self.duration_s) < 0.0:
             raise ValueError("duration_s must be nonnegative.")
-        frame = str(self.output_frame or "teme").strip().lower()
-        transform = str(self.frame_transform or "").strip().lower()
+        frame, transform = _normalize_output_frame_contract(self.output_frame, self.frame_transform)
         object.__setattr__(self, "output_frame", frame)
         object.__setattr__(self, "frame_transform", transform)
-        if frame == "teme" and not transform:
-            object.__setattr__(self, "frame_transform", "native")
-        if frame == "eci" and not transform:
-            object.__setattr__(self, "frame_transform", "teme_to_eci_iau80")
         backend = normalize_numeric_backend(self.numeric_backend, error_message="OGP numeric_backend must be python or rust.")
         object.__setattr__(self, "numeric_backend", backend)
         if backend == "rust":
@@ -333,6 +328,19 @@ class SGP4EphemerisProvider:
         for error in errors:
             if error:
                 raise ValueError(str(error))
+        return self.canonical_states_from_teme(times, positions, velocities)
+
+    def canonical_states_from_teme(
+        self, times_s: np.ndarray | list[float], positions: np.ndarray, velocities: np.ndarray,
+    ) -> np.ndarray:
+        """Transform a native OGP batch through the same canonical ECI path."""
+        times = np.asarray(times_s, dtype=float).reshape(-1)
+        for time in times:
+            self._validated_time(float(time))
+        if times.size == 0:
+            return np.empty((0, 6), dtype=float)
+        if positions.shape != (times.size, 3) or velocities.shape != (times.size, 3):
+            raise ValueError("OGP TEME histories must have shape (samples, 3).")
         from sim.dynamics.orbit.frames import teme_to_eci_matrix_vallado_iau80
 
         rotations = np.asarray([
@@ -1181,21 +1189,41 @@ def transform_teme_to_output_frame(
     v1 supports native TEME output, the legacy transparent TEME-as-ECI
     approximation, and an explicit Vallado IAU-80 TEME-to-ECI reduction.
     """
+    frame, transform = _normalize_output_frame_contract(output_frame, frame_transform)
+    try:
+        jd = float(jd_utc)
+        position = np.asarray(position_teme_km, dtype=float).reshape(3)
+        velocity = np.asarray(velocity_teme_km_s, dtype=float).reshape(3)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("SGP4 state and jd_utc must be numeric with three-element state vectors.") from exc
+    if not math.isfinite(jd):
+        raise ValueError("SGP4 jd_utc must be finite.")
+    if not np.isfinite(position).all() or not np.isfinite(velocity).all():
+        raise ValueError("SGP4 TEME state must be finite.")
+    if frame == "teme":
+        return position, velocity
+    if transform == "teme_to_eci_iau80":
+        return teme_to_eci_vallado_iau80(position, velocity, jd_utc=jd)
+    return position, velocity
+
+
+def _normalize_output_frame_contract(
+    output_frame: str | None,
+    frame_transform: str | None,
+) -> tuple[str, str]:
     frame = str(output_frame or "teme").strip().lower()
-    transform = str(frame_transform or ("native" if frame == "teme" else "teme_to_eci_iau80")).strip().lower()
+    transform = str(frame_transform or "").strip().lower()
+    if not transform:
+        transform = "native" if frame == "teme" else "teme_to_eci_iau80"
     if frame == "teme":
         if transform not in {"native", "none", "identity", "teme"}:
             raise ValueError("SGP4 output_frame='teme' requires frame_transform='native'.")
-        _ = float(jd_utc)
-        return np.array(position_teme_km, dtype=float), np.array(velocity_teme_km_s, dtype=float)
-    if frame != "eci":
-        raise ValueError("SGP4 v1 only supports output_frame='eci' or output_frame='teme'.")
-    if transform == "teme_to_eci_iau80":
-        return teme_to_eci_vallado_iau80(position_teme_km, velocity_teme_km_s, jd_utc=float(jd_utc))
-    if transform != "teme_as_eci":
-        raise ValueError(
-            "SGP4 output_frame='eci' requires frame_transform='teme_as_eci' or "
-            "'teme_to_eci_iau80' for v1."
-        )
-    _ = float(jd_utc)
-    return np.array(position_teme_km, dtype=float), np.array(velocity_teme_km_s, dtype=float)
+        return frame, transform
+    if frame == "eci":
+        if transform not in {"teme_as_eci", "teme_to_eci_iau80"}:
+            raise ValueError(
+                "SGP4 output_frame='eci' requires frame_transform='teme_as_eci' or "
+                "'teme_to_eci_iau80' for v1."
+            )
+        return frame, transform
+    raise ValueError("SGP4 v1 only supports output_frame='eci' or output_frame='teme'.")

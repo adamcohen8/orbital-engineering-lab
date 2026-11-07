@@ -20,7 +20,7 @@
     "utc_minus_tai_2026": true
   },
   "claim": "OEL's bounded IAU-76/FK5 + IAU-80 and IAU 2006/2000A frame/time contracts agree with pinned Orekit 13.1.7 inside frozen residual envelopes.",
-  "generated_utc": "2026-08-29T18:32:53Z",
+  "generated_utc": "2026-11-01T04:18:23Z",
   "input": {
     "covariance_diagonal_m_m_s": [
       400.0,
@@ -43,15 +43,15 @@
     ]
   },
   "metrics": {
-    "covariance_normalized_max": 1.2165459346859357e-07,
-    "eme2000_itrf_position_max_m": 0.567381969496239,
-    "eme2000_itrf_velocity_max_m_s": 0.0004230178010100616,
+    "covariance_normalized_max": 1.216571707563344e-07,
+    "eme2000_itrf_position_max_m": 0.5673819432630012,
+    "eme2000_itrf_velocity_max_m_s": 0.0003958319860775106,
     "gcrf_eme2000_position_max_m": 6.215870484993502e-06,
     "gcrf_eme2000_velocity_max_m_s": 7.273959212739101e-09,
-    "gcrf_itrf_position_max_m": 0.006921268870030417,
-    "gcrf_itrf_velocity_max_m_s": 0.00026694051058484547,
-    "gcrf_state_jacobian_max_abs": 2.4855006140809925e-09,
-    "state_jacobian_max_abs": 8.492986371339342e-08,
+    "gcrf_itrf_position_max_m": 0.006462833511022836,
+    "gcrf_itrf_velocity_max_m_s": 0.0002673914245576725,
+    "gcrf_state_jacobian_max_abs": 2.895905042567086e-09,
+    "state_jacobian_max_abs": 8.49315524233292e-08,
     "teme_eme2000_position_max_m": 1.4947547344164036,
     "teme_eme2000_velocity_max_m_s": 0.00019853408894654478
   },
@@ -120,11 +120,11 @@
     "gcrf_frame_transform": {
       "contract": "oel.frame-time.v1",
       "eop": {
-        "ddeps_rad": 0.0,
-        "ddpsi_rad": 0.0,
+        "ddeps_rad": -8.872090364304508e-10,
+        "ddpsi_rad": 1.3720227175399867e-09,
         "dut1_s": 0.0087572,
-        "dx_mas": 0.283,
-        "dy_mas": -0.183,
+        "dx_mas": 0.295,
+        "dy_mas": -0.095,
         "source": "finals2000a_2024_01_01_04_excerpt.txt (finals2000a, linearly interpolated)",
         "source_sha256": "2ff45c2c41388ac883559b11f71ee6d80f6db918f3ef0da06e2c3c85f51fc37d",
         "xp_arcsec": 0.136894,

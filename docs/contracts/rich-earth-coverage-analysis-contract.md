@@ -73,6 +73,12 @@ pattern is a hard geometric gate, not an optical response model.
 
 Physical line of sight uses the WGS84 ellipsoid and the same convex-surface
 horizon predicate as the Phase 1 product. Exact tangency remains blocked.
+Direct surface-target geometry calls require each target to satisfy the WGS84
+ellipsoid equation within a `1e-12` dimensionless normalized-level tolerance
+and each supplied normal to align with the normalized ellipsoid gradient within
+a `1e-10` dot-product tolerance. These checks run before the Python or native
+geometry kernel so an off-surface or inward-facing target cannot be treated as
+valid evidence.
 
 For each source/target pair:
 

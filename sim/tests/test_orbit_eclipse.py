@@ -102,6 +102,20 @@ class OrbitEclipseTests(unittest.TestCase):
         f = srp_shadow_factor(r_sc_eci_km=r, t_s=0.0, env=env)
         self.assertLess(f, 1e-6)
 
+    def test_srp_geometry_rejects_nonfinite_sun_or_spacecraft_vectors(self):
+        with self.assertRaisesRegex(ValueError, "sun_pos_eci_km"):
+            srp_shadow_factor(
+                r_sc_eci_km=np.array([6878.137, 0.0, 0.0]),
+                t_s=0.0,
+                env={"sun_pos_eci_km": np.array([AU_KM, np.nan, 0.0])},
+            )
+        with self.assertRaisesRegex(ValueError, "r_sc_eci_km"):
+            srp_shadow_factor(
+                r_sc_eci_km=np.array([6878.137, np.inf, 0.0]),
+                t_s=0.0,
+                env={"sun_pos_eci_km": np.array([AU_KM, 0.0, 0.0])},
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

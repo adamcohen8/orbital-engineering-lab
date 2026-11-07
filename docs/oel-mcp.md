@@ -105,6 +105,24 @@ The legacy `OEL_MCP_ALLOWED_ROOTS` setting remains a temporary compatibility
 alias. M4 write and execution tools require separately authorized write roots;
 read authority never implies write authority.
 
+### Secure output writes
+
+Path authorization and descriptor-bound writing are separate steps. A handler
+that needs the secure writer must use `MCPPathPolicy.open_secure_writer()` or
+the `staged_output()` transaction from the public MCP adapter. The writer
+keeps the approved directory open, traverses directory components without
+following symlinks, creates new files exclusively, and publishes staged
+regular files without replacing existing entries. It rejects traversal,
+symlinks, special files, and path collisions.
+
+The secure writer requires a POSIX host with `O_DIRECTORY`, `O_NOFOLLOW`, and
+the required `dir_fd` operations. If those primitives are unavailable, it
+fails closed with `SecureWriteUnavailable`; this documentation makes no
+Windows support or qualification claim for the descriptor-bound writer.
+`resolve_write()` performs the lexical root and symlink precheck, but a
+path-facing producer must still route its effect through the secure writer to
+obtain descriptor-bound no-follow behavior.
+
 ## Operator Approval
 
 Write and execution authorization is configured when the server starts, not by
@@ -123,6 +141,38 @@ requires an allowlisted ID with `trust` scope. If the applicable environment
 allowlist is absent, empty, or does not match, the operation fails before the
 sensitive effect. Approval IDs are audit references, not credentials, and
 should not contain secrets.
+
+Standing approval-ID allowlists remain supported. Hosts that need tighter
+request binding can additionally configure bounded grants through
+`OEL_MCP_APPROVAL_GRANTS_JSON` (with the legacy alias
+`OEL_MCP_APPROVAL_GRANTS`) and revoke configured grant IDs through
+`OEL_MCP_REVOKED_APPROVAL_GRANTS`. These values are server configuration;
+request data may select a configured grant but cannot define one. A bounded
+grant carries an expiry with an explicit timezone and may bind any combination
+of the following reviewed facts:
+
+- `trust`, `write`, or `execute` scope and an allowlisted tool ID;
+- the exact canonical request digest, excluding mutable approval metadata;
+- a reviewed operation ID;
+- file content identities resolved beneath an authorized read root, or a
+  trusted review-digest identity; and
+- finite non-negative resource ceilings such as byte, row, or count limits.
+
+Expired or revoked grants, scope/tool/input/operation/content mismatches, and
+ceiling violations fail before the requested effect. An unbounded standing
+approval ID remains a process-level allowlist entry and is not converted into
+a content-bound grant.
+
+The public `DurableOperationLedger` primitive reserves an operation with its
+tool, authority, and request identity, then records a terminal `completed`,
+`failed`, or `partial` envelope. Reusing an operation whose terminal envelope
+is already recorded returns that envelope; finding a `begun` record without a
+terminal result raises `UnknownOperationOutcome` and requires local evidence
+inspection or explicit reconciliation before any retry. Ledger records are
+local, bounded JSON files written with restrictive permissions and no-follow
+path checks. Only handlers that adopt the ledger receive these durable
+unknown-outcome semantics; the primitive does not make every existing tool
+durable automatically.
 
 Approval and other policy denials happen before execution, so MCP hosts may
 surface them as protocol-level errors rather than completed tool envelopes.
@@ -185,12 +235,13 @@ retry. MCP policy messages do not recommend unsupported CLI retention switches.
 | `oel.convert_frame_time.v1` | `R0_read` | Converts one epoch, audits one EOP source, or transforms one state/covariance |
 | `oel.fsw.describe.v1` | `R0_read` | Reports public FSW authoring templates, contracts, limits, and private boundaries |
 | `oel.fsw.inspect_candidate.v1` | `R0_read` | Hashes and inspects a candidate without importing or executing its source |
-| `oel.fsw.plan_candidate.v1` | `R0_read` | Plans one validate, component-test, or deterministic-smoke operation |
-| `oel.fsw.scaffold_candidate.v1` | `R1_write` | Creates an ADCS or RPO Python-stack starter in an approved workspace |
+| `oel.fsw.plan_candidate.v1` | `R0_read` | Plans one validate, component-test, deterministic-smoke, or native-build operation |
+| `oel.fsw.scaffold_candidate.v1` | `R1_write` | Creates an ADCS or RPO Python or native starter in an approved workspace |
 | `oel.fsw.validate_candidate.v1` | `R1_write` | With separate source-trust and write approvals, validates lifecycle and smoke contracts and writes a receipt |
 | `oel.fsw.run_candidate_tests.v1` | `R2_execute` | Revalidates and runs the declared bounded component suite |
 | `oel.fsw.run_candidate_smoke.v1` | `R2_execute` | Revalidates and runs one deterministic serial smoke with ordinary OEL evidence |
 | `oel.fsw.verify_receipt.v1` | `R0_read` | Recomputes candidate and listed artifact identity without executing code |
+| `oel.fsw.build_candidate.v1` | `R2_execute` | Builds a trusted native candidate with fixed local toolchain commands and binds the executable identity |
 
 Data-bearing calls require handling metadata containing an authoritative
 marking and one of these release scopes: `public`, `local_only`, or
@@ -231,9 +282,9 @@ prototype, experimental, and specialized private workflows fail closed.
 
 ## Public FSW Authoring
 
-The eight `oel.fsw.*.v1` tools expose the bounded workflow documented in
+The nine `oel.fsw.*.v1` tools expose the bounded workflow documented in
 [`fsw-authoring.md`](fsw-authoring.md). They are available only in
-`public_local`, accept public Python complete-stack candidates, remain inside
+`public_local`, accept public Python or native complete-stack candidates, remain inside
 one authorized workspace, and never use hidden truth, private orchestration,
 hosted AI, network calls, or multiple workers.
 

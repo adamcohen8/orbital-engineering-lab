@@ -10,6 +10,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from sim.data_io.common import read_bytes as read_bounded_bytes
+from sim.data_io.contracts import DataIOError
 from sim.frame_time import TimeScale, parse_epoch
 
 CCSDS_TDM_PROFILE = "oel.ccsds-tdm-kvn.v0.1"
@@ -204,6 +206,13 @@ def _validate_segment(
             f"segment {segment_index}: reduced-geometric input requires CORRECTIONS_APPLIED = YES when supplied."
         )
     keywords = {item.keyword for item in observations}
+    unsupported_keywords = sorted(
+        str(keyword) for keyword in keywords if keyword not in _SUPPORTED_OBSERVABLES
+    )
+    if unsupported_keywords:
+        raise CcsdsTdmError(
+            f"segment {segment_index}: unsupported tracking-data keyword(s) {unsupported_keywords}."
+        )
     if keywords & {"ANGLE_1", "ANGLE_2"} and metadata.get("ANGLE_TYPE", "").upper() != "AZEL":
         raise CcsdsTdmError(f"segment {segment_index}: angle records require ANGLE_TYPE = AZEL.")
     if "RANGE" in keywords:
@@ -223,6 +232,16 @@ def _validate_segment(
     last_epoch: float | None = None
     seen_keyword_epochs: set[tuple[str, float]] = set()
     for observation in observations:
+        try:
+            value = float(observation.value)
+        except (TypeError, ValueError) as exc:
+            raise CcsdsTdmError(
+                f"segment {segment_index}: {observation.keyword} measurement must be finite numeric data."
+            ) from exc
+        if not math.isfinite(value):
+            raise CcsdsTdmError(
+                f"segment {segment_index}: {observation.keyword} measurement must be finite numeric data."
+            )
         epoch = _epoch_tai_seconds(observation.epoch_utc, field=f"segment {segment_index} data epoch")
         if observation.epoch_tai_seconds is not None and observation.epoch_tai_seconds != epoch:
             raise CcsdsTdmError(
@@ -243,11 +262,11 @@ def _validate_segment(
             )
         seen_keyword_epochs.add(identity)
         last_epoch = epoch
-        if observation.keyword == "ANGLE_1" and not -180.0 <= observation.value < 360.0:
+        if observation.keyword == "ANGLE_1" and not -180.0 <= value < 360.0:
             raise CcsdsTdmError(f"segment {segment_index}: ANGLE_1 must lie within [-180, 360) deg.")
-        if observation.keyword == "ANGLE_2" and not -90.0 <= observation.value <= 90.0:
+        if observation.keyword == "ANGLE_2" and not -90.0 <= value <= 90.0:
             raise CcsdsTdmError(f"segment {segment_index}: AZEL ANGLE_2 must lie within [-90, 90] deg.")
-        if observation.keyword == "RANGE" and observation.value < 0.0:
+        if observation.keyword == "RANGE" and value < 0.0:
             raise CcsdsTdmError(f"segment {segment_index}: RANGE must be nonnegative.")
 
 
@@ -416,11 +435,13 @@ def parse_tdm_kvn(text: str, *, source_sha256: str | None = None) -> TdmMessage:
     return message
 
 
-def read_tdm_kvn(path: str | Path) -> TdmMessage:
+def read_tdm_kvn(path: str | Path, *, max_bytes: int = MAX_TDM_BYTES) -> TdmMessage:
     source = Path(path).expanduser().resolve()
-    raw = source.read_bytes()
-    if len(raw) > MAX_TDM_BYTES:
-        raise CcsdsTdmError(f"TDM KVN input exceeds the {MAX_TDM_BYTES}-byte limit.")
+    limit = int(max_bytes)
+    try:
+        raw = read_bounded_bytes(source, limit=limit)
+    except DataIOError as exc:
+        raise CcsdsTdmError(f"TDM KVN input exceeds the {limit}-byte limit.") from exc
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as exc:

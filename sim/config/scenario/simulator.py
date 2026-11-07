@@ -759,8 +759,12 @@ def _parse_simulator_execution_section(value: Any) -> dict[str, Any]:
     _reject_unknown_fields(
         d,
         "simulator.execution",
-        {"policy", "object_parallelism", "runtime_profiler", "controller"},
+        {"policy", "object_parallelism", "ogp_parallelism", "runtime_profiler", "controller"},
     )
+    ogp_parallelism = _as_dict(d.get("ogp_parallelism"), "simulator.execution.ogp_parallelism")
+    _reject_unknown_fields(ogp_parallelism, "simulator.execution.ogp_parallelism", {"enabled", "workers"})
+    ogp_enabled = _parse_bool(ogp_parallelism.get("enabled", False), "simulator.execution.ogp_parallelism.enabled")
+    ogp_workers = _parse_nonnegative_int(ogp_parallelism.get("workers", 0), "simulator.execution.ogp_parallelism.workers")
     object_parallelism = _as_dict(d.get("object_parallelism"), "simulator.execution.object_parallelism")
     runtime_profiler = _as_dict(d.get("runtime_profiler"), "simulator.execution.runtime_profiler")
     controller = _as_dict(d.get("controller"), "simulator.execution.controller")
@@ -828,6 +832,8 @@ def _parse_simulator_execution_section(value: Any) -> dict[str, Any]:
         enabled = True
         if backend != "thread_pool":
             backend = "process_pool"
+    if ogp_enabled and enabled:
+        raise ValueError("simulator.execution.ogp_parallelism cannot be combined with object_parallelism or policy=auto/parallel.")
     orbit_budget_ms = _parse_float(
         controller.get("orbit_budget_ms", 2.0),
         "simulator.execution.controller.orbit_budget_ms",
@@ -846,6 +852,7 @@ def _parse_simulator_execution_section(value: Any) -> dict[str, Any]:
     return {
         **d,
         "policy": policy,
+        "ogp_parallelism": {"enabled": ogp_enabled, "workers": ogp_workers},
         "object_parallelism": {
             **object_parallelism,
             "enabled": enabled,

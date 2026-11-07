@@ -25,9 +25,11 @@ timestamp when released.
 
 `AccessConfig` can gate updates by positive `update_cadence_s`, positive
 `max_range_km`, `fov_half_angle_rad` in `[0, pi]`, or `solid_angle_sr` in
-`[0, 4*pi]`. Ground visibility requires a `GroundSite` plus a `FrameContext`
-with an absolute epoch. The default FOV boresight is observer radial-out; a
-supplied ECI boresight is normalized. Access failure returns no measurement.
+`[0, 4*pi]`. These FOV forms are alternatives; configuring both is rejected
+before access evaluation. Ground visibility requires a `GroundSite` plus a
+`FrameContext` with an absolute epoch. The default FOV boresight is
+observer radial-out; a supplied ECI boresight is normalized. Access failure
+returns no measurement.
 
 Knowledge tracking also supports a body-frame sensor mount offset and
 boresight. The runtime transforms these using spacecraft attitude before its

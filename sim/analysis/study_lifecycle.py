@@ -1150,6 +1150,16 @@ def verify_study_bundle(bundle_dir: str | Path) -> dict[str, Any]:
     expected_receipt = _receipt_record(request["study_id"], root)
     if receipt != expected_receipt:
         raise StudyLifecycleError("Study receipt does not match the authoritative bundle contents.")
+    # The receipt binds the root lifecycle records, while the evidence record
+    # binds the retained evidence files.  Re-read the retained evidence after
+    # the root-record checks so a concurrent replacement cannot be accepted
+    # solely because the first evidence read happened before the replacement.
+    # Each read is still performed through _read_json_bytes, which gives us
+    # the existing bounded, no-follow, stable-file read semantics.
+    rechecked_evidence, rechecked_values = _evidence_record(request["study_id"], plan, root)
+    if rechecked_evidence != expected_evidence:
+        raise StudyLifecycleError("Study evidence changed during verification.")
+    _validate_claim_citations(claims, rechecked_values)
     return {
         "schema_version": STUDY_VERIFICATION_SCHEMA,
         "status": "verified",

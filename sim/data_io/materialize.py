@@ -93,6 +93,10 @@ def materialize_scenario(
             scenario["simulator"]["dynamics"].update(seed_context["dynamics"])
         if source.center.upper() != "EARTH":
             scenario["simulator"].pop("termination", None)
+    if not isinstance(source, Trajectory):
+        from sim.data_acquisition.binding import bind_catalog_sources
+
+        scenario = bind_catalog_sources(scenario, source_artifacts)
     artifact = ScenarioArtifact.from_dict(scenario)
     from sim.api import SimulationWorkspace
 

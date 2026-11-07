@@ -25,6 +25,7 @@ from sim.flight_software import (
     MagnetometerMeasurement,
     MagnetorquerDipoleCommand,
     MeasurementEvent,
+    NativeFlightSoftwareSnapshot,
     PacketId,
     Quality,
     ReactionWheelTorqueCommand,
@@ -43,6 +44,7 @@ from sim.flight_software import (
 from sim.flight_software.schemas import (
     _canonical_json_bytes_trusted,
     _to_primitive_trusted,
+    registered_schemas,
 )
 
 
@@ -101,6 +103,25 @@ def test_snapshot_bytes_use_canonical_base64_round_trip() -> None:
     wire = canonical_json_bytes(snapshot)
     assert b'"$bytes_base64"' in wire
     assert canonical_loads(wire) == snapshot
+
+
+def test_native_snapshot_schema_dispatch_retains_host_implementation_identity() -> None:
+    state = b"native state"
+    snapshot = NativeFlightSoftwareSnapshot(
+        stack_id="stack",
+        stack_version="2.0.0",
+        boot_id="boot",
+        invocation_id=1,
+        active_load_id=None,
+        active_load_revision=None,
+        state_bytes=state,
+        state_hash_sha256=sha256(state).hexdigest(),
+        host_implementation_hash="a" * 64,
+    )
+    assert registered_schemas()["oel.flight_software.native_snapshot.v1"] is NativeFlightSoftwareSnapshot
+    decoded = canonical_loads(canonical_json_bytes(snapshot))
+    assert decoded == snapshot
+    assert decoded.host_implementation_hash == "a" * 64
 
 
 def test_nested_input_and_output_boundary_batches_round_trip() -> None:

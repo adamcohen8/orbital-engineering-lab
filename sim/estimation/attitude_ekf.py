@@ -8,6 +8,7 @@ import numpy as np
 from sim.acceleration.settings import acceleration_settings_from_mode
 from sim.core.interfaces import Estimator
 from sim.core.models import Measurement, StateBelief
+from sim.estimation.covariance import validate_covariance
 from sim.utils.quaternion import normalize_quaternion, omega_matrix
 
 attitude_ekf_numerical_jacobian_kernel = None
@@ -52,18 +53,22 @@ class AttitudeEKFEstimator(Estimator):
             raise ValueError("numeric_backend must be 'python' or 'rust'.")
         if not np.isfinite(float(self.dt_s)) or float(self.dt_s) <= 0.0:
             raise ValueError("dt_s must be positive and finite.")
-        if self.numeric_backend == "rust":
-            from sim.rust_attitude_ekf_backend import _factory
-
-            _factory()
         self.inertia_kg_m2 = np.asarray(self.inertia_kg_m2, dtype=float).reshape(3, 3)
         self.process_noise_diag = np.asarray(self.process_noise_diag, dtype=float).reshape(7)
         self.meas_noise_diag = np.asarray(self.meas_noise_diag, dtype=float).reshape(7)
         if not np.all(np.isfinite(self.inertia_kg_m2)):
             raise ValueError("inertia_kg_m2 must contain finite values.")
+        if not np.allclose(self.inertia_kg_m2, self.inertia_kg_m2.T, rtol=1.0e-12, atol=1.0e-12):
+            raise ValueError("inertia_kg_m2 must be symmetric.")
+        if np.min(np.linalg.eigvalsh(self.inertia_kg_m2)) <= 0.0:
+            raise ValueError("inertia_kg_m2 must be positive definite.")
         for name, values in (("process_noise_diag", self.process_noise_diag), ("meas_noise_diag", self.meas_noise_diag)):
             if not np.all(np.isfinite(values)) or np.any(values < 0.0):
                 raise ValueError(f"{name} must contain seven finite nonnegative values.")
+        if self.numeric_backend == "rust":
+            from sim.rust_attitude_ekf_backend import _factory
+
+            _factory()
         self._q = np.diag(self.process_noise_diag)
         self._r = np.diag(self.meas_noise_diag)
         self._acceleration_enabled_value = bool(acceleration_settings_from_mode(self.acceleration_mode).enabled)
@@ -84,7 +89,13 @@ class AttitudeEKFEstimator(Estimator):
             if not np.isfinite(meas_t_s) or meas_t_s < belief_t_s or meas_t_s > output_t_s:
                 raise ValueError("measurement epoch must lie within the belief-to-output interval.")
 
-        x_pred, p_pred = self._predict(belief.state, belief.covariance, from_t_s=belief.last_update_t_s, to_t_s=meas_t_s)
+        belief_covariance = validate_covariance(belief.covariance, 7, name="belief covariance")
+        x_pred, p_pred = self._predict(
+            belief.state,
+            belief_covariance,
+            from_t_s=belief.last_update_t_s,
+            to_t_s=meas_t_s,
+        )
 
         if measurement is None:
             if meas_t_s < output_t_s:

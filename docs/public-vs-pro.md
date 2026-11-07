@@ -22,17 +22,24 @@ The public core includes:
 - a headless ground segment for geometric service availability, delayed
   tracking/resource packets, explicit outages, and two-body orbit estimates
   initialized from supplied priors;
+- bounded native OGP propagation threads within one simulation, with public
+  Rust source and deterministic owner-side sample/event/output handling;
 - public controllers, sensors, estimators, actuators, and mission primitives;
 - opt-in Earth albedo/infrared radiation pressure, Schwarzschild acceleration,
   solid Earth tides, and ocean tidal gravity with optional Rust kernels;
   ocean coefficients remain authorized external inputs;
-- the Public FSW Authoring Kit for ADCS/RPO stack scaffolding, safe inspection,
+- the Public FSW Authoring Kit for Python/C/C++/Rust ADCS/RPO scaffolding,
+  local native builds, safe inspection,
   trusted lifecycle validation, component tests, and one deterministic serial
   smoke run;
 - scenario YAML, CLI, Python API, review-store queries, and plotting;
 - bounded offline [modular data IO](data-io.md), native catalog scenario
   materialization and completed-review exports; review-to-mean-element fitting
   remains a separate Pro `tracking_od` operation;
+- experimental opt-in [local data acquisition](data-acquisition.md) for bounded
+  Space-Track queries, curated gravity/EOP/weather downloads and licensed-file
+  registration; provider accounts, data licenses and disclosure permissions
+  remain the user's responsibility;
 - opt-in custom ONP force-model plugins for trusted local modules, with
   module-path and runtime-output validation;
 - content-bound review slices for selected completed-run evidence;
@@ -109,9 +116,10 @@ review-ready packaging:
   force-configurable impulsive coast/burn studies and reference comparisons;
 - Monte Carlo, sensitivity, calibrated covariance analysis, and campaign
   orchestration;
-- opt-in bounded thread transports for supported object steps, campaigns,
+- opt-in bounded thread transports for supported ONP object steps, campaigns,
   controller studies, and Scale execution; existing Pro gates still apply,
-  process transport remains the default, and public scenarios remain serial;
+  process transport remains the default, and public ONP steps remain serial;
+- ONP object workers and hierarchical campaign/object scheduling;
 - controller benchmarks, comparison reports, optimization, and gain tuning;
 - OEL Scale catalog screening, refinement, operational stores, and synthetic
   data generation;
@@ -136,7 +144,7 @@ review-ready packaging:
 - custom GNC workbenches, spacecraft packages, cFS/SIL, and program-specific
   integrations;
 - the private FSWDK workflow superset: Controller Bench, tuning, qualification,
-  baseline promotion, packaged review evidence, and external-process candidates;
+  baseline promotion, packaged review evidence, and mission-specific external integrations;
 - private `agents/pro/` instructions and capability routing for Pro workflows;
 - private onboarding, support, scenario migration, and customer deliverables.
 

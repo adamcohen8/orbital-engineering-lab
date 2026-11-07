@@ -81,6 +81,48 @@ def _write_config(path: Path, output_dir: Path) -> Path:
     return path
 
 
+class _FakeOutputWriter:
+    def __init__(self, physical_root: Path, logical_root: Path) -> None:
+        self.path = physical_root.resolve()
+        self.logical_root = logical_root.resolve()
+        self.writes: list[Path] = []
+
+    def write_bytes(self, relative: str | Path, payload: bytes, **_kwargs) -> Path:
+        relative_path = Path(relative)
+        if relative_path.is_absolute() or ".." in relative_path.parts:
+            raise AssertionError(f"writer received an unsafe relative path: {relative}")
+        target = self.path / relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists():
+            raise FileExistsError(target)
+        target.write_bytes(payload)
+        self.writes.append(relative_path)
+        return target
+
+
+def test_agent_task_writer_publishes_logical_packet_paths(tmp_path: Path) -> None:
+    physical = tmp_path / "staging"
+    logical = tmp_path / "published"
+    physical.mkdir()
+    writer = _FakeOutputWriter(physical, logical)
+
+    payload = run_recipe(
+        "quickstart_review",
+        output_dir=logical,
+        dry_run=True,
+        output_writer=writer,
+    )
+
+    assert payload["status"] == "validated"
+    assert payload["packet_path"] == str(logical / "agent_evidence_packet.json")
+    assert payload["configs"][0]["config_path"] == str(logical / "agent_task_config.yaml")
+    assert payload["configs"][0]["output_dir"] == str(logical)
+    assert writer.writes == [Path("agent_task_config.yaml"), Path("agent_evidence_packet.json")]
+    packet_path = physical / "agent_evidence_packet.json"
+    assert packet_path.is_file()
+    assert str(physical) not in packet_path.read_text(encoding="utf-8")
+
+
 def test_agent_task_recipe_dry_run_writes_evidence_packet(tmp_path: Path) -> None:
     payload = run_recipe("quickstart_review", output_root=tmp_path, dry_run=True)
 

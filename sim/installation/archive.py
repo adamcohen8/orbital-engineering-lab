@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import stat
 import tarfile
@@ -23,9 +24,29 @@ def _validated_relative(name: str) -> PurePosixPath:
     return path
 
 
+def _is_os_path_alias(path: Path) -> bool:
+    """Allow only the standard macOS temporary-directory aliases."""
+
+    if os.name == "nt":
+        return False
+    aliases = {Path("/tmp"): Path("/private/tmp"), Path("/var"): Path("/private/var")}
+    target = aliases.get(path)
+    return target is not None and path.resolve(strict=False) == target
+
+
+def _validated_destination(destination: str | Path) -> Path:
+    """Reject symlink routing while preserving macOS ``/tmp`` and ``/var`` aliases."""
+
+    requested = Path(destination).expanduser().absolute()
+    for node in (requested, *requested.parents):
+        if node.is_symlink() and not _is_os_path_alias(node):
+            raise UnsafeArchiveError(f"Extraction destination may not use a symbolic-link parent: {node}")
+    return requested.resolve(strict=False)
+
+
 def safe_extract(archive_path: str | Path, destination: str | Path, *, max_bytes: int = 8_000_000_000) -> Path:
     archive = Path(archive_path).expanduser().resolve()
-    target = Path(destination).expanduser().resolve()
+    target = _validated_destination(destination)
     target.mkdir(parents=True, exist_ok=True)
     if tarfile.is_tarfile(archive):
         _extract_tar(archive, target, max_bytes=max_bytes)
@@ -34,6 +55,33 @@ def safe_extract(archive_path: str | Path, destination: str | Path, *, max_bytes
     else:
         raise UnsafeArchiveError(f"Unsupported release archive: {archive}")
     return target
+
+
+def _prepare_member_output(destination: Path, relative: PurePosixPath, *, directory: bool) -> Path:
+    """Create one archive member without following pre-existing links."""
+
+    current = destination
+    parts = relative.parts
+    for index, part in enumerate(parts):
+        current = current / part
+        if current.is_symlink():
+            raise UnsafeArchiveError(f"Archive extraction path contains a symbolic link: {current}")
+        final = index == len(parts) - 1
+        if current.exists():
+            if final:
+                if directory and not current.is_dir():
+                    raise UnsafeArchiveError(f"Archive directory collides with a non-directory: {current}")
+                if not directory:
+                    # Do not clobber an existing file or special node in a
+                    # caller-provided destination.
+                    raise UnsafeArchiveError(f"Archive file would overwrite an existing path: {current}")
+            elif not current.is_dir():
+                raise UnsafeArchiveError(f"Archive extraction parent is not a directory: {current}")
+        elif final and directory:
+            current.mkdir()
+        elif not final:
+            current.mkdir()
+    return current
 
 
 def _extract_tar(archive: Path, destination: Path, *, max_bytes: int) -> None:
@@ -56,11 +104,10 @@ def _extract_tar(archive: Path, destination: Path, *, max_bytes: int) -> None:
                 raise UnsafeArchiveError(f"Archive expands beyond the {max_bytes} byte safety limit.")
         for member in members:
             relative = _validated_relative(member.name)
-            output = destination.joinpath(*relative.parts)
             if member.isdir():
-                output.mkdir(parents=True, exist_ok=True)
+                _prepare_member_output(destination, relative, directory=True)
                 continue
-            output.parent.mkdir(parents=True, exist_ok=True)
+            output = _prepare_member_output(destination, relative, directory=False)
             stream = source.extractfile(member)
             if stream is None:
                 raise UnsafeArchiveError(f"Could not read archive member: {member.name}")
@@ -88,11 +135,10 @@ def _extract_zip(archive: Path, destination: Path, *, max_bytes: int) -> None:
                 raise UnsafeArchiveError(f"Archive expands beyond the {max_bytes} byte safety limit.")
         for member in members:
             relative = _validated_relative(member.filename)
-            output = destination.joinpath(*relative.parts)
             if member.is_dir():
-                output.mkdir(parents=True, exist_ok=True)
+                _prepare_member_output(destination, relative, directory=True)
                 continue
-            output.parent.mkdir(parents=True, exist_ok=True)
+            output = _prepare_member_output(destination, relative, directory=False)
             with source.open(member) as stream, output.open("wb") as sink:
                 shutil.copyfileobj(stream, sink)
             mode = member.external_attr >> 16

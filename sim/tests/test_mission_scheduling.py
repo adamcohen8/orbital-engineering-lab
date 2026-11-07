@@ -237,6 +237,14 @@ def test_invalid_problems_fail_closed(mutation) -> None:
         MissionSchedulingProblem.from_mapping(payload)
 
 
+@pytest.mark.parametrize("field", ["maximum_candidates", "minimum_selected_observations"])
+def test_integer_controls_reject_float_coercion(field: str) -> None:
+    payload = _payload()
+    payload[field] = 2.0
+    with pytest.raises(MissionSchedulingError, match="must be an integer"):
+        MissionSchedulingProblem.from_mapping(payload)
+
+
 @pytest.mark.parametrize(
     "mutation",
     [

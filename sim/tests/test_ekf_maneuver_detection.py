@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
+import pytest
 
 from sim.core.models import StateTruth
 from sim.dynamics.orbit.environment import EARTH_MU_KM3_S2
@@ -96,6 +97,17 @@ def _propagate_arc_with_impulse(initial_state: np.ndarray, samples: int, *, impu
             )
         )
     return states
+
+
+@pytest.mark.parametrize("field", ["window_size", "warning_count", "detection_count", "min_updates", "cooldown_updates"])
+def test_ekf_maneuver_config_rejects_noninteger_counts(field: str) -> None:
+    with pytest.raises(ValueError, match="must be an integer"):
+        EKFManeuverDetectionConfig(**{field: 3.5})
+
+
+def test_chi_square_threshold_rejects_noninteger_degrees_of_freedom() -> None:
+    with pytest.raises(ValueError, match="positive integer"):
+        chi_square_threshold(2.5, 0.99)
 
 
 def test_ekf_maneuver_detector_confirms_persistent_high_nis() -> None:

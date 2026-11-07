@@ -1,0 +1,6 @@
+{
+  "schema": "oel.data-acquisition.v1",
+  "provider": "gravity",
+  "product": "egm2008",
+  "max_bytes": 300000000
+}

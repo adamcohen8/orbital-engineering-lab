@@ -173,13 +173,21 @@ def _quadrature(order):
 
 def earth_radiation(position, sun_position, order, *, numeric_backend="rust"):
     """Return source directions, solid angles and surface solar irradiance factors."""
+    position_array = np.asarray(position, dtype=float)
+    sun_array = np.asarray(sun_position, dtype=float)
+    if position_array.shape != (3,) or not np.all(np.isfinite(position_array)):
+        raise ValueError("position must be finite with shape (3,)")
+    if sun_array.shape != (3,) or not np.all(np.isfinite(sun_array)):
+        raise ValueError("sun_position must be finite with shape (3,)")
+    if isinstance(order, (bool, np.bool_)) or not isinstance(order, (int, np.integer)) or not 4 <= order <= 64:
+        raise ValueError("Earth-radiation quadrature order must be an integer in [4, 64]")
     if numeric_backend == "rust":
         from sim.rust_spacecraft_backend import earth_radiation as rust_earth_radiation
 
-        return rust_earth_radiation(position, sun_position, order)
+        return rust_earth_radiation(position_array, sun_array, order)
     if numeric_backend != "python":
         raise ValueError("spacecraft resource numeric_backend must be python or rust")
-    r = np.asarray(position, dtype=float)
+    r = position_array
     distance = float(np.linalg.norm(r))
     if distance <= EARTH_RADIUS_KM:
         raise ValueError("spacecraft resources require position above the Earth surface")
@@ -200,7 +208,7 @@ def earth_radiation(position, sun_position, order, *, numeric_backend="rust"):
     travel = -dot - np.sqrt(np.maximum(0.0, dot**2 - (distance**2 - EARTH_RADIUS_KM**2)))
     points = r + rays * travel[:, None]
     normals = points / EARTH_RADIUS_KM
-    to_sun = np.asarray(sun_position) - points
+    to_sun = sun_array - points
     ds = np.linalg.norm(to_sun, axis=1)
     illumination = np.maximum(0.0, np.sum(normals * to_sun / ds[:, None], axis=1)) * (AU_KM / ds) ** 2
     return rays, weights, illumination

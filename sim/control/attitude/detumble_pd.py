@@ -6,6 +6,7 @@ from typing import Any
 import numpy as np
 
 from sim.config.plugin_specs import instantiate_plugin_spec
+from sim.control.attitude._validation import require_finite_matrix, require_finite_vector
 from sim.control.attitude.baseline import ReactionWheelPDController
 from sim.core.interfaces import Controller
 from sim.core.models import Command, StateBelief
@@ -38,9 +39,7 @@ class ECIDetumblePDController(Controller):
         self._q_ref_bn = None
 
     def set_reference(self, q_ref_bn: np.ndarray) -> None:
-        q = np.array(q_ref_bn, dtype=float).reshape(-1)
-        if q.size != 4:
-            raise ValueError("q_ref_bn must be length-4.")
+        q = require_finite_vector(q_ref_bn, "q_ref_bn", size=4)
         n = float(np.linalg.norm(q))
         if n <= 0.0:
             raise ValueError("q_ref_bn must be nonzero.")
@@ -49,7 +48,7 @@ class ECIDetumblePDController(Controller):
     def act(self, belief: StateBelief, t_s: float, budget_ms: float) -> Command:
         if belief.state.size < 13:
             return Command.zero()
-        q_cur = np.array(belief.state[6:10], dtype=float)
+        q_cur = require_finite_vector(belief.state[6:10], "belief attitude quaternion", size=4)
         n = float(np.linalg.norm(q_cur))
         if n <= 0.0:
             return Command.zero()
@@ -86,9 +85,7 @@ class RICDetumblePDController(Controller):
         self._c_br_ref = None
 
     def set_reference_c_br(self, c_br: np.ndarray) -> None:
-        c = np.array(c_br, dtype=float)
-        if c.shape != (3, 3):
-            raise ValueError("c_br must be 3x3.")
+        c = require_finite_matrix(c_br, "c_br", shape=(3, 3))
         self._c_br_ref = c.copy()
 
     def act(self, belief: StateBelief, t_s: float, budget_ms: float) -> Command:
@@ -96,13 +93,13 @@ class RICDetumblePDController(Controller):
         if belief.state.size < max(13, i1):
             return Command.zero()
 
-        r_eci = np.array(belief.state[i0 : i0 + 3], dtype=float)
-        v_eci = np.array(belief.state[i0 + 3 : i0 + 6], dtype=float)
+        r_eci = require_finite_vector(belief.state[i0 : i0 + 3], "belief position", size=3)
+        v_eci = require_finite_vector(belief.state[i0 + 3 : i0 + 6], "belief velocity", size=3)
         r_norm = float(np.linalg.norm(r_eci))
         if r_norm <= 0.0:
             return Command.zero()
 
-        q_cur = np.array(belief.state[6:10], dtype=float)
+        q_cur = require_finite_vector(belief.state[6:10], "belief attitude quaternion", size=4)
         q_norm = float(np.linalg.norm(q_cur))
         if q_norm <= 0.0:
             return Command.zero()

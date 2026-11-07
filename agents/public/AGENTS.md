@@ -36,13 +36,14 @@ reference/validation workflows.
 
 ## Public Execution Boundary
 
-- Public single-scenario workflows use deterministic serial object stepping.
-  Do not enable or recommend automatic/process-pool object parallelism in a
-  public config.
-- Thread transports for object steps, campaigns, controller studies, and
-  Scale remain Pro workflows; an available transport does not change the
-  public execution boundary or supply a missing entitlement.
-- Automatic within-scenario object workers, hierarchical campaign/object
+- Public single-scenario workflows support bounded native OGP history
+  preparation threads via `simulator.execution.ogp_parallelism`. See
+  `docs/ogp-parallelism.md` for the source build and example. Owner-side sample,
+  event and output handling remains deterministic. ONP object workers stay Pro.
+- Thread transports for ONP object steps, campaigns, controller studies, and
+  Scale remain Pro workflows; an available transport does not supply a missing
+  entitlement.
+- Automatic ONP object workers, hierarchical campaign/object
   planning, Monte Carlo, sensitivity, config queues, and controller benchmarks
   are outside the public core. Do not reproduce them with ad hoc public scripts.
 - The public `sim.analysis.coverage_sensitivity` helper compares explicit,
@@ -144,7 +145,7 @@ Authoring Kit in `docs/fsw-authoring.md`. Inspect unfamiliar candidate material
 without importing it, obtain explicit source trust before lifecycle validation,
 and use only the declared component suite plus one deterministic serial smoke.
 Do not recreate private Controller Bench, tuning, qualification, packaging,
-external-process, or cFS/SIL workflows in public scripts.
+or cFS/SIL workflows in public scripts. Generic C/C++/Rust stdio candidates use the documented public native authoring path.
 
 The preferred agent evidence loop is:
 
@@ -157,10 +158,11 @@ Public standalone analysis includes bounded CCSDS interchange, canonical
 frame/time conversion, trajectory targeting, conjunction assessment,
 collection analysis, tracking-data OD, mission scheduling, bounded
 constellation design, spacecraft power, orbit lifetime, and the content-bound
-study lifecycle. Use
-`oel://analysis/workflows/v1` for MCP-connected discovery. Only the study,
-CCSDS, and frame/time read-only adapters are currently exposed through MCP;
-use the documented CLI or Python API for the other public workflows.
+study lifecycle. Use `oel://analysis/workflows/v1` for MCP-connected discovery.
+The local MCP surface includes the documented scenario/review/evidence,
+handoff, study, CCSDS/frame-time, CR3BP-rendering, and public FSW-authoring
+adapters. Use the documented CLI or Python API for public workflows without a
+dedicated MCP contract, such as trajectory targeting and modular data IO.
 
 That resource may also name a recommendation-only Pro escalation when the
 user's request materially exceeds a public workflow. Describe it as

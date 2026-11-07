@@ -54,6 +54,8 @@ from sim.numeric_backend import normalize_numeric_backend
 from sim.reporting.run_payload_assembly import SingleRunPayloadAssembler, _SingleRunPayloadParts
 from sim.resource_limits import (
     HistoryMemoryEstimate,
+    _planned_step_count,
+    _simulation_completion_tolerance_s,
     enforce_history_memory_budget,
     estimate_history_memory_from_config,
 )
@@ -88,6 +90,7 @@ if TYPE_CHECKING:
 _AUTO_OBJECT_PARALLEL_RUN_WORK_THRESHOLD = 250.0
 
 logger = logging.getLogger(__name__)
+
 
 OBJECT_WORKER_BUDGET_ENV = "OEL_OBJECT_WORKER_BUDGET"
 CAMPAIGN_WORKER_COUNT_ENV = "OEL_CAMPAIGN_WORKER_COUNT"
@@ -193,6 +196,10 @@ class _SingleRunEngine:
         # on one re-entrant owner boundary.  Worker snapshots clear this
         # transient lock before transport/pickle; they never own live state.
         self._owner_state_lock = RLock()
+        if dict(getattr(cfg, "metadata", {}) or {}).get("acquisition_inputs"):
+            from sim.data_acquisition.binding import verify_config
+
+            verify_config(cfg)
         self.cfg = cfg
         self.active_step_callback = step_callback
         self.history_mode = str(history_mode or "full").strip().lower()
@@ -206,7 +213,14 @@ class _SingleRunEngine:
         self.controller_deadline_policy = str(
             controller_execution.get("deadline_policy", "record") or "record"
         ).strip().lower()
-        self.planned_samples = int(np.floor(float(cfg.simulator.duration_s) / self.dt)) + 1
+        # The final interval may be shorter than ``dt`` when the requested
+        # duration is not an exact multiple.  Size the planned history and
+        # progress denominator for that partial interval as well.  Subtract
+        # the same completion tolerance used by ``done`` so roundoff at an
+        # exact boundary does not invent an extra sample.
+        duration_s = float(cfg.simulator.duration_s)
+        planned_steps = _planned_step_count(duration_s, self.dt)
+        self.planned_samples = planned_steps + 1
         self.sample_offset = 0
         self.max_history_samples = int(max(2, max_history_samples))
         if self.history_mode == "dynamic":
@@ -747,9 +761,10 @@ class _SingleRunEngine:
         current_time_s = 0.0
         if hasattr(self, "t_s") and self.t_s.size:
             current_time_s = float(self.t_s[min(int(self.current_index), self.t_s.size - 1)])
+        duration_s = float(self.cfg.simulator.duration_s)
         return bool(
             self.terminated_early
-            or current_time_s >= float(self.cfg.simulator.duration_s) - max(1.0e-9, 1.0e-9 * abs(float(self.cfg.simulator.duration_s)))
+            or current_time_s >= duration_s - _simulation_completion_tolerance_s(duration_s)
         )
 
     def _emit_step_callback(self, step: int) -> None:
@@ -1379,10 +1394,6 @@ class _SingleRunEngine:
         if self.done:
             return self.snapshot(include_flight_software=False) if return_snapshot else {}
 
-        step_wall_t0 = perf_counter()
-        compact_t0 = perf_counter()
-        self._compact_dynamic_history_if_needed()
-        self.runtime_profiler.record_stage("dynamic_history_compaction", perf_counter() - compact_t0)
         k = int(self.current_index)
         t = float(self.t_s[k])
         if self.ground_segment is not None and dt_s is not None and float(dt_s) != self.dt:
@@ -1395,6 +1406,17 @@ class _SingleRunEngine:
         if step_dt <= 0.0:
             return self.snapshot(include_flight_software=False)
         t_next = float(t + step_dt)
+        if not t_next > t:
+            raise ValueError("step dt_s is too small to advance simulation time at the current epoch.")
+
+        step_wall_t0 = perf_counter()
+        compact_t0 = perf_counter()
+        self._compact_dynamic_history_if_needed()
+        self.runtime_profiler.record_stage("dynamic_history_compaction", perf_counter() - compact_t0)
+        # Compaction retains the latest sample but reindexes it within the
+        # bounded window.  The validated t/t_next interval remains the same;
+        # only the destination row must follow the retained current index.
+        k = int(self.current_index)
         boundary_eps = max(1.0e-9, 1.0e-9 * max(abs(t), abs(t_next), 1.0))
         if self.rocket is not None:
             deployment_times = [

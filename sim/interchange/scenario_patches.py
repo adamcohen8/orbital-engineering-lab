@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import math
 import os
 from copy import deepcopy
@@ -11,10 +10,17 @@ from typing import Any, Mapping, Sequence
 
 import yaml
 
+from sim.data_io.common import read_text, strict_json
+from sim.data_io.contracts import DataIOError
 from sim.scenarios import ScenarioArtifact
 
-from .manifests import write_handoff_manifest
-from .materialization import _failed_manifest, _result, materialize_scenario_document
+from .manifests import bind_output_path, write_handoff_manifest, write_json_document
+from .materialization import (
+    _ensure_distinct_materialization_paths,
+    _failed_manifest,
+    _result,
+    materialize_scenario_document,
+)
 from .provenance import canonical_json_bytes, compute_product_id, sha256_file
 from .validation import load_interchange_document, validate_product
 
@@ -59,11 +65,23 @@ def build_scenario_patch_product(
     non_claims: Sequence[str] = (),
     data_markings: Mapping[str, Any] | None = None,
     output_path: str | Path | None = None,
+    logical_output_path: str | Path | None = None,
+    writer: Any | None = None,
 ) -> dict[str, Any]:
     source_path = Path(source_scenario).expanduser().resolve()
-    raw, source_hash, source_digest = scenario_document(source_path)
-    target = Path(output_path).expanduser().resolve() if output_path is not None else source_path.with_suffix(".scenario_patch.json")
+    target, logical_target = bind_output_path(
+        output_path if output_path is not None else source_path.with_suffix(".scenario_patch.json"),
+        logical_output_path,
+        writer=writer,
+    )
     artifacts = [source_path, *(Path(item).expanduser().resolve() for item in source_artifacts)]
+    resolved_target = target.expanduser().resolve()
+    for artifact in artifacts:
+        if artifact.expanduser().resolve() == resolved_target:
+            raise ScenarioPatchError(
+                f"Patch output must be distinct from source artifact: {artifact}."
+            )
+    raw, source_hash, source_digest = scenario_document(source_path)
     seen: set[Path] = set()
     provenance = []
     for artifact in artifacts:
@@ -76,7 +94,7 @@ def build_scenario_patch_product(
             {
                 "artifact_id": artifact.stem,
                 "sha256": sha256_file(artifact),
-                "path": os.path.relpath(artifact, start=target.parent),
+                "path": os.path.relpath(artifact, start=logical_target.parent),
                 "media_type": "application/yaml" if artifact.suffix in {".yaml", ".yml"} else "application/json",
                 "size_bytes": artifact.stat().st_size,
             }
@@ -134,18 +152,40 @@ def build_scenario_patch_product(
         "data_markings": _markings(data_markings),
     }
     product["product_id"] = compute_product_id(product)
-    report = validate_product(product, source_path=target)
+    report = validate_product(product, source_path=logical_target)
     if not report.valid:
         messages = "; ".join(f"{issue.path}: {issue.message}" for issue in report.errors)
         raise ScenarioPatchError(f"Generated scenario patch failed validation: {messages}")
     return product
 
 
-def write_scenario_patch_product(product: Mapping[str, Any], path: str | Path) -> dict[str, Any]:
-    target = Path(path).expanduser().resolve()
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(dict(product), indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    report = validate_product(product, source_path=target)
+def write_scenario_patch_product(
+    product: Mapping[str, Any],
+    path: str | Path,
+    *,
+    logical_output_path: str | Path | None = None,
+    writer: Any | None = None,
+    overwrite: bool = True,
+) -> dict[str, Any]:
+    target, logical_target = bind_output_path(
+        path,
+        logical_output_path,
+        writer=writer,
+    )
+    logical_target = logical_target.expanduser().resolve()
+    for item in list(dict(product.get("provenance", {}) or {}).get("source_artifacts", []) or []):
+        source_ref = str(dict(item or {}).get("path", "") or "").strip()
+        if not source_ref:
+            continue
+        source_path = Path(source_ref)
+        if not source_path.is_absolute():
+            source_path = logical_target.parent / source_path
+        if source_path.expanduser().resolve() == logical_target:
+            raise ScenarioPatchError(
+                f"Patch output must be distinct from source artifact: {source_path.resolve()}."
+            )
+    write_json_document(product, target, writer=writer, overwrite=overwrite)
+    report = validate_product(product, source_path=logical_target)
     return {
         "product_path": str(target),
         "product_id": product.get("product_id"),
@@ -158,7 +198,10 @@ def write_scenario_patch_product(product: Mapping[str, Any], path: str | Path) -
 
 def select_patch_product(index_path: str | Path, selection_id: str) -> Path:
     source = Path(index_path).expanduser().resolve()
-    value = json.loads(source.read_text(encoding="utf-8"))
+    try:
+        value = strict_json(read_text(source))
+    except (FileNotFoundError, DataIOError) as exc:
+        raise ScenarioPatchError(f"Patch index is not valid bounded JSON: {source}") from exc
     if not isinstance(value, dict) or value.get("schema_id") != "oel-scenario-patch-index-v1":
         raise ScenarioPatchError("Patch index has an unsupported schema.")
     matches = [dict(item) for item in list(value.get("patches", []) or []) if str(dict(item).get("selection_id", "")) == str(selection_id)]
@@ -180,6 +223,10 @@ def materialize_scenario_patch(
     scenario_path: str | Path,
     output_dir: str | Path,
     manifest_path: str | Path | None = None,
+    logical_scenario_path: str | Path | None = None,
+    logical_manifest_path: str | Path | None = None,
+    logical_output_dir: str | Path | None = None,
+    validation_path_policy: Any | None = None,
     trust_plugins: bool = False,
     overwrite: bool = False,
 ) -> dict[str, Any]:
@@ -187,6 +234,30 @@ def materialize_scenario_patch(
     source_path = Path(source_scenario).expanduser().resolve()
     destination = Path(scenario_path).expanduser().resolve()
     manifest_target = Path(manifest_path).expanduser().resolve() if manifest_path is not None else destination.with_name(f"{destination.stem}.handoff_manifest.json")
+    logical_destination = (
+        Path(logical_scenario_path).expanduser().resolve()
+        if logical_scenario_path is not None
+        else destination
+    )
+    logical_manifest_target = (
+        Path(logical_manifest_path).expanduser().resolve()
+        if logical_manifest_path is not None
+        else logical_destination.with_name(f"{logical_destination.stem}.handoff_manifest.json")
+    )
+    logical_output = (
+        Path(logical_output_dir).expanduser().resolve()
+        if logical_output_dir is not None
+        else Path(output_dir).expanduser().resolve()
+    )
+    _ensure_distinct_materialization_paths(
+        (
+            ("patch source product", patch_path),
+            ("source scenario", source_path),
+            ("scenario", destination),
+            ("manifest", manifest_target),
+        ),
+        ScenarioPatchError,
+    )
     product = load_interchange_document(patch_path)
     product_report = validate_product(product, source_path=patch_path)
     source_id = str(product.get("product_id", "") or "")
@@ -206,14 +277,14 @@ def materialize_scenario_patch(
         },
         "adapter": {"adapter_id": SCENARIO_PATCH_ADAPTER_ID, "adapter_version": SCENARIO_PATCH_ADAPTER_VERSION},
         "materialization_options": {
-            "scenario_name": str(scenario_name), "scenario_path": str(destination),
-            "source_scenario": str(source_path), "output_dir": str(output_dir),
+            "scenario_name": str(scenario_name), "scenario_path": str(logical_destination),
+            "source_scenario": str(source_path), "output_dir": str(logical_output),
         },
         "defaults_applied": {"review_detail": "standard", "execution_occurred": False},
         "overrides": ([{"field": "scenario_path", "reason": "explicit overwrite authorization"}] if overwrite else []),
         "source_markings": markings,
         "output_markings": markings,
-        "output": {"kind": "patched_scenario", "path": str(destination), "digest": "", "status": "pending"},
+        "output": {"kind": "patched_scenario", "path": str(logical_destination), "digest": "", "status": "pending"},
         "validation": {"safe_validation_result": {"status": "not_run"}, "ordinary_validation_result": {"status": "not_run"}},
         "warnings": [], "failures": [],
         "recommended_next_action": "Review patch and source-scenario compatibility.",
@@ -259,7 +330,7 @@ def materialize_scenario_patch(
     scenario["scenario_name"] = str(scenario_name).strip()
     _align_duration_to_timestep(scenario, base_manifest=base_manifest)
     outputs = scenario.setdefault("outputs", {})
-    outputs["output_dir"] = str(output_dir)
+    outputs["output_dir"] = str(logical_output)
     outputs.setdefault("review", {"enabled": True, "detail": "standard"})
     metadata = scenario.setdefault("metadata", {})
     metadata["handoff"] = {
@@ -270,11 +341,16 @@ def materialize_scenario_patch(
         "selection": deepcopy(dict(dict(product["payload"])["selection"])),
         "adapter_id": SCENARIO_PATCH_ADAPTER_ID,
         "adapter_version": SCENARIO_PATCH_ADAPTER_VERSION,
-        "manifest_path": str(manifest_target),
+        "manifest_path": str(logical_manifest_target),
         "execution_occurred": False,
     }
     return materialize_scenario_document(
         scenario=scenario, destination=destination, manifest_target=manifest_target,
+        protected_paths=(("patch source product", patch_path), ("source scenario", source_path)),
+        collision_error_type=ScenarioPatchError,
+        logical_destination=logical_destination, logical_manifest_target=logical_manifest_target,
+        logical_output_dir=logical_output,
+        validation_path_policy=validation_path_policy,
         base_manifest=base_manifest, product_report=product_report.to_dict(), output_kind="patched_scenario",
         trust_plugins=trust_plugins, overwrite=overwrite,
     )

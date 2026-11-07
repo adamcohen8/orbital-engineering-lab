@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "oel.acquired-data.v1",
+  "type": "object",
+  "required": [
+    "schema",
+    "artifact_id",
+    "sha256",
+    "bytes",
+    "stored_path",
+    "scope",
+    "retrieved_at",
+    "provider",
+    "kind",
+    "format",
+    "inspection",
+    "terms"
+  ],
+  "properties": {
+    "schema": {
+      "const": "oel.acquired-data.v1"
+    },
+    "artifact_id": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{32}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "bytes": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 536870912
+    },
+    "stored_path": {
+      "type": "string"
+    },
+    "scope": {
+      "type": "string"
+    },
+    "retrieved_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "provider": {
+      "enum": [
+        "spacetrack",
+        "gravity",
+        "celestrak",
+        "local"
+      ]
+    },
+    "kind": {
+      "type": "string"
+    },
+    "format": {
+      "type": "string"
+    },
+    "inspection": {
+      "type": "object"
+    },
+    "terms": {
+      "type": "object"
+    }
+  },
+  "additionalProperties": true,
+  "description": "Versioned provenance receipt; computed hashes do not establish authorization or defend against deliberate same-user forgery."
+}

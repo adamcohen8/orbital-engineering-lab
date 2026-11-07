@@ -58,7 +58,7 @@ class CatalogRecord:
 
 
 def from_gp_fields(fields: dict, *, provider_profile="celestrak-gp") -> CatalogRecord:
-    """Only the named CelesTrak GP profile permits its documented omissions."""
+    """Named provider profiles permit their documented constant-context omissions."""
     value = dict(fields)
     if any(isinstance(value.get(key), bool) for key in FIELDS):
         raise DataIOError("GP fields must not use booleans as numeric values.")
@@ -68,7 +68,7 @@ def from_gp_fields(fields: dict, *, provider_profile="celestrak-gp") -> CatalogR
     defaults = {"CENTER_NAME": "EARTH", "REF_FRAME": "TEME", "TIME_SYSTEM": "UTC", "MEAN_ELEMENT_THEORY": "SGP4"}
     for key, expected in defaults.items():
         if key not in value:
-            if provider_profile != "celestrak-gp":
+            if provider_profile not in {"celestrak-gp", "spacetrack-gp"}:
                 raise DataIOError(f"Missing OMM field {key}; provider defaults require an explicit profile.")
             value[key] = expected
         if str(value[key]).upper() != expected:
@@ -77,10 +77,12 @@ def from_gp_fields(fields: dict, *, provider_profile="celestrak-gp") -> CatalogR
         raise DataIOError(
             "Only ordinary SGP4/SDP4 GP ephemeris type 0 is supported; XP/other theories require their own owner."
         )
-    if "GM" in value and float(value["GM"]) != 398600.8:
-        raise DataIOError(
-            "OGP GP materialization requires its declared WGS-72 GM; another gravity convention is not silently substituted."
-        )
+    if "GM" in value:
+        gm = _gp_float(value["GM"], "GM")
+        if gm != 398600.8:
+            raise DataIOError(
+                "OGP GP materialization requires its declared WGS-72 GM; another gravity convention is not silently substituted."
+            )
     cat = str(value.get("NORAD_CAT_ID", ""))
     if cat and (not cat.isdigit() or not 1 <= int(cat) <= 999_999_999):
         raise DataIOError("NORAD_CAT_ID must be a positive integer of at most nine digits.")
@@ -90,7 +92,8 @@ def from_gp_fields(fields: dict, *, provider_profile="celestrak-gp") -> CatalogR
         epoch_jd_utc=epoch_julian_date(epoch, "UTC"), international_designator=str(value.get("OBJECT_ID", ""))
     )
     for key in ("RA_OF_ASC_NODE", "ARG_OF_PERICENTER", "MEAN_ANOMALY"):
-        if not math.isfinite(float(value[key])) or not 0 <= float(value[key]) < 360:
+        angle = _gp_float(value[key], key)
+        if not 0 <= angle < 360:
             raise DataIOError(f"{key} must be in [0,360).")
     if not any(value.get(key) for key in ("NORAD_CAT_ID", "OBJECT_ID", "OBJECT_NAME")):
         raise DataIOError("A catalog record requires an object identifier.")
@@ -99,6 +102,16 @@ def from_gp_fields(fields: dict, *, provider_profile="celestrak-gp") -> CatalogR
     except (ValueError, TypeError, OverflowError) as exc:
         raise DataIOError(f"Invalid GP mean elements: {exc}") from exc
     return CatalogRecord(elements, value)
+
+
+def _gp_float(value, field: str) -> float:
+    try:
+        result = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise DataIOError(f"{field} must be a finite number.") from exc
+    if not math.isfinite(result):
+        raise DataIOError(f"{field} must be a finite number.")
+    return result
 
 
 def from_elements(elements: TLEElements, *, object_name=None, object_id=None) -> CatalogRecord:

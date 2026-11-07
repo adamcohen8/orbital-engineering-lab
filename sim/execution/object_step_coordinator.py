@@ -8,9 +8,10 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from sim.execution.object_workers import ObjectStepExecutor, SerialObjectStepExecutor
+from sim.execution.object_workers import ObjectStepExecutor, OGPBatchStepExecutor, SerialObjectStepExecutor
 from sim.execution.worker_budget import worker_budget_value
 from sim.pro_features import FEATURE_OBJECT_PARALLELISM, require_pro_feature
+from sim.resource_limits import resource_profile
 
 if TYPE_CHECKING:
     from sim.single_run import _SingleRunEngine
@@ -34,6 +35,29 @@ class ObjectStepCoordinator:
     ) -> None:
         self.engine = engine
         self.cpu_count = cpu_count
+
+    def _build_ogp_executor(
+        self, execution_cfg: dict, policy: str,
+    ) -> ObjectStepExecutor | None:
+        """Shared public OGP selection without enabling ONP/campaign workers."""
+        engine = self.engine
+        profile = resource_profile(getattr(engine.cfg.simulator, "resource_profile", None))
+        ogp_parallelism = dict(execution_cfg.get("ogp_parallelism", {}) or {})
+        if ogp_parallelism.get("enabled", False):
+            from sim.rust_ogp_backend import resolve_ogp_batch_workers
+
+            allocated = resolve_ogp_batch_workers(ogp_parallelism.get("workers", 0))
+            if profile.max_parallel_workers is not None:
+                allocated = min(allocated, max(1, int(profile.max_parallel_workers)))
+            if profile.force_serial or policy == "serial":
+                allocated = 1
+            engine.object_execution_plan.update(
+                requested_backend="native_threads", parallel_scope="ogp_history_preparation",
+                eligible=True, workers_allocated=allocated,
+                reason="OGP history preparation has not run yet; owner stepping is serial",
+            )
+            return OGPBatchStepExecutor(engine, max_workers=allocated)
+        return None
 
     def estimated_work_score(self, active_ids: list[str]) -> float:
         engine = self.engine
@@ -139,6 +163,9 @@ class ObjectStepCoordinator:
                 ),
             },
         }
+        ogp_executor = self._build_ogp_executor(execution_cfg, policy)
+        if ogp_executor is not None:
+            return ogp_executor
         return SerialObjectStepExecutor(engine)
 
     @staticmethod

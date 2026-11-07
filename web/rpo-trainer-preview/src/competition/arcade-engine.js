@@ -533,6 +533,18 @@ export function validateAttemptPacket(attempt, challengeRecord, options = {}) {
   if (attempt.scoring_version !== record.scoring_version) errors.push("scoring_version does not match the active challenge.");
   if (attempt.config_hash !== record.config_hash) errors.push("config_hash does not match the canonical challenge config.");
   if (!String(attempt.username || "").trim()) errors.push("username is required.");
+  if (attempt.final_tick !== undefined) {
+    const finalTick = Number(attempt.final_tick);
+    const maxTick = Math.ceil(Number(record.config.max_time_s) / Number(record.config.dt_s));
+    if (
+      typeof attempt.final_tick !== "number"
+      || !Number.isSafeInteger(finalTick)
+      || finalTick < 0
+      || finalTick > maxTick
+    ) {
+      errors.push(`Invalid final_tick: ${attempt.final_tick}.`);
+    }
+  }
 
   let inputEvents = [];
   try {

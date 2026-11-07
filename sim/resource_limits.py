@@ -5,6 +5,7 @@ import math
 import os
 import platform
 import subprocess
+import sys
 import time
 from copy import deepcopy
 from dataclasses import dataclass
@@ -42,6 +43,68 @@ class HistoryMemoryEstimate:
 
 DEFAULT_MAX_HISTORY_MEMORY_MB = 1024.0
 _ENV_MAX_HISTORY_MEMORY_MB = "OEL_MAX_HISTORY_MEMORY_MB"
+
+# NumPy history arrays use ``np.intp``/the platform pointer-sized integer for
+# their leading dimension.  Keep the check in this dependency-light module so
+# config preflight and the live single-run owner reject the same impossible
+# duration/timestep pair before trying to construct an array.
+_MAX_PLANNED_STEPS = sys.maxsize - 1
+
+
+def _simulation_completion_tolerance_s(duration_s: float) -> float:
+    """Return one local floating-point ULP without consuming a duration."""
+
+    duration = float(duration_s)
+    if not math.isfinite(duration):
+        raise ValueError("simulation duration_s must be finite.")
+    if duration <= 0.0:
+        return 0.0
+    # A scale-relative tolerance (for example, 1e-9 * duration) can consume
+    # thousands of seconds from a long simulation.  The next representable
+    # value at the requested epoch is the appropriate roundoff bound.
+    return min(math.ulp(duration), 0.5 * duration)
+
+
+def _planned_step_count(duration_s: float, dt_s: float) -> int:
+    """Return the bounded number of intervals needed for a run.
+
+    The check is deliberately performed before history sizing/allocation.  A
+    finite duration divided by a subnormal timestep can overflow to ``inf``;
+    converting that value to an array length otherwise raises an opaque
+    ``OverflowError`` (or attempts an impossible allocation).
+    """
+
+    duration = float(duration_s)
+    dt = float(dt_s)
+    if not math.isfinite(duration) or duration <= 0.0:
+        raise ValueError("simulation duration_s must be positive and finite.")
+    if not math.isfinite(dt) or dt <= 0.0:
+        raise ValueError("simulation dt_s must be positive and finite.")
+
+    ratio = duration / dt
+    if not math.isfinite(ratio):
+        raise ValueError(
+            "simulation duration_s/dt_s ratio is not representable for history allocation; "
+            "reduce duration_s or increase dt_s."
+        )
+
+    completion_tol_s = _simulation_completion_tolerance_s(duration)
+    adjusted_ratio = max((duration - completion_tol_s) / dt, 0.0)
+    if not math.isfinite(adjusted_ratio):
+        raise ValueError(
+            "simulation duration_s/dt_s ratio is not representable for history allocation; "
+            "reduce duration_s or increase dt_s."
+        )
+    # A positive duration always needs at least one advancing interval, even
+    # when duration/dt underflows to zero (for example, a subnormal duration
+    # paired with an intentionally very large requested timestep).
+    planned_steps = max(1, int(math.ceil(adjusted_ratio)))
+    if planned_steps > _MAX_PLANNED_STEPS:
+        raise ValueError(
+            "simulation duration_s/dt_s ratio exceeds the platform's representable "
+            "history length; reduce duration_s or increase dt_s."
+        )
+    return planned_steps
 
 
 @dataclass(frozen=True)
@@ -223,8 +286,8 @@ def estimate_history_memory_from_config(
 
     if samples is None:
         duration_s = float(getattr(cfg.simulator, "duration_s", 0.0) or 0.0)
-        dt_s = max(float(getattr(cfg.simulator, "dt_s", 1.0) or 1.0), 1.0e-9)
-        sample_count = int(max(math.floor(duration_s / dt_s), 0)) + 1
+        dt_s = float(getattr(cfg.simulator, "dt_s", 1.0) or 1.0)
+        sample_count = _planned_step_count(duration_s, dt_s) + 1
     else:
         sample_count = int(max(samples, 0))
 
@@ -636,8 +699,16 @@ class ResourceGovernor:
             limits.get("hard_min_available_memory_mb"), profile.hard_min_available_memory_mb
         )
         self.max_load_per_cpu = _optional_float(limits.get("max_load_per_cpu"), profile.max_load_per_cpu)
-        self.pause_seconds = float(limits.get("resource_pause_seconds", profile.pause_seconds) or profile.pause_seconds)
-        self.max_wait_s = float(limits.get("resource_max_wait_s", profile.max_wait_s) or profile.max_wait_s)
+        pause_seconds = limits.get("resource_pause_seconds", profile.pause_seconds)
+        if pause_seconds in (None, ""):
+            pause_seconds = profile.pause_seconds
+        max_wait_s = limits.get("resource_max_wait_s", profile.max_wait_s)
+        if max_wait_s in (None, ""):
+            max_wait_s = profile.max_wait_s
+        if isinstance(pause_seconds, bool) or isinstance(max_wait_s, bool):
+            raise ValueError("resource wait settings must be numeric, not boolean.")
+        self.pause_seconds = float(pause_seconds)
+        self.max_wait_s = float(max_wait_s)
         if not math.isfinite(self.pause_seconds) or self.pause_seconds <= 0.0:
             raise ValueError("outputs.resource_limits.resource_pause_seconds must be positive and finite.")
         if not math.isfinite(self.max_wait_s) or self.max_wait_s < 0.0:
@@ -749,9 +820,13 @@ class ResourceGovernor:
 def _optional_float(value: Any, default: float | None) -> float | None:
     if value in (None, ""):
         return default
+    if isinstance(value, bool):
+        raise ValueError("resource limit values must be numeric, not boolean.")
     parsed = float(value)
     if not math.isfinite(parsed):
         raise ValueError("resource limit values must be finite.")
+    if parsed < 0.0:
+        raise ValueError("resource limit values must be nonnegative.")
     return parsed
 
 
@@ -836,7 +911,10 @@ def _raise_risk(current: str, candidate: str) -> str:
 
 def estimate_resource_requirements(cfg: Any) -> ResourceEstimate:
     study_type = _study_type(cfg)
-    steps = int(max(float(getattr(cfg.simulator, "duration_s", 0.0)) / max(float(getattr(cfg.simulator, "dt_s", 1.0)), 1e-9), 0))
+    steps = _planned_step_count(
+        float(getattr(cfg.simulator, "duration_s", 0.0)),
+        float(getattr(cfg.simulator, "dt_s", 1.0)),
+    )
     if study_type == "monte_carlo":
         runs = int(getattr(cfg.monte_carlo, "iterations", 1))
         parallel_enabled = bool(getattr(cfg.monte_carlo, "parallel_enabled", False))

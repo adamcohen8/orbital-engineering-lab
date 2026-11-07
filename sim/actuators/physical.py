@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import cos, exp, isfinite, isnan, sin, sqrt
+from math import cos, exp, isfinite, isnan, sin, sqrt, ulp
 
 import numpy as np
 
@@ -584,11 +584,20 @@ def _limit_norm(vector: Vector3, maximum: float) -> tuple[Vector3, bool]:
         raise ValueError("wrench command vectors must be finite three-vectors")
     if isnan(float(maximum)) or maximum < 0.0:
         raise ValueError("wrench limit must be nonnegative and not NaN")
-    norm = sqrt(sum(value**2 for value in values))
+    # Match the native scalar accumulation on every supported Python minor.
+    squared_norm = 0.0
+    for value in values:
+        squared_norm += value * value
+    norm = sqrt(squared_norm)
     if norm <= maximum or norm == 0.0:
         return values, False  # type: ignore[return-value]
     scale = maximum / norm
-    return tuple(value * scale for value in values), True  # type: ignore[return-value]
+    # Always apply the physical cap. A few rounding steps in controller
+    # normalization and this three-vector norm must not become an actuator
+    # fault. This relative band has no absolute floor: a zero limit still
+    # reports every nonzero request as saturation. Keep native arithmetic equal.
+    saturated = norm - maximum > maximum * (8.0 * ulp(1.0))
+    return tuple(value * scale for value in values), saturated  # type: ignore[return-value]
 
 
 def _coordinate_limits(values: tuple[float, ...], count: int, name: str) -> np.ndarray:
@@ -610,4 +619,8 @@ def _mass_flow_kg_s(force_n: Vector3, specific_impulse_s: float | None) -> float
     if specific_impulse_s is None:
         return 0.0
     standard_gravity_m_s2 = 9.80665
-    return sqrt(sum(float(value) ** 2 for value in force_n)) / (specific_impulse_s * standard_gravity_m_s2)
+    squared_norm = 0.0
+    for value in force_n:
+        component = float(value)
+        squared_norm += component * component
+    return sqrt(squared_norm) / (specific_impulse_s * standard_gravity_m_s2)

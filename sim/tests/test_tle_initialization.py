@@ -23,8 +23,15 @@ from sim.dynamics.orbit.sgp4 import (
     sgp4_propagate_teme,
     sgp4_propagate_teme_batch_numba,
     sgp4_propagate_teme_batch_reference,
+    transform_teme_to_output_frame,
 )
-from sim.dynamics.orbit.tle import parse_tle_lines, tle_block_to_rv_eci, tle_to_rv_eci, tle_to_rv_eci_ogp
+from sim.dynamics.orbit.tle import (
+    parse_tle_lines,
+    tle_block_initialization_metadata,
+    tle_block_to_rv_eci,
+    tle_to_rv_eci,
+    tle_to_rv_eci_ogp,
+)
 
 ISS_LINE1 = "1 25544U 98067A   24001.00000000  .00016717  00000+0  10270-3 0  9003"
 ISS_LINE2 = "2 25544  51.6416  43.6012 0005423  52.3066  50.1234 15.50000000  1004"
@@ -643,6 +650,52 @@ def test_sgp4_provider_supports_explicit_native_teme_output() -> None:
     np.testing.assert_allclose(state.velocity_km_s, direct.velocity_teme_km_s, rtol=0.0, atol=1e-15)
     with pytest.raises(AttributeError, match="non-ECI"):
         _ = state.position_eci_km
+
+
+def test_sgp4_provider_rejects_unknown_output_frame_contract_at_construction() -> None:
+    elements = parse_tle_lines(ISS_LINE1, ISS_LINE2)
+    with pytest.raises(ValueError, match="only supports output_frame"):
+        SGP4EphemerisProvider.from_tle_block(
+            {"line1": ISS_LINE1, "line2": ISS_LINE2},
+            mass_kg=420.0,
+            start_jd_utc=elements.epoch_jd_utc,
+            duration_s=7200.0,
+            output_frame="bogus",
+            numeric_backend="python",
+        )
+
+    with pytest.raises(ValueError, match="requires frame_transform"):
+        SGP4EphemerisProvider.from_tle_block(
+            {"line1": ISS_LINE1, "line2": ISS_LINE2},
+            mass_kg=420.0,
+            start_jd_utc=elements.epoch_jd_utc,
+            duration_s=7200.0,
+            output_frame="eci",
+            frame_transform="native",
+            numeric_backend="python",
+        )
+
+
+def test_sgp4_output_transform_rejects_nonfinite_epoch_before_rotation() -> None:
+    with pytest.raises(ValueError, match="jd_utc must be finite"):
+        transform_teme_to_output_frame(
+            np.array([7000.0, 0.0, 0.0]),
+            np.array([0.0, 7.5, 0.0]),
+            jd_utc=np.nan,
+            output_frame="eci",
+            frame_transform="teme_to_eci_iau80",
+        )
+
+
+def test_tle_metadata_rejects_unsupported_initialization_transform() -> None:
+    with pytest.raises(ValueError, match="initialization_frame_transform"):
+        tle_block_initialization_metadata(
+            {
+                "line1": ISS_LINE1,
+                "line2": ISS_LINE2,
+                "initialization_frame_transform": "bogus",
+            }
+        )
 
 
 def test_sgp4_provider_state_at_preserves_legacy_state_truth_contract() -> None:

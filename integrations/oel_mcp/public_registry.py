@@ -31,6 +31,10 @@ APPROVAL_SCHEMA: dict[str, Any] = object_schema(
     {
         "approval_id": {"type": "string", "minLength": 1, "maxLength": 120},
         "scope": {"type": "string", "enum": ["trust", "write", "execute"]},
+        "operation_id": {
+            "type": "string", "minLength": 1, "maxLength": 160,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$",
+        },
     },
     required=("approval_id", "scope"),
 )

@@ -52,6 +52,10 @@ http://localhost:8765
   trainer launcher.
 - Mobile-friendly portrait and landscape controls with compact speed-multiple
   buttons, explicit camera toggling, and long-press selection suppression.
+- Bounded fast-coast frame scheduling that preserves fractional pending work,
+  reports any dropped simulated time, and shows the achieved simulation rate
+  against active wall time. Long suspensions account for both clipped and
+  capped work, and terminal completion does not count planned no-op steps.
 - RI and RC canvas plots with HCW projection for the circular tutorial,
   target-orbit-aware Sandbox projection, and browser-native arcade projections
   for Pursuit Arcade, including stable goal rings and exact pass-tick clear

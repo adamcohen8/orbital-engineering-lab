@@ -16,7 +16,13 @@ export default async function handler(req, res) {
   try {
     const url = new URL(req.url || "/api/leaderboard", "https://oel.local");
     const challengeId = url.searchParams.get("challenge") || DEFAULT_RECORD.challenge_id;
-    const limit = Math.min(Math.max(Number(url.searchParams.get("limit") || 25), 1), 100);
+    const requestedLimit = Number(url.searchParams.get("limit") || 25);
+    // Invalid query text previously produced ``limit=NaN`` in the PostgREST
+    // request and surfaced as a 500. Treat malformed or non-integral values
+    // as the documented default, while retaining the 1..100 bound.
+    const limit = Number.isInteger(requestedLimit) && requestedLimit >= 1
+      ? Math.min(requestedLimit, 100)
+      : 25;
     const query = new URLSearchParams({
       challenge_id: `eq.${challengeId}`,
       select: "challenge_id,username,score,metrics,attempt_id,submitted_at,email_verified",

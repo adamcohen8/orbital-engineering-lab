@@ -5,6 +5,7 @@ from typing import Any
 
 import numpy as np
 
+from sim.control.attitude._validation import require_finite_scalar, require_finite_vector
 from sim.control.attitude.baseline import ReactionWheelPDController
 from sim.core.interfaces import Controller
 from sim.core.models import Command, StateBelief
@@ -74,7 +75,13 @@ class AtmosphericLiftAxisController(Controller):
         self.pd = _construct_pd(self.pd)
         self.lift_axis_body = _unit3(self.lift_axis_body, field_name="lift_axis_body")
         self.desired_lift_ric = _unit3(self.desired_lift_ric, field_name="desired_lift_ric")
-        self.desired_rate_body_rad_s = np.array(self.desired_rate_body_rad_s, dtype=float).reshape(3)
+        self.desired_rate_body_rad_s = require_finite_vector(
+            self.desired_rate_body_rad_s,
+            "desired_rate_body_rad_s",
+            size=3,
+        )
+        if self.flip_lift_after_s is not None:
+            self.flip_lift_after_s = require_finite_scalar(self.flip_lift_after_s, "flip_lift_after_s")
         if self.state_rv_slice[1] - self.state_rv_slice[0] != 6:
             raise ValueError("state_rv_slice must select [r_eci(3), v_eci(3)].")
 

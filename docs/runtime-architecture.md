@@ -26,6 +26,8 @@ Its focused collaborators are:
 - `sim.execution.thread_contract`: exact built-in component identities and
   implementation declarations for thread-safe extensions
 - `sim.execution.object_step_coordinator`: serial/parallel planning and executor selection
+- `sim.execution.ogp_history`: public bounded native OGP batch preparation;
+  ONP steps, callbacks and cache mutation remain on the timeline owner
 - `sim.execution.system_forces`: opt-in serial adapter for synchronized pair stepping;
   `sim.dynamics.orbit.system_force` owns the shared-stage RK4 derivative
 - `sim.execution.single_run_history`: history growth, retention, and compaction
@@ -36,8 +38,11 @@ Its focused collaborators are:
   groups without moving Python runtime callbacks or cache mutation to threads
 - `sim.reporting.run_payload_assembly`: reporting views, payload construction, and artifact dispatch
 
-Public-core single-scenario execution uses deterministic serial object
-stepping. Process-pool object stepping is a Pro-entitled feature. `auto` may
+Public-core single-scenario execution uses deterministic owner-side object
+stepping, with optional public native OGP history preparation through
+`sim.execution.ogp_history`. This batches passive OGP rows across bounded native
+threads without running multiple scenarios. ONP process/thread object stepping
+is a Pro-entitled feature. `auto` may
 select a compatible available backend or fall back to serial under resource or
 compatibility constraints; explicitly forcing an unavailable parallel backend
 fails the applicable feature/validation check.

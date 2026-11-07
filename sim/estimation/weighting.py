@@ -129,6 +129,8 @@ def robust_weights(
     f_scale: float,
 ) -> np.ndarray:
     values = np.asarray(residual, dtype=float).reshape(-1)
+    if not np.all(np.isfinite(values)):
+        raise ValueError("residual values must be finite.")
     scale = float(f_scale)
     if not np.isfinite(scale) or scale <= 0.0:
         raise ValueError("robust f_scale must be finite and positive.")

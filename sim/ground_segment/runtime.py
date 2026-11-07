@@ -8,7 +8,11 @@ import numpy as np
 
 from sim.core.models import StateBelief
 from sim.dynamics.orbit.environment import EARTH_MU_KM3_S2
-from sim.ground_stations import evaluate_ground_station_access, evaluate_ground_station_measurements
+from sim.ground_stations import (
+    _ground_measurement_physical_validity,
+    evaluate_ground_station_access,
+    evaluate_ground_station_measurements,
+)
 
 from .config import normalize_config
 from .estimation import GroundOrbitEstimator
@@ -83,6 +87,13 @@ class GroundSegment:
                 or np.any(sig < 0)
             ):
                 raise ValueError("invalid ground tracking values or sigmas")
+            physically_valid, validity_reason = _ground_measurement_physical_validity(
+                {name: value for name, value in zip(c, z.tolist(), strict=True)}
+            )
+            if not physically_valid:
+                raise ValueError(
+                    f"invalid ground tracking physical domain ({validity_reason})"
+                )
         elif packet["kind"] == "telemetry":
             if any(
                 not isinstance(k, str) or not isinstance(v, (int, float)) or isinstance(v, bool) or not np.isfinite(v)
@@ -294,6 +305,11 @@ class SimulatedGroundSegment:
         for sid, station in measured.items():
             for oid, target in station["targets"].items():
                 for row in target["measurements"]:
+                    # The producer retains every raw Gaussian draw for audit
+                    # evidence, but only an explicitly usable row may enter
+                    # the receiver packet queue.
+                    if row.get("valid", True) is not True:
+                        continue
                     self._queue(
                         sid, oid, "tracking", time_s, {k: row[k] for k in ("time_s", "components", "vector", "sigma")}
                     )

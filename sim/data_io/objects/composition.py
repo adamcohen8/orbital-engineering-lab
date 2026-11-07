@@ -264,7 +264,10 @@ def create_scenario(imported, output, *, scenario_name, output_dir, duration_s, 
     if not np.isfinite(duration_s) or not np.isfinite(step_s) or duration_s <= 0 or step_s <= 0:
         raise DataIOError("A new scenario needs positive finite duration_s and step_s.")
     value = imported.value
-    earth = isinstance(value, CatalogRecord) or getattr(value, "center", None) == "EARTH"
+    center = getattr(value, "center", None)
+    earth = isinstance(value, CatalogRecord) or (
+        isinstance(center, str) and center.strip().upper() == "EARTH"
+    )
     simulator = {
         "duration_s": duration_s,
         "dt_s": step_s,

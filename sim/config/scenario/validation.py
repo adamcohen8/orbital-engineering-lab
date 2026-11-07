@@ -83,6 +83,25 @@ def _validate_orbital_analysis_references(cfg: SimulationScenarioConfig) -> None
                         f"{endpoint_path}_ground_station_id references disabled ground station {station_id!r}."
                     )
 
+
+def _validate_knowledge_fov_forms(cfg: SimulationScenarioConfig) -> None:
+    """Reject ambiguous knowledge FOV forms before runtime normalization."""
+
+    for object_id, obj in dict(cfg.objects or {}).items():
+        knowledge = dict(getattr(obj, "knowledge", {}) or {})
+        conditions = knowledge.get("conditions")
+        if not isinstance(conditions, dict):
+            continue
+        if (
+            conditions.get("fov_half_angle_rad") is not None
+            and conditions.get("solid_angle_sr") is not None
+        ):
+            raise ValueError(
+                f"objects.{object_id}.knowledge.conditions.fov_half_angle_rad and "
+                "solid_angle_sr are mutually exclusive; configure exactly one."
+            )
+
+
 def _require_rust_symbols(path: str, symbols: tuple[str, ...]) -> None:
     try:
         import oel_rust_orbit as native
@@ -94,18 +113,115 @@ def _require_rust_symbols(path: str, symbols: tuple[str, ...]) -> None:
 
 
 def _validate_physics_runtime_settings(cfg: SimulationScenarioConfig) -> None:
-    if cfg.simulator.additional_gravity is not None:
+    _validate_knowledge_fov_forms(cfg)
+    simulator = cfg.simulator
+    dynamics = dict(getattr(simulator, "dynamics", {}) or {})
+    execution = dict(getattr(simulator, "execution", {}) or {})
+    orbit = dict(dynamics.get("orbit", {}) or {})
+    default_propagation_method = str(
+        orbit.get("propagation_method", "special") or "special"
+    ).strip().lower()
+
+    # Normalize every runtime selector before probing a native wheel or
+    # consulting optional sections.  The config loader normally performs this
+    # work, but this preflight is also called directly by focused validators
+    # and must preserve their typed selector errors and ordering.
+    native_requirements = {
+        "attitude": ("attitude_propagate_exponential_map", "attitude_builtin_disturbance_torque"),
+        "rocket": ("rocket_aero_state", "rocket_propellant_step"),
+        "reentry": ("reentry_metrics",),
+    }
+    native_backends = {
+        section: normalize_numeric_backend(
+            dict(dynamics.get(section, {}) or {}).get("numeric_backend", "rust"),
+            field_name=f"simulator.dynamics.{section}.numeric_backend",
+        )
+        for section in native_requirements
+    }
+    orbit_backend = normalize_numeric_backend(
+        orbit.get("numeric_backend", "rust"),
+        field_name="simulator.dynamics.orbit.numeric_backend",
+    )
+    collisions = dict(getattr(simulator, "collisions", {}) or {})
+    collisions_backend = normalize_numeric_backend(
+        collisions.get("numeric_backend", "rust"),
+        field_name="simulator.collisions.numeric_backend",
+    )
+    analysis = getattr(cfg, "analysis", None)
+    covariance = getattr(analysis, "covariance", None)
+    covariance_backend = normalize_numeric_backend(
+        getattr(covariance, "numeric_backend", "rust"),
+        field_name="analysis.covariance.numeric_backend",
+    )
+    general_backends: dict[str, str] = {}
+    tracking_backends: dict[str, str] = {}
+    for object_id, obj in cfg.objects.items():
+        general = dict(getattr(obj, "general", {}) or {})
+        general_backends[object_id] = normalize_numeric_backend(
+            general.get("numeric_backend", "rust"),
+            field_name=f"objects.{object_id}.general.numeric_backend",
+        )
+        knowledge = dict(getattr(obj, "knowledge", {}) or {})
+        estimation = dict(knowledge.get("estimation", {}) or {})
+        estimation_ekf = dict(estimation.get("ekf", knowledge.get("ekf", {})) or {})
+        top_level_ekf = dict(knowledge.get("ekf", {}) or {})
+        for path, section in (
+            (f"objects.{object_id}.knowledge", knowledge),
+            (f"objects.{object_id}.knowledge.estimation", estimation),
+            (f"objects.{object_id}.knowledge.estimation.ekf", estimation_ekf),
+            (f"objects.{object_id}.knowledge.ekf", top_level_ekf),
+        ):
+            if "numeric_backend" in section:
+                normalize_numeric_backend(section["numeric_backend"], field_name=f"{path}.numeric_backend")
+        tracking_backends[object_id] = normalize_numeric_backend(
+            estimation.get(
+                "numeric_backend",
+                estimation_ekf.get("numeric_backend", knowledge.get("numeric_backend", "rust")),
+            ),
+            field_name=f"objects.{object_id}.knowledge.numeric_backend",
+        )
+
+    def effective_propagation_method(obj: object) -> str:
+        return str(
+            getattr(obj, "propagation_method", "") or default_propagation_method or "special"
+        ).strip().lower()
+
+    if getattr(simulator, "additional_gravity", None) is not None:
         from .additional_gravity import validate_additional_gravity
         validate_additional_gravity(cfg)
-    if cfg.simulator.central_body != "earth":
+    if simulator.central_body != "earth":
+        ogp_parallelism = dict(execution.get("ogp_parallelism", {}) or {})
+        if ogp_parallelism.get("enabled", False):
+            raise ValueError(
+                "simulator.execution.ogp_parallelism requires central_body=earth; "
+                "planetary scenarios do not support OGP propagation."
+            )
         from .planetary import validate_planetary_scenario
         validate_planetary_scenario(cfg)
         return
     for object_id, obj in cfg.objects.items():
         if "position_inertial_km" in obj.initial_state or "reference_axes" in obj.initial_state:
             raise ValueError(f"Earth objects.{object_id} must use existing Earth state fields; neutral states require non-Earth central_body.")
-    dynamics = dict(cfg.simulator.dynamics or {})
-    execution = dict(cfg.simulator.execution or {})
+
+    ogp_parallelism = dict(execution.get("ogp_parallelism", {}) or {})
+    if ogp_parallelism.get("enabled", False):
+        ogp_objects = [
+            (object_id, obj)
+            for object_id, obj in cfg.objects.items()
+            if obj.enabled
+            and str(getattr(obj, "kind", "satellite") or "satellite").strip().lower() == "satellite"
+            and effective_propagation_method(obj) == "general"
+        ]
+        if not ogp_objects or any(
+            general_backends[object_id] != "rust"
+            for object_id, obj in ogp_objects
+        ):
+            raise ValueError("simulator.execution.ogp_parallelism requires OGP objects with general.numeric_backend=rust.")
+        from sim.rust_ogp_backend import _extension
+
+        native = _extension()
+        if not callable(getattr(native, "ogp_propagate_batch_parallel_bytes", None)):
+            raise ValueError("simulator.execution.ogp_parallelism requires a Rust OGP wheel with parallel batch support.")
     parallelism = dict(execution.get("object_parallelism", {}) or {})
     if (parallelism.get("enabled", False) and parallelism.get("backend") == "thread_pool"
             and parallelism.get("thread_scope", "auto") == "native_history"):
@@ -115,72 +231,54 @@ def _validate_physics_runtime_settings(cfg: SimulationScenarioConfig) -> None:
 
         if not getattr(oel_rust_orbit, "PASSIVE_HISTORY_GIL_RELEASED", False):
             raise ValueError(f"{path} requires a Rust wheel with GIL-releasing sampled histories.")
-    native_requirements = {
-        "attitude": ("attitude_propagate_exponential_map", "attitude_builtin_disturbance_torque"),
-        "rocket": ("rocket_aero_state", "rocket_propellant_step"),
-        "reentry": ("reentry_metrics",),
-    }
     for section, symbols in native_requirements.items():
-        backend = normalize_numeric_backend(
-            dict(dynamics.get(section, {}) or {}).get("numeric_backend", "rust"),
-            field_name=f"simulator.dynamics.{section}.numeric_backend",
-        )
-        if backend == "rust":
+        if native_backends[section] == "rust":
             _require_rust_symbols(f"simulator.dynamics.{section}.numeric_backend=rust", symbols)
-    collisions_backend = normalize_numeric_backend(
-        dict(cfg.simulator.collisions or {}).get("numeric_backend", "rust"),
-        field_name="simulator.collisions.numeric_backend",
-    )
-    if collisions_backend == "rust":
+    if collisions.get("enabled", False) and collisions_backend == "rust":
         _require_rust_symbols("simulator.collisions.numeric_backend=rust", ("collision_chord_geometry", "collision_elastic_impact"))
-    covariance_backend = normalize_numeric_backend(
-        getattr(cfg.analysis.covariance, "numeric_backend", "rust"),
-        field_name="analysis.covariance.numeric_backend",
-    )
-    if cfg.analysis.enabled and cfg.analysis.covariance.enabled and covariance_backend == "rust":
+    if (
+        getattr(analysis, "enabled", False)
+        and getattr(covariance, "enabled", False)
+        and covariance_backend == "rust"
+    ):
         _require_rust_symbols("analysis.covariance.numeric_backend=rust", ("covariance_propagate_history",))
     for object_id, obj in cfg.objects.items():
         knowledge = dict(getattr(obj, "knowledge", {}) or {})
-        estimation = dict(knowledge.get("estimation", {}) or {})
-        estimation_ekf = dict(estimation.get("ekf", knowledge.get("ekf", {})) or {})
-        tracking_backend = normalize_numeric_backend(
-            estimation.get(
-                "numeric_backend",
-                estimation_ekf.get("numeric_backend", knowledge.get("numeric_backend", "rust")),
-            ),
-            field_name=f"objects.{object_id}.knowledge.numeric_backend",
-        )
+        if obj.runtime_profile == "trajectory_only" and not knowledge:
+            # No onboard tracking exists on this profile; an OGP-only build
+            # must not require unrelated native tracking kernels.
+            continue
+        tracking_backend = tracking_backends[object_id]
         if tracking_backend == "rust":
             _require_rust_symbols(
                 f"objects.{object_id}.knowledge.numeric_backend=rust",
                 ("tracking_measurement", "tracking_measurement_and_jacobian"),
             )
-    orbit = dict((cfg.simulator.dynamics or {}).get("orbit", {}) or {})
     model = str(orbit.get("model", "two_body") or "two_body").strip().lower()
-    propagation_method = str(orbit.get("propagation_method", "special") or "special").strip().lower()
+    propagation_method = default_propagation_method
     integrator = str(orbit.get("integrator", "rk4") or "rk4").strip().lower()
-    system_forces = list(getattr(cfg.simulator, "system_force_models", []) or [])
-    if any(
-        obj.enabled
-        and normalize_numeric_backend(
-            dict(obj.general or {}).get("numeric_backend", "rust"),
-            field_name=f"objects.{object_id}.general.numeric_backend",
-        )
-        == "rust"
+    system_forces = list(getattr(simulator, "system_force_models", []) or [])
+    ogp_objects = [
+        (object_id, obj)
         for object_id, obj in cfg.objects.items()
+        if obj.enabled
+        and str(getattr(obj, "kind", "satellite") or "satellite").strip().lower() == "satellite"
+        and effective_propagation_method(obj) == "general"
+    ]
+    if any(
+        general_backends[object_id] == "rust"
+        for object_id, obj in ogp_objects
     ):
         try:
-            import oel_rust_orbit
-        except ImportError as exc:
+            from sim.rust_ogp_backend import _extension
+
+            ogp_native = _extension()
+        except RuntimeError as exc:
             raise ValueError(
-                "objects.*.general.numeric_backend=rust requires the optional oel_rust_orbit wheel."
+                "objects.*.general.numeric_backend=rust requires an optional Rust OGP wheel (oel_rust_ogp or oel_rust_orbit)."
             ) from exc
-        if not hasattr(oel_rust_orbit, "OGPContext"):
+        if not hasattr(ogp_native, "OGPContext"):
             raise ValueError("objects.*.general.numeric_backend=rust requires an OGP-enabled oel_rust_orbit wheel.")
-    orbit_backend = normalize_numeric_backend(
-        orbit.get("numeric_backend", "rust"),
-        field_name="simulator.dynamics.orbit.numeric_backend",
-    )
     if orbit_backend == "rust" and propagation_method != "general":
         path = "simulator.dynamics.orbit.numeric_backend=rust"
         if model not in {"two_body", "cr3bp"} or propagation_method != "special":

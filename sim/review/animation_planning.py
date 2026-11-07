@@ -63,42 +63,51 @@ def animation_spec_from_mapping(arguments: Mapping[str, Any], *, source: str) ->
     )
 
 
-def plan_review_animation(output_dir: str | Path, spec: ReviewAnimationSpec) -> dict[str, Any]:
-    workspace = ReviewWorkspace.open(output_dir)
-    recipe, result = load_review_animation_evidence(workspace, spec)
-    frame_plan = review_animation_frame_plan(result, spec)
-    plan_id = _review_animation_plan_id_from_evidence(workspace, spec, recipe, result)
-    warnings: list[str] = []
-    if result.truncated:
-        warnings.append("The review query reached max_rows; rendering is blocked because the movie would omit evidence.")
-    if frame_plan["effective_frame_stride"] > spec.frame_stride:
-        warnings.append(
-            "The frame stride was increased deterministically to satisfy the animation frame and duration limits."
-        )
-    return {
-        "status": "planned",
-        "output_dir": str(workspace.output_dir),
-        "review_store": "review/run.sqlite",
-        "animation_plan_id": plan_id,
-        "spec": asdict(spec),
-        "recipe": recipe.to_dict(),
-        "row_count": result.row_count,
-        "truncated": result.truncated,
-        "source_frame_count": frame_plan["source_frame_count"],
-        "render_frame_count": frame_plan["render_frame_count"],
-        "effective_frame_stride": frame_plan["effective_frame_stride"],
-        "encoded_duration_s": frame_plan["encoded_duration_s"],
-        "resource_estimate": {
-            "width_px": int(round(15.0 * spec.dpi)),
-            "height_px": int(round(4.8 * spec.dpi)),
-            "maximum_file_bytes": STRICT_AGENT_ANIMATION_QUALITY.max_file_bytes,
-            "maximum_frames": STRICT_AGENT_ANIMATION_QUALITY.max_frames,
-        },
-        "warnings": warnings,
-        "render_ready": not result.truncated and frame_plan["render_frame_count"] >= 2,
-        "render_authorized": False,
-        "visual_review_required": True,
-    }
+def plan_review_animation(
+    output_dir: str | Path,
+    spec: ReviewAnimationSpec,
+    *,
+    protected: bool | None = None,
+) -> dict[str, Any]:
+    with (
+        ReviewWorkspace.open(output_dir)
+        if protected is None
+        else ReviewWorkspace.open(output_dir, protected=protected)
+    ) as workspace:
+        recipe, result = load_review_animation_evidence(workspace, spec)
+        frame_plan = review_animation_frame_plan(result, spec)
+        plan_id = _review_animation_plan_id_from_evidence(workspace, spec, recipe, result)
+        warnings: list[str] = []
+        if result.truncated:
+            warnings.append("The review query reached max_rows; rendering is blocked because the movie would omit evidence.")
+        if frame_plan["effective_frame_stride"] > spec.frame_stride:
+            warnings.append(
+                "The frame stride was increased deterministically to satisfy the animation frame and duration limits."
+            )
+        return {
+            "status": "planned",
+            "output_dir": str(workspace.output_dir),
+            "review_store": "review/run.sqlite",
+            "animation_plan_id": plan_id,
+            "spec": asdict(spec),
+            "recipe": recipe.to_dict(),
+            "row_count": result.row_count,
+            "truncated": result.truncated,
+            "source_frame_count": frame_plan["source_frame_count"],
+            "render_frame_count": frame_plan["render_frame_count"],
+            "effective_frame_stride": frame_plan["effective_frame_stride"],
+            "encoded_duration_s": frame_plan["encoded_duration_s"],
+            "resource_estimate": {
+                "width_px": int(round(15.0 * spec.dpi)),
+                "height_px": int(round(4.8 * spec.dpi)),
+                "maximum_file_bytes": STRICT_AGENT_ANIMATION_QUALITY.max_file_bytes,
+                "maximum_frames": STRICT_AGENT_ANIMATION_QUALITY.max_frames,
+            },
+            "warnings": warnings,
+            "render_ready": not result.truncated and frame_plan["render_frame_count"] >= 2,
+            "render_authorized": False,
+            "visual_review_required": True,
+        }
 
 
 def render_review_animation(
@@ -107,8 +116,17 @@ def render_review_animation(
     *,
     animation_plan_id: str,
     path: str | Path,
+    record: bool = True,
+    writer: Any | None = None,
+    logical_output_dir: str | Path | None = None,
+    protected: bool | None = None,
 ) -> Any:
-    workspace = ReviewWorkspace.open(output_dir)
+    workspace = (
+        ReviewWorkspace.open(output_dir)
+        if protected is None
+        else ReviewWorkspace.open(output_dir, protected=protected)
+    )
+    active_writer = writer or _current_output_writer()
     recipe, result = load_review_animation_evidence(workspace, spec)
     initial_identity = workspace.evidence_identity()
     current_id = _review_animation_plan_id_from_evidence(
@@ -130,7 +148,14 @@ def render_review_animation(
     )
 
     artifact = render_review_animation_artifact(
-        workspace, recipe, result, spec, path=path, record=False
+        workspace,
+        recipe,
+        result,
+        spec,
+        path=path,
+        record=False,
+        writer=writer,
+        logical_output_dir=logical_output_dir,
     )
     final_recipe, final_result = load_review_animation_evidence(workspace, spec)
     final_identity = workspace.evidence_identity()
@@ -144,27 +169,43 @@ def render_review_animation(
         )
         != current_id
     ):
-        for generated_path in (
-            artifact.path,
-            artifact.contact_sheet_path,
-            artifact.quality_receipt_path,
-        ):
-            generated_path.unlink(missing_ok=True)
+        # Protected renders may already have been published through a
+        # descriptor-bound writer.  A pathname unlink here could remove a
+        # concurrent replacement at the same logical path; isolated staging
+        # transactions own their cleanup instead.
+        if active_writer is None:
+            for generated_path in (
+                artifact.path,
+                artifact.contact_sheet_path,
+                artifact.quality_receipt_path,
+            ):
+                generated_path.unlink(missing_ok=True)
         raise ValueError(
             "The review store changed while the planned animation was rendering; no artifact was recorded."
         )
-    record_generated_animation(
-        workspace,
-        artifact,
-        recipe=recipe,
-        review_store_identity=final_identity,
-    )
+    if record:
+        record_generated_animation(
+            workspace,
+            artifact,
+            recipe=recipe,
+            review_store_identity=final_identity,
+            writer=writer,
+            logical_output_dir=logical_output_dir,
+        )
     return artifact
 
 
 def review_animation_plan_id(workspace: ReviewWorkspace, spec: ReviewAnimationSpec) -> str:
     recipe, result = load_review_animation_evidence(workspace, spec)
     return _review_animation_plan_id_from_evidence(workspace, spec, recipe, result)
+
+
+def _current_output_writer() -> Any | None:
+    try:
+        from sim.security.output_writes import current_output_writer
+    except ImportError:
+        return None
+    return current_output_writer()
 
 
 def _review_animation_plan_id_from_evidence(

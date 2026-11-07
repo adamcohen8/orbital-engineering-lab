@@ -5,9 +5,12 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
-from datetime import datetime, timezone
+import os
+from pathlib import Path
 
 import numpy as np
+
+from sim.security.output_writes import current_output_writer, staged_output_file
 
 STATE_COLUMNS = [
     "x_inertial_km",
@@ -122,21 +125,28 @@ def write_artifacts(payload, c):
     from sim.utils.io import write_json
 
     summary = payload["summary"]
-    outdir = c.outdir
-    outdir.mkdir(parents=True, exist_ok=True)
+    writer = current_output_writer()
+    outdir = _writer_logical_path(c.outdir, writer)
     data = c.cfg.to_dict()
+    if writer is not None:
+        config_outputs = data.get("outputs")
+        if isinstance(config_outputs, dict) and config_outputs.get("output_dir"):
+            config_outputs["output_dir"] = str(_writer_logical_path(config_outputs["output_dir"], writer))
     config_json = json.dumps(
         data, sort_keys=True, separators=(",", ":"), allow_nan=False
     )
     digest = hashlib.sha256(config_json.encode()).hexdigest()
     summary.update(
         config_sha256=digest,
-        generated_utc=datetime.now(timezone.utc).isoformat(),
+        generated_utc=os.environ.get("OEL_GENERATED_UTC", "").strip(),
         review_detail=str(c.cfg.outputs.review.detail),
     )
     source = getattr(c.cfg, "source_path", None)
     if source is not None:
-        summary["config_source_path"] = str(source)
+        summary_source_path = Path(source).expanduser().resolve()
+        if writer is not None:
+            summary_source_path = _writer_logical_path(source, writer)
+        summary["config_source_path"] = str(summary_source_path)
     config_path = outdir / "effective_config.json"
     write_json(str(config_path), data)
     summary["effective_config_path"] = str(config_path)
@@ -146,26 +156,28 @@ def write_artifacts(payload, c):
     }
     if c.cfg.outputs.stats.get("save_csv", False):
         path = outdir / "master_run_history.csv"
-        with path.open("w", newline="") as stream:
-            writer = csv.writer(stream)
-            writer.writerow(
-                [
-                    "object_id",
-                    "sample_index",
-                    "time_s",
-                    "origin_center_id",
-                    "inertial_axes",
-                ]
-                + STATE_COLUMNS
-                + ["mass_kg"]
-            )
-            for oid, history in c.truth_hist.items():
-                for i, (t, row) in enumerate(zip(c.t_s, history)):
-                    writer.writerow(
-                        [oid, i, float(t), summary["origin_center_id"], "J2000"]
-                        + row[:6].tolist()
-                        + [float(row[13])]
-                    )
+        stream_context = staged_output_file(path) if writer is not None else _null_path_context(path)
+        with stream_context as write_path:
+            with write_path.open("w", newline="") as stream:
+                csv_writer = csv.writer(stream)
+                csv_writer.writerow(
+                    [
+                        "object_id",
+                        "sample_index",
+                        "time_s",
+                        "origin_center_id",
+                        "inertial_axes",
+                    ]
+                    + STATE_COLUMNS
+                    + ["mass_kg"]
+                )
+                for oid, history in c.truth_hist.items():
+                    for i, (t, row) in enumerate(zip(c.t_s, history)):
+                        csv_writer.writerow(
+                            [oid, i, float(t), summary["origin_center_id"], "J2000"]
+                            + row[:6].tolist()
+                            + [float(row[13])]
+                        )
         artifacts["history_csv"] = str(path)
     if c.cfg.outputs.stats.get("save_history_npz", False):
         path = outdir / "master_run_history.npz"
@@ -179,7 +191,11 @@ def write_artifacts(payload, c):
             ),
         }
         arrays.update({f"truth_{oid}": h for oid, h in c.truth_hist.items()})
-        np.savez_compressed(path, **arrays)
+        if writer is None:
+            np.savez_compressed(path, **arrays)
+        else:
+            with staged_output_file(path) as staged:
+                np.savez_compressed(staged, **arrays)
         artifacts["history_npz"] = str(path)
     if c.cfg.outputs.stats.get("save_json", True):
         artifacts["summary_json"] = str(outdir / "master_run_summary.json")
@@ -224,3 +240,27 @@ def write_artifacts(payload, c):
 
         print(format_single_run_summary(summary))
     return payload
+
+
+def _writer_logical_path(path: str | Path, writer: object | None = None) -> Path:
+    active = writer or current_output_writer()
+    raw = Path(path).expanduser()
+    if not raw.is_absolute():
+        raw = Path.cwd() / raw
+    if active is None:
+        return raw
+    logical_root = Path(active.logical_root).expanduser()
+    physical_root = Path(active.root).expanduser()
+    for candidate, mapped_root in ((logical_root, logical_root), (physical_root, logical_root)):
+        try:
+            return mapped_root / raw.relative_to(candidate)
+        except ValueError:
+            continue
+    raise ValueError(f"Planetary output path {raw} is outside the protected writer roots.")
+
+
+def _null_path_context(path: Path):
+    from contextlib import nullcontext
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return nullcontext(path)

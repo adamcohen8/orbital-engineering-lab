@@ -20,6 +20,23 @@ from sim.doctor import (
 ROOT = Path(__file__).resolve().parents[2]
 
 
+@pytest.mark.parametrize("dependency_version,passed", [("1.5", True), ("0.5", False), (None, False)])
+def test_pipless_doctor_checks_real_requirement_metadata(monkeypatch, dependency_version, passed):
+    from types import SimpleNamespace
+
+    import sim.doctor as doctor
+
+    distributions = [SimpleNamespace(metadata={"Name": "App"}, version="1", requires=["dependency>=1", "unused; python_version < '2'"])]
+    if dependency_version is not None:
+        distributions.append(SimpleNamespace(metadata={"Name": "dependency"}, version=dependency_version, requires=[]))
+    monkeypatch.setattr(doctor, "_installed_version", lambda name: None)
+    monkeypatch.setattr(doctor.metadata, "distributions", lambda: distributions)
+    monkeypatch.setattr(doctor.subprocess, "run", lambda *a, **k: pytest.fail("pip must not run inside a pipless profile"))
+    result, detail = doctor._pip_check()
+    assert result is passed
+    assert "metadata" in detail if passed else "requires" in detail
+
+
 @pytest.mark.parametrize("version", [(3, 10), (3, 11), (3, 12), (3, 13), (3, 14)])
 def test_doctor_accepts_exact_declared_python_minors(version: tuple[int, int]) -> None:
     assert interpreter_is_supported(version)
@@ -66,8 +83,8 @@ def test_dependency_compatibility_reports_missing_and_out_of_range_versions() ->
     assert not dependency_is_compatible("2.5.0", numpy_spec)
 
 
-def test_doctor_prints_windows_recovery_commands() -> None:
-    commands = remediation_commands(system="Windows", version_info=(3, 13))
+def test_doctor_prints_windows_recovery_commands(tmp_path: Path) -> None:
+    commands = remediation_commands(system="Windows", version_info=(3, 13), source_root=tmp_path)
 
     assert commands == (
         "py -3.13 -m venv .venv",
@@ -81,8 +98,59 @@ def test_doctor_uses_latest_supported_minor_to_recover_unsupported_python() -> N
     commands = remediation_commands(system="Linux", version_info=(3, 15))
 
     assert commands[0] == "python3.14 -m venv .venv"
-    assert "constraints/py314.txt" in commands[2]
+    assert any("constraints/py314.txt" in command for command in commands)
     assert all("3.10+" not in command for command in commands)
+
+
+@pytest.mark.parametrize("system", ["Windows", "Linux"])
+def test_source_recovery_builds_native_wheels_before_constrained_install(system: str) -> None:
+    commands = remediation_commands(system=system, version_info=(3, 13), source_root=ROOT)
+    builds = [index for index, command in enumerate(commands) if "maturin build" in command]
+    install = next(index for index, command in enumerate(commands) if '".[cross-platform]"' in command)
+    assert len(builds) == 2 and max(builds) < install
+    assert "--find-links dist/native" in commands[install]
+    assert "py313.txt" in commands[install]
+    assert all("--locked" in commands[index] for index in builds)
+
+
+@pytest.mark.parametrize("distribution,version,machine,quickstart_ok,ready", [
+    ("ubuntu", "24.04", "x86_64", True, True),
+    ("debian", "13", "x86_64", True, True),
+    ("debian", "13", "aarch64", True, True),
+    ("ubuntu", "26.04", "x86_64", True, True),
+    ("debian", "13", "i686", True, False),
+    ("debian", "13", "x86_64", False, False),
+])
+def test_linux_doctor_separates_runtime_checks_from_qualification(
+    monkeypatch, tmp_path: Path, capsys, distribution, version, machine, quickstart_ok, ready,
+) -> None:
+    from types import SimpleNamespace
+
+    from sim import doctor
+
+    quickstart = tmp_path / "quickstart.yaml"
+    quickstart.write_text("{}")
+    monkeypatch.setattr(doctor.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(doctor.platform, "machine", lambda: machine)
+    monkeypatch.setattr(doctor, "_linux_distribution", lambda: (distribution, version))
+    monkeypatch.setattr(doctor, "quickstart_config_path", lambda: quickstart)
+    monkeypatch.setattr(doctor, "inspect_project_version", lambda **k: SimpleNamespace(ok=True, required=True, detail="test"))
+    monkeypatch.setattr(doctor, "evaluate_dependencies", lambda specs: tuple(
+        doctor.DependencyStatus(spec, "1.0", True) for spec in specs
+    ))
+    monkeypatch.setattr(doctor, "_pip_check", lambda: (True, "consistent"))
+    monkeypatch.setenv("OEL_INSTALLATION_DISPOSITION", "developer")
+    monkeypatch.setenv("OEL_OUTPUT_ROOT", str(tmp_path / "outputs"))
+    validated = []
+    monkeypatch.setattr(doctor, "_quickstart_check", lambda *a: (validated.append(a) or quickstart_ok, "validation result"))
+    assert doctor.print_doctor_report(source_root=tmp_path) is ready
+    output = capsys.readouterr().out
+    assert bool(validated) is (machine != "i686")
+    if machine != "i686" and (distribution, version) != ("ubuntu", "24.04"):
+        assert "Operating system       : WARN" in output
+        assert "passing does not qualify this host" in output
+    elif not ready:
+        assert "Operating system       : FAIL" in output
 
 
 def test_doctor_runs_without_site_packages_and_reports_recovery() -> None:

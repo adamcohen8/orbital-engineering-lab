@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import gzip
 import hashlib
 import json
@@ -14,6 +15,7 @@ import numpy as np
 from sim.config import iter_object_sections, relative_reference_for_object
 from sim.dynamics.orbit.elements import rv_to_coe_eci
 from sim.dynamics.orbit.environment import EARTH_MU_KM3_S2
+from sim.platform_compat import canonicalize_platform_compatibility_root as _canonicalize_platform_compatibility_root
 from sim.plotting.style import get_oel_version
 from sim.review.generated_artifacts import clear_generated_review_artifacts
 from sim.utils.frames import eci_relative_to_ric_rect
@@ -43,6 +45,29 @@ REVIEW_SCHEMA_STABLE_TABLES = (
 )
 
 
+def _lexical_artifact_path(path: str | Path, *, outdir: Path) -> Path:
+    candidate = Path(path).expanduser()
+    if not candidate.is_absolute():
+        candidate = outdir / candidate
+    if any(part in {"", ".", ".."} for part in candidate.parts[1:]):
+        raise ValueError(f"Review artifact path contains traversal components: {candidate}")
+    return _canonicalize_platform_compatibility_root(Path(os.path.abspath(os.fspath(candidate))))
+
+
+def _reject_artifact_symlink_components(path: Path) -> None:
+    path = _canonicalize_platform_compatibility_root(path)
+    if any(component.is_symlink() for component in (path, *path.parents)):
+        raise ValueError(f"Review artifact path contains a symbolic link: {path}")
+
+
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
 def write_single_run_review_store(
     *,
     payload: dict[str, Any],
@@ -50,9 +75,26 @@ def write_single_run_review_store(
     artifacts: dict[str, Any],
     config_json: str | None = None,
     config_sha256: str | None = None,
+    writer: Any | None = None,
+    logical_output_dir: str | Path | None = None,
+    _writer_bound: bool = False,
 ) -> dict[str, str]:
     """Write a SQLite review store for a completed single-run output folder."""
 
+    writer = writer or getattr(context, "writer", None) or _current_output_writer()
+    if writer is not None and not _writer_bound and _current_output_writer() is not writer:
+        from sim.security.output_writes import bind_output_writer
+
+        with bind_output_writer(writer):
+            return write_single_run_review_store(
+                payload=payload,
+                context=context,
+                artifacts=artifacts,
+                config_json=config_json,
+                config_sha256=config_sha256,
+                logical_output_dir=logical_output_dir,
+                _writer_bound=True,
+            )
     cfg = context.cfg
     if cfg.simulator.central_body != "earth":
         from sim.reporting.planetary_review import write_review
@@ -63,12 +105,23 @@ def write_single_run_review_store(
         return {}
 
     outdir = Path(context.outdir)
+    logical_outdir = _logical_output_dir(
+        outdir,
+        writer=writer,
+        logical_output_dir=logical_output_dir,
+    )
     review_dir = outdir / "review"
-    review_dir.mkdir(parents=True, exist_ok=True)
+    logical_review_dir = logical_outdir / "review"
+    if writer is None:
+        review_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        _mkdir_output(logical_review_dir, physical_root=outdir, writer=writer)
     db_path = review_dir / "run.sqlite"
+    logical_db_path = logical_review_dir / "run.sqlite"
     tmp_path = review_dir / "run.sqlite.tmp"
     schema_path = review_dir / "schema.json"
-    if tmp_path.exists():
+    logical_schema_path = logical_review_dir / "schema.json"
+    if writer is None and tmp_path.exists():
         tmp_path.unlink()
 
     summary = dict(payload.get("summary", {}) or {})
@@ -79,88 +132,190 @@ def write_single_run_review_store(
     include_standard_detail = str(review_cfg.detail or "standard") != "compact"
     include_debug_detail = str(review_cfg.detail or "standard") == "full"
 
-    try:
-        conn = sqlite3.connect(tmp_path)
-        try:
-            conn.execute("PRAGMA foreign_keys = ON")
-            _create_schema(conn)
-            _insert_run_metadata(
-                conn,
-                cfg=cfg,
-                summary=summary,
-                outdir=outdir,
-                generated_utc=generated_utc,
-                config_json=config_json,
-                config_sha256=config_sha256,
-            )
-            _insert_objects(conn, cfg=cfg, summary=summary)
-            _insert_impulsive_maneuvers(conn, payload=payload)
-            _insert_frame_provenance(conn, payload=payload)
-            _insert_object_initialization(conn, payload=payload)
-            _insert_object_propagation(conn, payload=payload)
-            _insert_object_state_frame(conn, payload=payload)
-            if "additional_gravity" in payload:
-                from sim.reporting.additional_gravity import insert_review
-                insert_review(conn, payload, include_samples=include_standard_detail)
-            if include_standard_detail:
-                _insert_time_samples(conn, t_s=t_s)
-                _insert_object_state(conn, t_s=t_s, truth_hist=truth_hist)
-                _insert_object_orbital_elements(
-                    conn,
-                    t_s=t_s,
-                    truth_hist=truth_hist,
-                    object_state_frames=dict(payload.get("object_state_frames", {}) or {}),
-                )
-                _insert_attitude_error(conn, t_s=t_s, truth_hist=truth_hist, payload=payload)
-                _insert_relative_state(
-                    conn,
-                    t_s=t_s,
-                    truth_hist=truth_hist,
-                    summary=summary,
-                    cfg=cfg,
-                    object_state_frames=dict(payload.get("object_state_frames", {}) or {}),
-                )
-                _insert_thrust(conn, t_s=t_s, thrust_hist=thrust_hist)
-                _insert_command_decisions(
-                    conn,
-                    payload=payload,
-                    include_debug_detail=include_debug_detail,
-                )
-                _insert_flight_software_evidence(
-                    conn,
-                    payload=payload,
-                    t_s=t_s,
-                    truth_hist=truth_hist,
-                    include_debug_detail=include_debug_detail,
-                )
-                _insert_game_evidence(conn, payload=payload)
-                _insert_ground_access(conn, t_s=t_s, payload=payload)
-                _insert_orbital_analysis(conn, payload=payload)
-            from sim.spacecraft_resources.artifacts import insert_resource_review
+    db_context: Any
+    if writer is None:
+        db_context = contextlib.nullcontext(tmp_path)
+    else:
+        from sim.security.output_writes import staged_output_file
 
-            insert_resource_review(conn, payload.get("spacecraft_resources", {}))
-            from sim.ground_segment.artifacts import insert_ground_review
-            insert_ground_review(conn, payload.get("ground_segment", []))
-            _insert_events(conn, t_s=t_s, summary=summary, thrust_hist=thrust_hist,
-                           impulsive_maneuvers=payload.get("impulsive_maneuvers", ()),
-                           collision_events=payload.get("collision_events", ()))
-            _insert_mission_recovery(conn, summary=summary)
-            _insert_metrics(conn, summary=summary)
-            _insert_artifacts(conn, artifacts=artifacts, outdir=outdir, generated_utc=generated_utc)
-            conn.commit()
-        finally:
-            conn.close()
-        clear_generated_review_artifacts(review_dir)
-        tmp_path.replace(db_path)
-        _write_schema_json(schema_path, generated_utc=generated_utc, db_path=db_path)
+        db_context = staged_output_file(logical_db_path)
+    try:
+        with db_context as db_write_path:
+            conn = sqlite3.connect(db_write_path)
+            try:
+                conn.execute("PRAGMA foreign_keys = ON")
+                _create_schema(conn)
+                _insert_run_metadata(
+                    conn,
+                    cfg=cfg,
+                    summary=summary,
+                    outdir=logical_outdir,
+                    generated_utc=generated_utc,
+                    config_json=config_json,
+                    config_sha256=config_sha256,
+                    logical_output_dir=logical_outdir if writer is not None else None,
+                )
+                _insert_objects(conn, cfg=cfg, summary=summary)
+                _insert_impulsive_maneuvers(conn, payload=payload)
+                _insert_frame_provenance(conn, payload=payload)
+                _insert_object_initialization(conn, payload=payload)
+                _insert_object_propagation(conn, payload=payload)
+                _insert_object_state_frame(conn, payload=payload)
+                if "additional_gravity" in payload:
+                    from sim.reporting.additional_gravity import insert_review
+                    insert_review(conn, payload, include_samples=include_standard_detail)
+                if include_standard_detail:
+                    _insert_time_samples(conn, t_s=t_s)
+                    _insert_object_state(conn, t_s=t_s, truth_hist=truth_hist)
+                    _insert_object_orbital_elements(
+                        conn,
+                        t_s=t_s,
+                        truth_hist=truth_hist,
+                        object_state_frames=dict(payload.get("object_state_frames", {}) or {}),
+                    )
+                    _insert_attitude_error(conn, t_s=t_s, truth_hist=truth_hist, payload=payload)
+                    _insert_relative_state(
+                        conn,
+                        t_s=t_s,
+                        truth_hist=truth_hist,
+                        summary=summary,
+                        cfg=cfg,
+                        object_state_frames=dict(payload.get("object_state_frames", {}) or {}),
+                    )
+                    _insert_thrust(conn, t_s=t_s, thrust_hist=thrust_hist)
+                    _insert_command_decisions(
+                        conn,
+                        payload=payload,
+                        include_debug_detail=include_debug_detail,
+                    )
+                    _insert_flight_software_evidence(
+                        conn,
+                        payload=payload,
+                        t_s=t_s,
+                        truth_hist=truth_hist,
+                        include_debug_detail=include_debug_detail,
+                    )
+                    _insert_game_evidence(conn, payload=payload)
+                    _insert_ground_access(conn, t_s=t_s, payload=payload)
+                    _insert_orbital_analysis(conn, payload=payload)
+                from sim.spacecraft_resources.artifacts import insert_resource_review
+
+                insert_resource_review(conn, payload.get("spacecraft_resources", {}))
+                from sim.ground_segment.artifacts import insert_ground_review
+                insert_ground_review(conn, payload.get("ground_segment", []))
+                _insert_events(conn, t_s=t_s, summary=summary, thrust_hist=thrust_hist,
+                               impulsive_maneuvers=payload.get("impulsive_maneuvers", ()),
+                               collision_events=payload.get("collision_events", ()))
+                _insert_mission_recovery(conn, summary=summary)
+                _insert_metrics(conn, summary=summary)
+                _insert_artifacts(
+                    conn,
+                    artifacts=artifacts,
+                    outdir=outdir,
+                    generated_utc=generated_utc,
+                    writer=writer,
+                )
+                conn.commit()
+            finally:
+                conn.close()
+            if writer is not None:
+                with _schema_output_context(logical_schema_path) as schema_write_path:
+                    _write_schema_json(schema_write_path, generated_utc=generated_utc, db_path=db_write_path)
+            else:
+                if tmp_path.exists():
+                    clear_generated_review_artifacts(review_dir)
+                    tmp_path.replace(db_path)
+                _write_schema_json(schema_path, generated_utc=generated_utc, db_path=db_path)
         return {
-            "sqlite": str(db_path),
-            "schema_json": str(schema_path),
+            "sqlite": str(logical_db_path if writer is not None else db_path),
+            "schema_json": str(logical_schema_path if writer is not None else schema_path),
         }
     except Exception:
-        if tmp_path.exists():
+        if writer is None and tmp_path.exists():
             tmp_path.unlink()
         raise
+
+
+def _current_output_writer() -> Any | None:
+    try:
+        from sim.security.output_writes import current_output_writer
+    except ImportError:
+        return None
+    return current_output_writer()
+
+
+def _logical_output_dir(
+    physical_output_dir: Path,
+    *,
+    writer: Any | None,
+    logical_output_dir: str | Path | None,
+) -> Path:
+    if writer is None:
+        return Path(logical_output_dir) if logical_output_dir is not None else physical_output_dir
+    # The simulation engine keeps its configured output directory in the
+    # logical namespace even while a descriptor-backed execution writes into
+    # the transaction's private staging tree.  Map either spelling to the
+    # physical tree before deriving the retained logical path.  Without this
+    # mapping a protected run incorrectly treats the configured logical root
+    # as being outside the writer's physical root and drops its review store.
+    raw = Path(physical_output_dir).expanduser()
+    if not raw.is_absolute():
+        raw = Path.cwd() / raw
+    physical_root = Path(writer.root).expanduser()
+    writer_logical_root = Path(writer.logical_root).expanduser()
+    mapped_physical: Path | None = None
+    for source_root, target_root in (
+        (physical_root, physical_root),
+        (writer_logical_root, physical_root),
+    ):
+        try:
+            mapped_physical = target_root / raw.relative_to(source_root)
+            break
+        except ValueError:
+            continue
+    if mapped_physical is None:
+        # Preserve the writer's strict containment check when lexical aliases
+        # differ (for example, a platform-resolved temporary directory).
+        raw_resolved = raw.resolve()
+        for source_root, target_root in (
+            (physical_root.resolve(), physical_root.resolve()),
+            (writer_logical_root.resolve(), physical_root.resolve()),
+        ):
+            try:
+                mapped_physical = target_root / raw_resolved.relative_to(source_root)
+                break
+            except ValueError:
+                continue
+    if mapped_physical is None:
+        raise ValueError("The review output directory must be below the protected writer root.")
+    physical_root = Path(writer.root).resolve()
+    try:
+        relative = mapped_physical.resolve().relative_to(physical_root)
+    except ValueError as exc:
+        raise ValueError("The review output directory must be below the protected writer root.") from exc
+    logical_root = Path(logical_output_dir) if logical_output_dir is not None else Path(writer.logical_root)
+    return logical_root / relative
+
+
+def _mkdir_output(logical_path: Path, *, physical_root: Path, writer: Any) -> Path:
+    logical_root = Path(writer.logical_root).resolve()
+    try:
+        relative = logical_path.resolve().relative_to(logical_root)
+    except ValueError as exc:
+        raise ValueError("The review output directory is outside the protected logical root.") from exc
+    return writer.mkdir(relative)
+
+
+@contextlib.contextmanager
+def _schema_output_context(logical_path: Path):
+    writer = _current_output_writer()
+    if writer is None:
+        yield logical_path
+        return
+    from sim.security.output_writes import staged_output_file
+
+    with staged_output_file(logical_path) as physical_path:
+        yield physical_path
 
 
 def refresh_review_schema(db_path: str | Path) -> Path:
@@ -958,8 +1113,12 @@ def _insert_run_metadata(
     generated_utc: str,
     config_json: str | None = None,
     config_sha256: str | None = None,
+    logical_output_dir: Path | None = None,
 ) -> None:
-    canonical_config_json, canonical_config_sha256 = _config_json_and_sha256(cfg)
+    canonical_config_json, canonical_config_sha256 = _config_json_and_sha256(
+        cfg,
+        logical_output_dir=logical_output_dir,
+    )
     if config_json is not None and config_json != canonical_config_json:
         raise ValueError("Precomputed config_json does not match the scenario configuration.")
     if config_sha256 is not None and config_sha256 != canonical_config_sha256:
@@ -990,11 +1149,19 @@ def _insert_run_metadata(
     )
 
 
-def _config_json_and_sha256(cfg: Any) -> tuple[str, str]:
+def _config_json_and_sha256(
+    cfg: Any,
+    *,
+    logical_output_dir: Path | None = None,
+) -> tuple[str, str]:
     if hasattr(cfg, "to_dict"):
         data = cfg.to_dict()
     else:
         data = {}
+    if logical_output_dir is not None:
+        outputs = data.get("outputs")
+        if isinstance(outputs, dict) and outputs.get("output_dir"):
+            outputs["output_dir"] = str(logical_output_dir)
     config_json = json.dumps(data, sort_keys=True, separators=(",", ":"), allow_nan=False)
     return config_json, hashlib.sha256(config_json.encode("utf-8")).hexdigest()
 
@@ -1117,7 +1284,13 @@ def _insert_object_state_frame(conn: sqlite3.Connection, *, payload: dict[str, A
 
 
 def _insert_time_samples(conn: sqlite3.Connection, *, t_s: np.ndarray) -> None:
-    conn.executemany("INSERT INTO time_samples VALUES (?, ?)", [(int(i), _finite_float(t)) for i, t in enumerate(t_s)])
+    rows = []
+    for i, t in enumerate(t_s):
+        value = _finite_float(t)
+        if value is None:
+            raise ValueError("Review time samples must be finite.")
+        rows.append((int(i), value))
+    conn.executemany("INSERT INTO time_samples VALUES (?, ?)", rows)
 
 
 def _insert_object_state(
@@ -1453,6 +1626,8 @@ def _insert_relative_state(
     object_state_frames: dict[str, str] | None = None,
 ) -> None:
     rows = []
+    dynamics = dict(getattr(getattr(cfg, "simulator", None), "dynamics", {}) or {})
+    relative_backend = dict(dynamics.get("orbit", {}) or {}).get("numeric_backend", "rust")
     state_frames = dict(object_state_frames or {})
     for deputy_id, chief_id in _relative_review_pairs(cfg=cfg, truth_hist=truth_hist, summary=summary):
         deputy_frame = str(state_frames.get(deputy_id, "eci") or "eci").strip().lower()
@@ -1466,7 +1641,7 @@ def _insert_relative_state(
         n = int(min(t_s.size, deputy.shape[0], chief.shape[0]))
         for i in range(n):
             rel = (
-                eci_relative_to_ric_rect(deputy[i, :6], chief[i, :6])
+                eci_relative_to_ric_rect(deputy[i, :6], chief[i, :6], numeric_backend=relative_backend)
                 if np.isfinite(deputy[i, :6]).all() and np.isfinite(chief[i, :6]).all()
                 else np.full(6, np.nan)
             )
@@ -2806,6 +2981,7 @@ def _insert_artifacts(
     artifacts: dict[str, Any],
     outdir: Path,
     generated_utc: str,
+    writer: Any | None = None,
 ) -> None:
     rows = []
     for artifact_type, artifact_id, path in _iter_artifact_paths(artifacts):
@@ -2813,7 +2989,7 @@ def _insert_artifacts(
             (
                 artifact_id,
                 artifact_type,
-                _relative_artifact_path(path, outdir),
+                _relative_artifact_path(path, outdir, writer=writer),
                 artifact_id.replace("_", " ").title(),
                 "single_run_artifacts",
                 generated_utc,
@@ -3034,11 +3210,31 @@ def _iter_artifact_paths(artifacts: dict[str, Any], prefix: str = ""):
             yield prefix or "artifact", path_key.replace(".", ":"), Path(value)
 
 
-def _relative_artifact_path(path: Path, outdir: Path) -> str:
-    try:
-        return path.resolve().relative_to(outdir.resolve()).as_posix()
-    except Exception:
-        return str(path)
+def _relative_artifact_path(path: Path, outdir: Path, *, writer: Any | None = None) -> str:
+    if writer is not None:
+        # A protected run may have its visible logical root renamed and
+        # replaced after the writer opened its retained descriptor.  Resolve
+        # artifact identity through the writer's lexical logical/physical
+        # namespaces; never follow the replaced visible path here.
+        candidate = _lexical_artifact_path(path, outdir=outdir)
+        for root in (Path(writer.logical_root), Path(writer.root)):
+            root = _lexical_artifact_path(root, outdir=outdir)
+            try:
+                return candidate.relative_to(root).as_posix()
+            except ValueError:
+                continue
+        raise ValueError(f"Review artifact path must remain inside the protected output directory: {path}")
+    output_root_lexical = _canonicalize_platform_compatibility_root(
+        Path(os.path.abspath(os.fspath(Path(outdir).expanduser())))
+    )
+    _reject_artifact_symlink_components(output_root_lexical)
+    candidate = _lexical_artifact_path(path, outdir=outdir)
+    _reject_artifact_symlink_components(candidate)
+    resolved = candidate.resolve()
+    output_root = output_root_lexical.resolve()
+    if not _is_relative_to(resolved, output_root):
+        raise ValueError(f"Review artifact path must remain inside the output directory: {path}")
+    return resolved.relative_to(output_root).as_posix()
 
 
 def _as_2d_float(value: Any) -> np.ndarray:

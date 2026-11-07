@@ -1,0 +1,381 @@
+# Requires the optional public Rust OGP source build; see docs/ogp-parallelism.md.
+schema_version: oel.scenario.v1
+scenario_name: public_ogp_parallel
+scenario_description: One synthetic mixed LEO/GEO OGP scenario with bounded native
+  object-row threads. Educational propagation fixture, not an operational catalog.
+metadata:
+  owner: public
+  public_surface: public-example
+  support_level: supported
+objects:
+  catalog_01:
+    kind: satellite
+    runtime_profile: trajectory_only
+    propagation_method: general
+    general:
+      model: sgp4
+      numeric_backend: rust
+      output_frame: eci
+      frame_transform: teme_to_eci_iau80
+    specs:
+      mass_kg: 1000.0
+    initial_state:
+      ogp_mean_elements:
+        epoch_jd_utc: 2460310.5
+        mean_motion_rev_per_day: 15.5
+        eccentricity: 0.0001
+        inclination_deg: 51.0
+        raan_deg: 80.0
+        argp_deg: 10.0
+        mean_anomaly_deg: 0.0
+        bstar: 0.0
+  catalog_02:
+    kind: satellite
+    runtime_profile: trajectory_only
+    propagation_method: general
+    general:
+      model: sgp4
+      numeric_backend: rust
+      output_frame: eci
+      frame_transform: teme_to_eci_iau80
+    specs:
+      mass_kg: 1000.0
+    initial_state:
+      ogp_mean_elements:
+        epoch_jd_utc: 2460310.5
+        mean_motion_rev_per_day: 1.0027
+        eccentricity: 0.0001
+        inclination_deg: 0.05
+        raan_deg: 80.0
+        argp_deg: 10.0
+        mean_anomaly_deg: 22.5
+        bstar: 0.0
+  catalog_03:
+    kind: satellite
+    runtime_profile: trajectory_only
+    propagation_method: general
+    general:
+      model: sgp4
+      numeric_backend: rust
+      output_frame: eci
+      frame_transform: teme_to_eci_iau80
+    specs:
+      mass_kg: 1000.0
+    initial_state:
+      ogp_mean_elements:
+        epoch_jd_utc: 2460310.5
+        mean_motion_rev_per_day: 15.5
+        eccentricity: 0.0001
+        inclination_deg: 51.0
+        raan_deg: 80.0
+        argp_deg: 10.0
+        mean_anomaly_deg: 45.0
+        bstar: 0.0
+  catalog_04:
+    kind: satellite
+    runtime_profile: trajectory_only
+    propagation_method: general
+    general:
+      model: sgp4
+      numeric_backend: rust
+      output_frame: eci
+      frame_transform: teme_to_eci_iau80
+    specs:
+      mass_kg: 1000.0
+    initial_state:
+      ogp_mean_elements:
+        epoch_jd_utc: 2460310.5
+        mean_motion_rev_per_day: 1.0027
+        eccentricity: 0.0001
+        inclination_deg: 0.05
+        raan_deg: 80.0
+        argp_deg: 10.0
+        mean_anomaly_deg: 67.5
+        bstar: 0.0
+  catalog_05:
+    kind: satellite
+    runtime_profile: trajectory_only
+    propagation_method: general
+    general:
+      model: sgp4
+      numeric_backend: rust
+      output_frame: eci
+      frame_transform: teme_to_eci_iau80
+    specs:
+      mass_kg: 1000.0
+    initial_state:
+      ogp_mean_elements:
+        epoch_jd_utc: 2460310.5
+        mean_motion_rev_per_day: 15.5
+        eccentricity: 0.0001
+        inclination_deg: 51.0
+        raan_deg: 80.0
+        argp_deg: 10.0
+        mean_anomaly_deg: 90.0
+        bstar: 0.0
+  catalog_06:
+    kind: satellite
+    runtime_profile: trajectory_only
+    propagation_method: general
+    general:
+      model: sgp4
+      numeric_backend: rust
+      output_frame: eci
+      frame_transform: teme_to_eci_iau80
+    specs:
+      mass_kg: 1000.0
+    initial_state:
+      ogp_mean_elements:
+        epoch_jd_utc: 2460310.5
+        mean_motion_rev_per_day: 1.0027
+        eccentricity: 0.0001
+        inclination_deg: 0.05
+        raan_deg: 80.0
+        argp_deg: 10.0
+        mean_anomaly_deg: 112.5
+        bstar: 0.0
+  catalog_07:
+    kind: satellite
+    runtime_profile: trajectory_only
+    propagation_method: general
+    general:
+      model: sgp4
+      numeric_backend: rust
+      output_frame: eci
+      frame_transform: teme_to_eci_iau80
+    specs:
+      mass_kg: 1000.0
+    initial_state:
+      ogp_mean_elements:
+        epoch_jd_utc: 2460310.5
+        mean_motion_rev_per_day: 15.5
+        eccentricity: 0.0001
+        inclination_deg: 51.0
+        raan_deg: 80.0
+        argp_deg: 10.0
+        mean_anomaly_deg: 135.0
+        bstar: 0.0
+  catalog_08:
+    kind: satellite
+    runtime_profile: trajectory_only
+    propagation_method: general
+    general:
+      model: sgp4
+      numeric_backend: rust
+      output_frame: eci
+      frame_transform: teme_to_eci_iau80
+    specs:
+      mass_kg: 1000.0
+    initial_state:
+      ogp_mean_elements:
+        epoch_jd_utc: 2460310.5
+        mean_motion_rev_per_day: 1.0027
+        eccentricity: 0.0001
+        inclination_deg: 0.05
+        raan_deg: 80.0
+        argp_deg: 10.0
+        mean_anomaly_deg: 157.5
+        bstar: 0.0
+  catalog_09:
+    kind: satellite
+    runtime_profile: trajectory_only
+    propagation_method: general
+    general:
+      model: sgp4
+      numeric_backend: rust
+      output_frame: eci
+      frame_transform: teme_to_eci_iau80
+    specs:
+      mass_kg: 1000.0
+    initial_state:
+      ogp_mean_elements:
+        epoch_jd_utc: 2460310.5
+        mean_motion_rev_per_day: 15.5
+        eccentricity: 0.0001
+        inclination_deg: 51.0
+        raan_deg: 80.0
+        argp_deg: 10.0
+        mean_anomaly_deg: 180.0
+        bstar: 0.0
+  catalog_10:
+    kind: satellite
+    runtime_profile: trajectory_only
+    propagation_method: general
+    general:
+      model: sgp4
+      numeric_backend: rust
+      output_frame: eci
+      frame_transform: teme_to_eci_iau80
+    specs:
+      mass_kg: 1000.0
+    initial_state:
+      ogp_mean_elements:
+        epoch_jd_utc: 2460310.5
+        mean_motion_rev_per_day: 1.0027
+        eccentricity: 0.0001
+        inclination_deg: 0.05
+        raan_deg: 80.0
+        argp_deg: 10.0
+        mean_anomaly_deg: 202.5
+        bstar: 0.0
+  catalog_11:
+    kind: satellite
+    runtime_profile: trajectory_only
+    propagation_method: general
+    general:
+      model: sgp4
+      numeric_backend: rust
+      output_frame: eci
+      frame_transform: teme_to_eci_iau80
+    specs:
+      mass_kg: 1000.0
+    initial_state:
+      ogp_mean_elements:
+        epoch_jd_utc: 2460310.5
+        mean_motion_rev_per_day: 15.5
+        eccentricity: 0.0001
+        inclination_deg: 51.0
+        raan_deg: 80.0
+        argp_deg: 10.0
+        mean_anomaly_deg: 225.0
+        bstar: 0.0
+  catalog_12:
+    kind: satellite
+    runtime_profile: trajectory_only
+    propagation_method: general
+    general:
+      model: sgp4
+      numeric_backend: rust
+      output_frame: eci
+      frame_transform: teme_to_eci_iau80
+    specs:
+      mass_kg: 1000.0
+    initial_state:
+      ogp_mean_elements:
+        epoch_jd_utc: 2460310.5
+        mean_motion_rev_per_day: 1.0027
+        eccentricity: 0.0001
+        inclination_deg: 0.05
+        raan_deg: 80.0
+        argp_deg: 10.0
+        mean_anomaly_deg: 247.5
+        bstar: 0.0
+  catalog_13:
+    kind: satellite
+    runtime_profile: trajectory_only
+    propagation_method: general
+    general:
+      model: sgp4
+      numeric_backend: rust
+      output_frame: eci
+      frame_transform: teme_to_eci_iau80
+    specs:
+      mass_kg: 1000.0
+    initial_state:
+      ogp_mean_elements:
+        epoch_jd_utc: 2460310.5
+        mean_motion_rev_per_day: 15.5
+        eccentricity: 0.0001
+        inclination_deg: 51.0
+        raan_deg: 80.0
+        argp_deg: 10.0
+        mean_anomaly_deg: 270.0
+        bstar: 0.0
+  catalog_14:
+    kind: satellite
+    runtime_profile: trajectory_only
+    propagation_method: general
+    general:
+      model: sgp4
+      numeric_backend: rust
+      output_frame: eci
+      frame_transform: teme_to_eci_iau80
+    specs:
+      mass_kg: 1000.0
+    initial_state:
+      ogp_mean_elements:
+        epoch_jd_utc: 2460310.5
+        mean_motion_rev_per_day: 1.0027
+        eccentricity: 0.0001
+        inclination_deg: 0.05
+        raan_deg: 80.0
+        argp_deg: 10.0
+        mean_anomaly_deg: 292.5
+        bstar: 0.0
+  catalog_15:
+    kind: satellite
+    runtime_profile: trajectory_only
+    propagation_method: general
+    general:
+      model: sgp4
+      numeric_backend: rust
+      output_frame: eci
+      frame_transform: teme_to_eci_iau80
+    specs:
+      mass_kg: 1000.0
+    initial_state:
+      ogp_mean_elements:
+        epoch_jd_utc: 2460310.5
+        mean_motion_rev_per_day: 15.5
+        eccentricity: 0.0001
+        inclination_deg: 51.0
+        raan_deg: 80.0
+        argp_deg: 10.0
+        mean_anomaly_deg: 315.0
+        bstar: 0.0
+  catalog_16:
+    kind: satellite
+    runtime_profile: trajectory_only
+    propagation_method: general
+    general:
+      model: sgp4
+      numeric_backend: rust
+      output_frame: eci
+      frame_transform: teme_to_eci_iau80
+    specs:
+      mass_kg: 1000.0
+    initial_state:
+      ogp_mean_elements:
+        epoch_jd_utc: 2460310.5
+        mean_motion_rev_per_day: 1.0027
+        eccentricity: 0.0001
+        inclination_deg: 0.05
+        raan_deg: 80.0
+        argp_deg: 10.0
+        mean_anomaly_deg: 337.5
+        bstar: 0.0
+simulator:
+  initial_jd_utc: 2460310.5
+  duration_s: 15360.0
+  dt_s: 60.0
+  resource_profile: standard
+  execution:
+    ogp_parallelism:
+      enabled: true
+      workers: 2
+  dynamics:
+    orbit:
+      model: two_body
+      numeric_backend: python
+    attitude:
+      enabled: false
+      numeric_backend: python
+    rocket:
+      numeric_backend: python
+    reentry:
+      numeric_backend: python
+  termination:
+    earth_impact_enabled: false
+outputs:
+  output_dir: outputs/public_ogp_parallel
+  plots:
+    enabled: false
+  animations:
+    enabled: false
+  stats:
+    print_summary: false
+    save_json: true
+    save_full_log: false
+  review:
+    enabled: true
+    detail: standard

@@ -33,6 +33,8 @@ GUIDANCE = {
     "scenario.policy_blocked": ("agent", "Review the reported settings against MCP policy and required evidence; edit and revalidate only if study intent is preserved."),
     "validation.stale": ("agent", "Validate the exact config, output and resource profile again; use its new validation ID with applicable approvals."),
     "input.invalid": ("agent", "Inspect the input contract and reported validation issue, preserve material study choices, then validate again."),
+    "operation.conflict": ("operator", "Review the recorded operation identity and reconcile it before retrying; do not select a new authority."),
+    "operation.unknown_outcome": ("operator", "Inspect and reconcile the reserved operation before retrying; do not rerun it under a new authority."),
 }
 
 
@@ -56,3 +58,18 @@ def recovery_details(exc: Exception) -> dict[str, str] | None:
         return None
     actor, action = GUIDANCE[code]
     return {"code": code, "actor": actor, "action": action}
+
+
+def reconciliation_error_data(exc: Exception) -> dict[str, object] | None:
+    """Return stable, payload-free guidance for outcomes requiring reconciliation."""
+
+    if not getattr(exc, "oel_reconciliation_required", False):
+        return None
+    data: dict[str, object] = {
+        "reconciliation_required": True,
+        "retryable": False,
+    }
+    recovery = recovery_details(exc)
+    if recovery is not None:
+        data["recovery"] = recovery
+    return data

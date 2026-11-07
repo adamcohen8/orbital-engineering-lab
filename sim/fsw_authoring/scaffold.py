@@ -30,7 +30,7 @@ def _slug(value: str) -> str:
     raw = raw or "custom_fsw"
     if raw[0].isdigit():
         raw = f"stack_{raw}"
-    return f"{raw}_stack" if keyword.iskeyword(raw) else raw
+    return f"{raw}_stack" if keyword.iskeyword(raw) or len(raw) < 2 else raw
 
 
 def _class_name(value: str) -> str:
@@ -38,14 +38,32 @@ def _class_name(value: str) -> str:
     return name if name.endswith("FlightSoftwareStack") else f"{name}FlightSoftwareStack"
 
 
-def _write_new(path: Path, content: str, *, force: bool) -> bool:
+def _write_new(
+    path: Path,
+    content: str,
+    *,
+    force: bool,
+    writer: Any | None = None,
+    logical_root: Path | None = None,
+) -> bool:
+    if path.is_symlink():
+        raise PermissionError(f"Refusing to write through symbolic link: {path}")
     if path.exists():
         if path.read_text(encoding="utf-8") == content:
             return False
         if not force:
             raise FileExistsError(f"Refusing to overwrite existing FSW authoring file: {path}")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
+    if writer is None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    else:
+        root = logical_root or path.parent
+        relative = path.relative_to(root)
+        payload = content.encode("utf-8")
+        if path.exists() and force:
+            writer.update_existing_bytes(relative, payload)
+        else:
+            writer.write_bytes(relative, payload, parents=True)
     return True
 
 
@@ -68,6 +86,7 @@ def scaffold_candidate(
     output_dir: str | Path | None = None,
     class_name: str | None = None,
     force: bool = False,
+    writer: Any | None = None,
 ) -> CandidateScaffoldResult:
     root = Path(workspace_root).expanduser().resolve()
     candidate_id = _slug(name)
@@ -79,6 +98,10 @@ def scaffold_candidate(
         destination.relative_to(root)
     except ValueError as exc:
         raise ValueError("Candidate output must remain inside the authorized workspace.") from exc
+    if writer is not None and Path(
+        getattr(writer, "logical_root", writer.path)
+    ).expanduser().resolve() != destination:
+        raise PermissionError("FSW scaffold writer must be bound to the logical candidate output directory.")
     if template not in {"adcs", "rpo"}:
         raise ValueError("Public FSW template must be one of: adcs, rpo")
     module_parts = _module_root(destination, root)
@@ -138,9 +161,17 @@ def scaffold_candidate(
             raise ValueError("Candidate output must remain inside the authorized workspace.") from exc
     written: list[Path] = []
     for path, content in files.items():
-        if _write_new(path, content, force=force):
+        if _write_new(path, content, force=force, writer=writer, logical_root=destination):
             written.append(path)
-    candidate = inspect_candidate(manifest_path, workspace_root=root)
+    if writer is None or Path(writer.path).expanduser().resolve() == destination:
+        inspection_manifest = manifest_path
+        inspection_root = root
+    else:
+        writer_root = Path(writer.path).expanduser().resolve()
+        logical_root = Path(getattr(writer, "logical_root", destination)).expanduser().resolve()
+        inspection_manifest = writer_root / manifest_path.relative_to(logical_root)
+        inspection_root = writer_root
+    candidate = inspect_candidate(inspection_manifest, workspace_root=inspection_root)
     return CandidateScaffoldResult(destination, manifest_path, tuple(sorted(written)), candidate)
 
 

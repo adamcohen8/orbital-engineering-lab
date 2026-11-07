@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from dataclasses import replace
 from pathlib import Path
 
 import erfa
@@ -110,6 +111,39 @@ def test_tdm_writer_validates_before_preserving_or_atomically_replacing_target(t
     write_tdm_kvn(message, target)
     assert compare_tdm(message, target)["equivalent"] is True
     assert not list(tmp_path.glob(".output.tdm.*.tmp"))
+
+
+@pytest.mark.parametrize("value", [float("nan"), "not-a-number"])
+def test_tdm_validation_rejects_nonfinite_or_nonnumeric_programmatic_records(value: object) -> None:
+    message = read_tdm_kvn(TDM)
+    first = message.segments[0].observations[0]
+    invalid = replace(
+        message,
+        segments=(
+            replace(
+                message.segments[0],
+                observations=(replace(first, value=value),) + message.segments[0].observations[1:],
+            ),
+        ),
+    )
+    with pytest.raises(CcsdsTdmError, match="finite numeric"):
+        serialize_tdm_kvn(invalid)
+
+
+def test_tdm_validation_rejects_unsupported_programmatic_record_keywords() -> None:
+    message = read_tdm_kvn(TDM)
+    first = message.segments[0].observations[0]
+    invalid = replace(
+        message,
+        segments=(
+            replace(
+                message.segments[0],
+                observations=(replace(first, keyword="UNSUPPORTED"),) + message.segments[0].observations[1:],
+            ),
+        ),
+    )
+    with pytest.raises(CcsdsTdmError, match="unsupported tracking-data keyword"):
+        serialize_tdm_kvn(invalid)
 
 
 def test_tdm_rejects_correction_metadata_bad_digest_and_invalid_record_order() -> None:

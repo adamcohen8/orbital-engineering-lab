@@ -72,8 +72,8 @@ def _configured_input_paths(config_dict: dict[str, Any]) -> dict[str, str]:
     return inputs
 
 
-@lru_cache(maxsize=256)
 def _file_sha256(path: str, size: int, mtime_ns: int, ctime_ns: int, inode: int) -> str:
+    # Checkpoints bind bytes, even when two writes share coarse filesystem metadata.
     digest = hashlib.sha256()
     with Path(path).open("rb") as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):

@@ -45,6 +45,18 @@ class _ZeroAttitudeController:
         return Command.zero()
 
 
+class _RecordingAttitudeController(_ZeroAttitudeController):
+    def __init__(self):
+        super().__init__()
+        self.belief_state = None
+        self.belief_covariance = None
+
+    def act(self, belief: StateBelief, t_s: float, budget_ms: float) -> Command:
+        self.belief_state = np.array(belief.state, dtype=float)
+        self.belief_covariance = np.array(belief.covariance, dtype=float)
+        return Command(torque_body_nm=np.array([0.25, 0.0, 0.0], dtype=float))
+
+
 class MissionArchitectureMigrationTests(unittest.TestCase):
     def test_desired_state_strategy_emits_explicit_state_intent(self) -> None:
         s = DesiredStateMissionStrategy(
@@ -165,6 +177,30 @@ class MissionArchitectureMigrationTests(unittest.TestCase):
             env={"attitude_disabled": True},
         )
         self.assertGreater(float(np.linalg.norm(np.array(out["thrust_eci_km_s2"], dtype=float))), 0.0)
+
+    def test_predictive_burn_fallback_attitude_belief_uses_canonical_state(self) -> None:
+        execution = PredictiveBurnExecution(lead_time_s=0.0, alignment_tolerance_deg=180.0)
+        attitude = _RecordingAttitudeController()
+        truth = _truth()
+        execution.update(
+            intent={"desired_state_eci_6": np.array([7100.0, 0.0, 0.0, 0.0, 7.4, 0.0])},
+            truth=truth,
+            own_knowledge={},
+            orbit_controller=_ConstantOrbitController([2.0e-5, 0.0, 0.0]),
+            attitude_controller=attitude,
+            att_belief=None,
+            t_s=0.0,
+            dt_s=1.0,
+            env={"attitude_disabled": False},
+        )
+
+        self.assertIsNotNone(attitude.belief_state)
+        self.assertIsNotNone(attitude.belief_covariance)
+        self.assertEqual(attitude.belief_state.shape, (13,))
+        self.assertEqual(attitude.belief_covariance.shape, (13, 13))
+        self.assertTrue(np.allclose(attitude.belief_state[:6], np.hstack((truth.position_eci_km, truth.velocity_eci_km_s))))
+        self.assertTrue(np.allclose(attitude.belief_state[6:10], truth.attitude_quat_bn))
+        self.assertTrue(np.allclose(attitude.belief_state[10:13], truth.angular_rate_body_rad_s))
 
     def test_predictive_burn_respects_positive_lead_time_at_step_boundary(self) -> None:
         execution = PredictiveBurnExecution(lead_time_s=1.0, alignment_tolerance_deg=180.0)

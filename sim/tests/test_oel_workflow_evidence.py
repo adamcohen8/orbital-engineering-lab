@@ -69,3 +69,40 @@ def test_workflow_evidence_rederives_artifact_integrity_and_rejects_tampering(tm
 
     with pytest.raises(ValueError, match="integrity mismatch"):
         load_workflow_evidence(path)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("required", "false"), ("required", 0), ("exists", "false"), ("exists", 1)],
+)
+def test_workflow_evidence_requires_boolean_artifact_flags(
+    tmp_path: Path, field: str, value: object,
+) -> None:
+    present = tmp_path / "present.json"
+    missing = tmp_path / "missing.json"
+    present.write_text("{}\n", encoding="utf-8")
+    payload = build_workflow_evidence(
+        workflow_id="typed_flags",
+        status="completed",
+        disposition="ready",
+        artifacts=[
+            artifact_reference(
+                present, artifact_id="present", media_type="application/json", required=False,
+            ),
+            artifact_reference(
+                missing, artifact_id="missing", media_type="application/json", required=False,
+            ),
+        ],
+    )
+    path = write_workflow_evidence(tmp_path / "evidence.json", payload)
+    loaded = load_workflow_evidence(path)
+    assert loaded["artifacts"][0]["required"] is False
+    assert loaded["artifacts"][0]["exists"] is True
+    assert loaded["artifacts"][1]["required"] is False
+    assert loaded["artifacts"][1]["exists"] is False
+
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw["artifacts"][0][field] = value
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(ValueError, match="must be booleans"):
+        load_workflow_evidence(path)

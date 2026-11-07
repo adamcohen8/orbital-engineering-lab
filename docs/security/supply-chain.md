@@ -7,7 +7,7 @@ security, legal, export-control, or mission-assurance process.
 ## Supported Versions
 
 - Public releases: security fixes target the current public release line,
-  `v0.35.0` once published. During release preparation, `v0.34.0` remains
+  `v0.36.0` once published. During release preparation, `v0.35.0` remains
   the published support target.
 - Private/Pro releases: security fixes target the active customer-supported
   release line or pilot branch named in the agreement.
@@ -224,3 +224,8 @@ The SBOM and audit evidence do not make OEL flight-qualified, FedRAMP
 authorized, export-control classified, or approved for classified/CUI handling.
 They are review artifacts that help an evaluator decide what additional
 controls are required for their environment.
+
+The v0.36.0 dependency baseline requires setuptools 84.1.0 and, on Python
+3.11+, filelock 4.2.1. Python 3.10 retains legacy functional compatibility
+without dependency security qualification. Each release still requires a fresh
+unsuppressed audit of its exact resolved wheel inventory.

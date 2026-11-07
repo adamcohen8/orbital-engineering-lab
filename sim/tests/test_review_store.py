@@ -510,6 +510,61 @@ def test_single_run_review_store_writes_all_configured_relative_pairs(tmp_path: 
     ]
 
 
+def test_saved_final_queries_bound_each_object_and_relative_pair() -> None:
+    with sqlite3.connect(":memory:") as conn:
+        conn.executescript(
+            """
+            CREATE TABLE object_state (
+                sample_index INTEGER, time_s REAL, object_id TEXT,
+                pos_x_eci_km REAL, pos_y_eci_km REAL, pos_z_eci_km REAL,
+                vel_x_eci_km_s REAL, vel_y_eci_km_s REAL, vel_z_eci_km_s REAL
+            );
+            CREATE TABLE object_orbital_elements (
+                sample_index INTEGER, time_s REAL, object_id TEXT,
+                radius_km REAL, speed_km_s REAL
+            );
+            CREATE TABLE relative_state (
+                sample_index INTEGER, time_s REAL, deputy_id TEXT, chief_id TEXT,
+                r_radial_km REAL, i_intrack_km REAL, c_crosstrack_km REAL,
+                range_km REAL, range_rate_km_s REAL
+            );
+            """
+        )
+        conn.executemany(
+            "INSERT INTO object_state VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                (0, 0.0, "a", 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+                (2, 2.0, "a", 2.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+                (0, 0.0, "b", 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+                (1, 1.0, "b", 1.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+            ],
+        )
+        conn.executemany(
+            "INSERT INTO object_orbital_elements VALUES (?, ?, ?, ?, ?)",
+            [(2, 2.0, "a", 2.0, 2.0), (1, 1.0, "b", 1.0, 1.0)],
+        )
+        conn.executemany(
+            "INSERT INTO relative_state VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                (0, 0.0, "a", "chief", 0.0, 0.0, 0.0, 4.0, 0.0),
+                (2, 2.0, "a", "chief", 2.0, 0.0, 0.0, 2.0, 0.0),
+                (0, 0.0, "b", "chief", 0.0, 0.0, 0.0, 5.0, 0.0),
+                (1, 1.0, "b", "chief", 1.0, 0.0, 0.0, 1.0, 0.0),
+            ],
+        )
+
+        passive_rows = conn.execute(SAVED_REVIEW_QUERIES["passive_final_state"].sql).fetchall()
+        object_rows = conn.execute(SAVED_REVIEW_QUERIES["object_final_state"].sql).fetchall()
+        relative_rows = conn.execute(SAVED_REVIEW_QUERIES["relative_final_state"].sql).fetchall()
+
+    assert [(row[0], row[1]) for row in passive_rows] == [("a", 2.0), ("b", 1.0)]
+    assert [(row[0], row[1], row[8]) for row in object_rows] == [("a", 2.0, 2.0), ("b", 1.0, 1.0)]
+    assert [(row[1], row[0], row[6]) for row in relative_rows] == [
+        ("a", 2.0, 2.0),
+        ("b", 1.0, 1.0),
+    ]
+
+
 def test_saved_review_queries_have_machine_readable_contract() -> None:
     assert SAVED_REVIEW_QUERIES
     for key, query in SAVED_REVIEW_QUERIES.items():
@@ -1114,6 +1169,7 @@ def test_evidence_plotter_histogram_heatmap_and_helpful_errors(tmp_path: Path) -
                 ("A", "late", 2.0, "two"),
                 ("B", "early", 3.0, "three"),
                 ("B", "late", 4.0, "four"),
+                ("C", "invalid", float("inf"), "infinite"),
             ],
         )
 
@@ -1289,7 +1345,10 @@ def test_review_plot_cli_dry_run_and_creates_artifact(tmp_path: Path) -> None:
     assert row["extra"]["recipe_id"] == "relative_range"
 
 
-def test_workflow_review_manifest_writes_queryable_tables_and_cli_summary(tmp_path: Path) -> None:
+def test_workflow_review_manifest_writes_queryable_tables_and_cli_summary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("OEL_GENERATED_UTC", raising=False)
     (tmp_path / "controller_bench_summary.json").write_text("{}\n", encoding="utf-8")
     outputs = write_workflow_review(
         output_dir=tmp_path,
@@ -1318,7 +1377,9 @@ def test_workflow_review_manifest_writes_queryable_tables_and_cli_summary(tmp_pa
 
     assert Path(outputs["workflow_manifest_json"]).is_file()
     assert Path(outputs["sqlite"]).is_file()
-    assert load_workflow_manifest(tmp_path)["workflow_type"] == "controller_bench"
+    manifest = load_workflow_manifest(tmp_path)
+    assert manifest["workflow_type"] == "controller_bench"
+    assert manifest["generated_utc"] == ""
 
     workspace = ReviewWorkspace.open(tmp_path)
     assert "bench_runs" in workspace.tables()
@@ -1551,3 +1612,23 @@ def test_case_distinct_aliases_preserve_their_own_values(column_integrity_worksp
 def test_duplicate_names_require_explicit_unique_aliases(column_integrity_workspace, where):
     with pytest.raises(ReviewQueryError, match="unique.*aliases"):
         column_integrity_workspace.query("SELECT a.value, b.value FROM evidence a JOIN evidence b" + where)
+
+
+def test_review_line_keeps_gaps_for_nonfinite_measurements_and_abscissas() -> None:
+    from matplotlib import pyplot as plt
+    from matplotlib.path import Path as FigurePath
+
+    figure, axis = plt.subplots()
+    try:
+        review_plotting_module._draw_series(
+            axis,
+            [{"t": 0.0, "y": 0.0}, {"t": 1.0, "y": float("inf")},
+             {"t": 2.0, "y": 2.0}, {"t": 3.0, "y": 3.0},
+             {"t": float("inf"), "y": 4.0}, {"t": 5.0, "y": 5.0}],
+            "t", "y", "line",
+        )
+        codes = [code for _, code in axis.lines[0].get_path().iter_segments()]
+        assert codes.count(FigurePath.MOVETO) == 3
+        assert codes.count(FigurePath.LINETO) == 1
+    finally:
+        plt.close(figure)

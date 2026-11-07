@@ -8,6 +8,7 @@ from sim.core.interfaces import Estimator
 from sim.core.models import Measurement, StateBelief
 from sim.dynamics.orbit.elements import rv_to_coe_eci
 from sim.dynamics.orbit.environment import EARTH_MU_KM3_S2
+from sim.estimation.covariance import validate_covariance
 from sim.estimation.innovation_recovery import (
     FullStateInnovationRecovery,
     InnovationRecoveryConfig,
@@ -119,8 +120,12 @@ class THRelativeEKFEstimator(Estimator):
     def set_reference_state(self, chief_state_eci_km_s: np.ndarray, t_s: float) -> None:
         """Reset the chief reference used for the next prediction interval."""
 
-        self.chief_state_eci_km_s = _state6(chief_state_eci_km_s, "chief_state_eci_km_s")
-        self.chief_epoch_t_s = float(t_s)
+        reference_epoch = float(t_s)
+        if not np.isfinite(reference_epoch):
+            raise ValueError("reference epoch must be finite.")
+        reference_state = _state6(chief_state_eci_km_s, "chief_state_eci_km_s")
+        self.chief_state_eci_km_s = reference_state
+        self.chief_epoch_t_s = reference_epoch
 
     def reset_innovation_recovery(self) -> None:
         """Discard pending anomaly history after an external track/reference reset."""
@@ -134,8 +139,14 @@ class THRelativeEKFEstimator(Estimator):
 
     def _update_standard(self, belief: StateBelief, measurement: Measurement | None, t_s: float) -> StateBelief:
         output_t_s, meas_t_s = _validated_update_epochs(belief, measurement, t_s)
+        belief_covariance = validate_covariance(belief.covariance, 6, name="belief covariance")
 
-        x_pred, p_pred = self._predict(belief.state, belief.covariance, from_t_s=belief.last_update_t_s, to_t_s=meas_t_s)
+        x_pred, p_pred = self._predict(
+            belief.state,
+            belief_covariance,
+            from_t_s=belief.last_update_t_s,
+            to_t_s=meas_t_s,
+        )
 
         if measurement is None:
             if meas_t_s < output_t_s:

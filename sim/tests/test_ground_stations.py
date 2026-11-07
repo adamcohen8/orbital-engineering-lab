@@ -119,6 +119,34 @@ def test_ground_station_yaml_rejects_unsupported_fields(tmp_path: Path) -> None:
         scenario_config_from_dict(cfg)
 
 
+def test_ground_station_history_rejects_nonmonotonic_times_and_bad_shapes() -> None:
+    station = GroundStationSection(id="equator_prime", lat_deg=0.0, lon_deg=0.0)
+    with pytest.raises(ValueError, match="strictly increasing"):
+        evaluate_ground_station_access(
+            ground_stations=[station],
+            t_s=np.array([0.0, 1.0, 0.5]),
+            truth_hist={"sat": np.zeros((3, 6))},
+        )
+    with pytest.raises(ValueError, match="shape"):
+        evaluate_ground_station_access(
+            ground_stations=[station],
+            t_s=np.array([0.0]),
+            truth_hist={"sat": np.zeros(6)},
+        )
+    measured_station = GroundStationSection(
+        id="measured",
+        lat_deg=0.0,
+        lon_deg=0.0,
+        measurements={"enabled": True},
+    )
+    with pytest.raises(ValueError, match="shape"):
+        evaluate_ground_station_measurements(
+            ground_stations=[measured_station],
+            t_s=np.array([0.0]),
+            truth_hist={"sat": np.zeros((1, 3))},
+        )
+
+
 def test_ground_station_access_geometry_applies_los_elevation_and_range() -> None:
     station = GroundStationSection(
         id="equator_prime",

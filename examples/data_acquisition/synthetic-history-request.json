@@ -1,0 +1,12 @@
+{
+  "schema": "oel.data-acquisition.v1",
+  "provider": "spacetrack",
+  "product": "gp_history",
+  "connection": "personal",
+  "object_ids": [
+    123456789
+  ],
+  "start": "2024-01-10T00:00:00Z",
+  "stop": "2024-01-12T00:00:00Z",
+  "published_before": "2024-01-12T00:00:00Z"
+}

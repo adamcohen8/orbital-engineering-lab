@@ -15,6 +15,7 @@ from sim.dynamics.orbit.environment import (
     EARTH_ROT_RATE_RAD_S,
     srp_pressure_n_m2,
 )
+from sim.utils.vector_math import dot3
 
 _ATMOSPHERE_RELATIVE_VELOCITY_ECI_KM_S = None
 _ATMOSPHERE_RELATIVE_VELOCITY_LOCK = RLock()
@@ -44,7 +45,7 @@ class OrbitContext:
 
 
 def accel_two_body(r_eci_km: np.ndarray, mu_km3_s2: float) -> np.ndarray:
-    r2 = float(np.dot(r_eci_km, r_eci_km))
+    r2 = dot3(r_eci_km, r_eci_km)
     if r2 == 0.0:
         return np.zeros(3)
     r = float(np.sqrt(r2))
@@ -55,12 +56,13 @@ def accel_j2(
     r_eci_km: np.ndarray, mu_km3_s2: float, j2: float = EARTH_J2, re_km: float = EARTH_RADIUS_KM
 ) -> np.ndarray:
     x, y, z = r_eci_km
-    r2 = float(np.dot(r_eci_km, r_eci_km))
-    r = np.sqrt(r2)
+    r2 = dot3(r_eci_km, r_eci_km)
+    r = float(np.sqrt(r2))
     if r == 0.0:
         return np.zeros(3)
     z2 = z * z
-    f = 1.5 * j2 * mu_km3_s2 * (re_km**2) / (r**5)
+    square = r * r
+    f = 1.5 * j2 * mu_km3_s2 * (re_km**2) / (square * square * r)
     g = 5.0 * z2 / r2
     return np.array(
         [
@@ -223,7 +225,7 @@ def accel_drag_resolved(
         eop_extrapolation=eop_extrapolation,
     )
     v_rel_m_s = v_rel_eci_km_s * 1e3
-    v_norm2 = float(np.dot(v_rel_m_s, v_rel_m_s))
+    v_norm2 = dot3(v_rel_m_s, v_rel_m_s)
     if v_norm2 == 0.0:
         return np.zeros(3)
     v_norm = float(np.sqrt(v_norm2))

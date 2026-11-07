@@ -24,6 +24,7 @@ from sim.numeric_backend import normalize_numeric_backend
 from sim.sensors.access import AccessConfig, AccessModel
 from sim.utils.frames import eci_relative_to_ric_rect, ric_rect_state_to_eci
 from sim.utils.quaternion import quaternion_to_dcm_bn
+from sim.utils.vector_math import dot3, norm3
 
 KnowledgeSummaryValue = Any
 
@@ -61,6 +62,8 @@ class KnowledgeConditionConfig:
     sensor_boresight_body: np.ndarray | None = None
 
     def __post_init__(self) -> None:
+        if type(self.require_line_of_sight) is not bool:
+            raise ValueError("require_line_of_sight must be a boolean.")
         if not np.isfinite(float(self.refresh_rate_s)) or float(self.refresh_rate_s) <= 0.0:
             raise ValueError("refresh_rate_s must be positive and finite.")
         if not np.isfinite(float(self.dropout_prob)) or not 0.0 <= float(self.dropout_prob) <= 1.0:
@@ -69,6 +72,10 @@ class KnowledgeConditionConfig:
             not np.isfinite(float(self.max_range_km)) or float(self.max_range_km) <= 0.0
         ):
             raise ValueError("max_range_km must be positive and finite when provided.")
+        if self.fov_half_angle_rad is not None and self.solid_angle_sr is not None:
+            raise ValueError(
+                "fov_half_angle_rad and solid_angle_sr are mutually exclusive; configure exactly one."
+            )
         if self.fov_half_angle_rad is not None and (
             not np.isfinite(float(self.fov_half_angle_rad)) or not 0.0 <= float(self.fov_half_angle_rad) <= np.pi
         ):
@@ -91,12 +98,15 @@ class KnowledgeConditionConfig:
     def from_knowledge(cls, knowledge: dict, *, default_period_s: float) -> KnowledgeConditionConfig:
         """Resolve the same access settings for reporting and onboard sensors."""
         conditions = dict(knowledge.get("conditions", {}) or {})
+        require_line_of_sight = conditions.get("require_line_of_sight", False)
+        if type(require_line_of_sight) is not bool:
+            raise ValueError("require_line_of_sight must be a boolean.")
         return cls(
             refresh_rate_s=float(knowledge.get("refresh_rate_s", default_period_s)),
             max_range_km=conditions.get("max_range_km"),
             fov_half_angle_rad=conditions.get("fov_half_angle_rad"),
             solid_angle_sr=conditions.get("solid_angle_sr"),
-            require_line_of_sight=bool(conditions.get("require_line_of_sight", False)),
+            require_line_of_sight=require_line_of_sight,
             dropout_prob=float(conditions.get("dropout_prob", 0.0)),
             sensor_position_body_m=np.asarray(conditions.get("sensor_position_body_m", [0.0, 0.0, 0.0]), dtype=float),
             sensor_boresight_body=(
@@ -1092,13 +1102,13 @@ def _relative_measurement_vector(
     obs = np.asarray(observer_state, dtype=float).reshape(-1)
     rel_r = x[:3] - obs[:3]
     rel_v = x[3:6] - obs[3:6]
-    rng_km = float(np.linalg.norm(rel_r))
+    rng_km = norm3(rel_r)
     if rng_km <= 0.0:
         los = np.zeros(3)
         range_rate = 0.0
     else:
         los = rel_r / rng_km
-        range_rate = float(np.dot(rel_v, los))
+        range_rate = dot3(rel_v, los)
     az = float(np.arctan2(los[1], los[0])) if rng_km > 0.0 else 0.0
     el = float(np.arcsin(np.clip(los[2], -1.0, 1.0))) if rng_km > 0.0 else 0.0
     if model == "relative_range":

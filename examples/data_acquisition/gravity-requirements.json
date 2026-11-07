@@ -1,0 +1,7 @@
+{
+  "consumer": "earth-gravity",
+  "degree": 8,
+  "order": 8,
+  "normalization": "fully_normalized",
+  "tide_system": "tide_free"
+}

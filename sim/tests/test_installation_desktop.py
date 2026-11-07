@@ -104,7 +104,7 @@ def test_core_profile_does_not_create_trainer_icons(tmp_path, system, monkeypatc
     assert not (tmp_path / "Applications").exists()
 
 
-def test_windows_publication_embeds_icon_before_appending_dispatcher(tmp_path, monkeypatch):
+def test_windows_publication_embeds_icon_before_stable_launcher_payload(tmp_path, monkeypatch):
     import pip._vendor.distlib as distlib
     import pip._vendor.distlib.scripts as scripts
 
@@ -140,9 +140,22 @@ def test_windows_publication_embeds_icon_before_appending_dispatcher(tmp_path, m
     monkeypatch.setattr(windows_icon, "launcher_with_icon", embed)
     monkeypatch.setattr(subprocess, "run", run)
     executable = Path(publish_trainer(paths, home=tmp_path, system="win32")["path"])
-    assert executable.read_bytes().startswith(stock + b"ICON-BEFORE-ZIP")
+    payload = executable.read_bytes()
+    launcher_prefix = stock + b"ICON-BEFORE-ZIP"
+    assert payload.startswith(launcher_prefix)
+    # distlib puts the interpreter shebang between the native launcher and its
+    # zip payload.  Keep the GUI bootstrap isolated before it reaches the
+    # stable launcher, which performs the managed-tree authentication.
+    shebang = payload[len(launcher_prefix) :].splitlines()[0]
+    assert shebang.startswith(b"#!")
+    assert b"-I" in shebang.split(maxsplit=1)[-1]
+    assert b"-B" in shebang.split(maxsplit=1)[-1]
     with zipfile.ZipFile(executable) as archive:
-        assert b"state/current.json" in archive.read("__main__.py")
+        script = archive.read("__main__.py")
+    stable_launcher = paths.launcher / ("oel.cmd" if os.name == "nt" else "oel")
+    assert str(stable_launcher).encode() in script
+    assert b'subprocess.call([str(launcher), "trainer"]' in script
+    assert b"state/current.json" not in script
     icon = paths.launcher / "trainer-icon.ico"
     assert icon_calls == [icon]
     shortcut_command, shortcut_options = calls[-1]
@@ -260,23 +273,24 @@ def test_native_windows_icon_launcher_preserves_executable_payload(tmp_path):
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX fake interpreter fixture")
-def test_windows_dispatcher_resolves_current_version_each_launch(tmp_path):
+def test_windows_desktop_script_forwards_to_activation_bound_launcher_each_launch(tmp_path):
     paths = installed(tmp_path)
-    # Publishing on this host also emits the standalone Windows dispatcher.
+    # The desktop script delegates selection and preflight to the stable
+    # launcher.  Each fake launcher below represents the version-bound
+    # launcher rewritten by activation/update.
     publish_trainer(paths, home=tmp_path, system="darwin")
     script = paths.launcher / "rpo-trainer.py"
+    launcher = paths.launcher / "oel"
+    output = tmp_path / "invocation"
     for version in ["0.30.0", "0.31.0"]:
-        root = paths.version_root(version)
-        root.mkdir(exist_ok=True)
-        fake_python = root / "fake-python"
-        fake_python.write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n')
-        fake_python.chmod(0o755)
-        (root / "installation-record.json").write_text(
-            json.dumps({"runtime": {"created": False, "python": str(fake_python)}})
-        )
         paths.current_state.write_text(json.dumps({"current": version}))
+        launcher.write_text(
+            "#!/bin/sh\n"
+            f'printf "%s %s" "{version}" "$1" > "{output}"\n'
+        )
+        launcher.chmod(0o755)
         subprocess.run([sys.executable, str(script)], check=True)
-        assert "trainer" in (paths.data_root / "logs/trainer.log").read_text()
+        assert output.read_text() == f"{version} trainer"
 
 
 def test_trainer_dispatch_uses_managed_engine_and_writable_cwd(tmp_path, monkeypatch):
@@ -303,7 +317,7 @@ def test_trainer_ignores_incidental_workspace(tmp_path, monkeypatch):
     assert seen[0]["workspace_path"] is None
 
 
-def test_windows_launcher_is_a_gui_executable_with_stdlib_dispatcher(tmp_path):
+def test_windows_launcher_is_a_gui_executable_forwarding_to_stable_launcher(tmp_path):
     import zipfile
 
     import pip._vendor.distlib as distlib
@@ -330,7 +344,10 @@ def test_windows_launcher_is_a_gui_executable_with_stdlib_dispatcher(tmp_path):
     with zipfile.ZipFile(executable) as archive:
         script = archive.read("__main__.py")
     compile(script, "__main__.py", "exec")
-    assert b"state/current.json" in script
+    stable_launcher = paths.launcher / ("oel.cmd" if os.name == "nt" else "oel")
+    assert str(stable_launcher).encode() in script
+    assert b'subprocess.call([str(launcher), "trainer"]' in script
+    assert b"state/current.json" not in script
 
 
 def test_update_defaults_to_existing_game_profile(tmp_path, monkeypatch):

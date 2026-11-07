@@ -10,7 +10,9 @@ from sim.dynamics.orbit.epoch import (
     datetime_to_julian_date,
     julian_date_to_datetime,
     moon_position_eci_km_enhanced,
+    resolve_body_position_eci_km,
     resolve_sun_moon_positions,
+    resolve_sun_position_eci_km,
     resolve_time_dependent_env,
     sun_position_eci_km_enhanced,
 )
@@ -147,6 +149,32 @@ class OrbitEpochTests(unittest.TestCase):
             with self.subTest(t_s=t_s):
                 with self.assertRaisesRegex(ValueError, "outside supplied coverage"):
                     resolve_sun_moon_positions(env, t_s=t_s)
+
+    def test_direct_and_callable_ephemeris_vectors_require_exact_finite_shape(self):
+        with self.assertRaisesRegex(ValueError, "exactly three finite values"):
+            resolve_sun_position_eci_km({"sun_pos_eci_km": [[1.0, 2.0, 3.0]]}, t_s=0.0)
+
+        with self.assertRaisesRegex(ValueError, "exactly three finite values"):
+            resolve_body_position_eci_km(
+                "planet",
+                {
+                    "jd_utc": 2451545.0,
+                    "ephemeris_body_callable": lambda *_args: [1.0, np.nan, 3.0],
+                },
+                t_s=0.0,
+            )
+
+        with self.assertRaisesRegex(ValueError, "exactly three finite values"):
+            resolve_sun_moon_positions(
+                {
+                    "jd_utc": 2451545.0,
+                    "ephemeris_callable": lambda *_args: {
+                        "sun_pos_eci_km": [1.0, 2.0, 3.0],
+                        "moon_pos_eci_km": [[4.0, 5.0, 6.0]],
+                    },
+                },
+                t_s=0.0,
+            )
 
 
 if __name__ == "__main__":

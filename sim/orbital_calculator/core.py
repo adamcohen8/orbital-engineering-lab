@@ -19,16 +19,28 @@ INCLINATION_SINGULAR_TOL_DEG = 1.0e-8
 ENERGY_PARABOLIC_TOL = 1.0e-12
 
 
+def _finite(value: float, name: str) -> float:
+    if isinstance(value, (bool, np.bool_)):
+        raise ValueError(f"{name} must be finite.")
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{name} must be finite.") from exc
+    if not np.isfinite(numeric):
+        raise ValueError(f"{name} must be finite.")
+    return numeric
+
+
 def _positive(value: float, name: str) -> float:
-    value = float(value)
-    if not np.isfinite(value) or value <= 0.0:
+    value = _finite(value, name)
+    if value <= 0.0:
         raise ValueError(f"{name} must be positive.")
     return value
 
 
 def _nonnegative(value: float, name: str) -> float:
-    value = float(value)
-    if not np.isfinite(value) or value < 0.0:
+    value = _finite(value, name)
+    if value < 0.0:
         raise ValueError(f"{name} must be non-negative.")
     return value
 
@@ -637,6 +649,7 @@ def rv_to_robust_elements(
     body_radius_km: float = EARTH_RADIUS_KM,
 ) -> RVToElementsResult:
     mu = _positive(mu_km3_s2, "mu_km3_s2")
+    body_radius = _positive(body_radius_km, "body_radius_km")
     r = _require_finite_vector(np.array([rx_km, ry_km, rz_km], dtype=float), "position vector")
     v = _require_finite_vector(np.array([vx_km_s, vy_km_s, vz_km_s], dtype=float), "velocity vector")
     radius = _positive(float(np.linalg.norm(r)), "position norm")
@@ -737,9 +750,9 @@ def rv_to_robust_elements(
         semi_latus_rectum_km=p,
         eccentricity=eccentricity,
         perigee_radius_km=perigee_radius,
-        perigee_altitude_km=perigee_radius - float(body_radius_km),
+        perigee_altitude_km=perigee_radius - body_radius,
         apogee_radius_km=apogee_radius,
-        apogee_altitude_km=None if apogee_radius is None else apogee_radius - float(body_radius_km),
+        apogee_altitude_km=None if apogee_radius is None else apogee_radius - body_radius,
         period_s=period_s,
         orbit_type=orbit_type,
         inclination_deg=inclination,
@@ -903,8 +916,9 @@ def circular_orbit_from_altitude(
     body_radius_km: float = EARTH_RADIUS_KM,
 ) -> CircularOrbitResult:
     altitude = _nonnegative(altitude_km, "altitude_km")
-    radius = _positive(float(body_radius_km) + altitude, "orbit radius")
-    return circular_orbit_from_radius(radius, mu_km3_s2=mu_km3_s2, body_radius_km=body_radius_km)
+    body_radius = _positive(body_radius_km, "body_radius_km")
+    radius = _positive(body_radius + altitude, "orbit radius")
+    return circular_orbit_from_radius(radius, mu_km3_s2=mu_km3_s2, body_radius_km=body_radius)
 
 
 def circular_orbit_from_radius(
@@ -915,11 +929,12 @@ def circular_orbit_from_radius(
 ) -> CircularOrbitResult:
     radius = _positive(radius_km, "radius_km")
     mu = _positive(mu_km3_s2, "mu_km3_s2")
+    body_radius = _positive(body_radius_km, "body_radius_km")
     velocity = sqrt(mu / radius)
     mean_motion = sqrt(mu / (radius**3))
     period = 2.0 * pi / mean_motion
     return CircularOrbitResult(
-        altitude_km=radius - float(body_radius_km),
+        altitude_km=radius - body_radius,
         radius_km=radius,
         velocity_km_s=velocity,
         period_s=period,
@@ -935,8 +950,9 @@ def orbital_period_from_altitude(
     body_radius_km: float = EARTH_RADIUS_KM,
 ) -> OrbitalPeriodResult:
     altitude = _nonnegative(altitude_km, "altitude_km")
+    body_radius = _positive(body_radius_km, "body_radius_km")
     return orbital_period_from_semimajor_axis(
-        float(body_radius_km) + altitude,
+        body_radius + altitude,
         altitude_km=altitude,
         mu_km3_s2=mu_km3_s2,
     )
@@ -968,12 +984,13 @@ def altitude_from_period(
 ) -> AltitudeFromPeriodResult:
     period = _positive(period_s, "period_s")
     mu = _positive(mu_km3_s2, "mu_km3_s2")
+    body_radius = _positive(body_radius_km, "body_radius_km")
     mean_motion = 2.0 * pi / period
     semi_major_axis = (mu / (mean_motion**2)) ** (1.0 / 3.0)
     return AltitudeFromPeriodResult(
         period_s=period,
         semi_major_axis_km=semi_major_axis,
-        altitude_km=semi_major_axis - float(body_radius_km),
+        altitude_km=semi_major_axis - body_radius,
         mean_motion_rad_s=mean_motion,
     )
 
@@ -1003,8 +1020,9 @@ def hohmann_transfer_between_circular_orbits(
     initial_altitude = _nonnegative(initial_altitude_km, "initial_altitude_km")
     final_altitude = _nonnegative(final_altitude_km, "final_altitude_km")
     mu = _positive(mu_km3_s2, "mu_km3_s2")
-    r1 = _positive(float(body_radius_km) + initial_altitude, "initial radius")
-    r2 = _positive(float(body_radius_km) + final_altitude, "final radius")
+    body_radius = _positive(body_radius_km, "body_radius_km")
+    r1 = _positive(body_radius + initial_altitude, "initial radius")
+    r2 = _positive(body_radius + final_altitude, "final radius")
     if r1 == r2:
         raise ValueError("initial_altitude_km and final_altitude_km must differ for a Hohmann transfer.")
 
@@ -1041,8 +1059,9 @@ def hohmann_rendezvous_phase_angle(
     if initial_altitude == target_altitude:
         raise ValueError("initial_altitude_km and target_altitude_km must differ for rendezvous phasing.")
     mu = _positive(mu_km3_s2, "mu_km3_s2")
-    initial_radius = float(body_radius_km) + initial_altitude
-    target_radius = float(body_radius_km) + target_altitude
+    body_radius = _positive(body_radius_km, "body_radius_km")
+    initial_radius = body_radius + initial_altitude
+    target_radius = body_radius + target_altitude
     transfer_a = 0.5 * (initial_radius + target_radius)
     transfer_time = pi * sqrt((transfer_a**3) / mu)
     initial_n = sqrt(mu / (initial_radius**3))
@@ -1147,6 +1166,7 @@ def apogee_perigee_from_elements(
 ) -> ApogeePerigeeFromElementsResult:
     a = _positive(semi_major_axis_km, "semi_major_axis_km")
     e = _nonnegative(eccentricity, "eccentricity")
+    body_radius = _positive(body_radius_km, "body_radius_km")
     if e >= 1.0:
         raise ValueError("eccentricity must be less than 1 for an elliptical orbit.")
     rp = a * (1.0 - e)
@@ -1156,8 +1176,8 @@ def apogee_perigee_from_elements(
         eccentricity=e,
         perigee_radius_km=rp,
         apogee_radius_km=ra,
-        perigee_altitude_km=rp - float(body_radius_km),
-        apogee_altitude_km=ra - float(body_radius_km),
+        perigee_altitude_km=rp - body_radius,
+        apogee_altitude_km=ra - body_radius,
     )
 
 def elements_from_apogee_perigee_altitudes(
@@ -1168,10 +1188,11 @@ def elements_from_apogee_perigee_altitudes(
 ) -> ElementsFromApogeePerigeeResult:
     perigee_altitude = _nonnegative(perigee_altitude_km, "perigee_altitude_km")
     apogee_altitude = _nonnegative(apogee_altitude_km, "apogee_altitude_km")
+    body_radius = _positive(body_radius_km, "body_radius_km")
     if apogee_altitude < perigee_altitude:
         raise ValueError("apogee_altitude_km must be greater than or equal to perigee_altitude_km.")
-    rp = float(body_radius_km) + perigee_altitude
-    ra = float(body_radius_km) + apogee_altitude
+    rp = body_radius + perigee_altitude
+    ra = body_radius + apogee_altitude
     a = 0.5 * (rp + ra)
     e = (ra - rp) / (ra + rp)
     return ElementsFromApogeePerigeeResult(
@@ -1244,24 +1265,28 @@ def sun_synchronous_inclination_from_altitude(
 ) -> SunSynchronousInclinationResult:
     altitude = _nonnegative(altitude_km, "altitude_km")
     e = _nonnegative(eccentricity, "eccentricity")
+    mu = _positive(mu_km3_s2, "mu_km3_s2")
+    body_radius = _positive(body_radius_km, "body_radius_km")
+    target_precession = _finite(target_precession_deg_day, "target_precession_deg_day")
+    j2_value = _finite(j2, "j2")
     if e >= 1.0:
         raise ValueError("eccentricity must be less than 1 for an elliptical orbit.")
-    a = float(body_radius_km) + altitude
-    n = sqrt(float(mu_km3_s2) / (a**3))
+    a = body_radius + altitude
+    n = sqrt(mu / (a**3))
     p = a * (1.0 - e * e)
-    target_rad_s = radians(float(target_precession_deg_day)) / 86400.0
-    denominator = 1.5 * float(j2) * n * (float(body_radius_km) / p) ** 2
+    target_rad_s = radians(target_precession) / 86400.0
+    denominator = 1.5 * j2_value * n * (body_radius / p) ** 2
     cos_i = -target_rad_s / denominator
     if cos_i < -1.0 or cos_i > 1.0:
         raise ValueError("No first-order circular sun-synchronous inclination exists for this altitude.")
     inclination = degrees(acos(cos_i))
-    actual = -1.5 * float(j2) * n * (float(body_radius_km) / p) ** 2 * cos(radians(inclination))
+    actual = -1.5 * j2_value * n * (body_radius / p) ** 2 * cos(radians(inclination))
     return SunSynchronousInclinationResult(
         altitude_km=altitude,
         semi_major_axis_km=a,
         inclination_deg=inclination,
         nodal_precession_deg_day=degrees(actual) * 86400.0,
-        target_precession_deg_day=float(target_precession_deg_day),
+        target_precession_deg_day=target_precession,
     )
 
 
@@ -1276,16 +1301,18 @@ def j2_secular_rates_from_elements(
 ) -> J2SecularRatesResult:
     a = _positive(semi_major_axis_km, "semi_major_axis_km")
     e = _nonnegative(eccentricity, "eccentricity")
+    body_radius = _positive(body_radius_km, "body_radius_km")
+    j2_value = _finite(j2, "j2")
     if e >= 1.0:
         raise ValueError("eccentricity must be less than 1 for an elliptical orbit.")
-    inclination = float(inclination_deg)
+    inclination = _finite(inclination_deg, "inclination_deg")
     if inclination < 0.0 or inclination > 180.0:
         raise ValueError("inclination_deg must be between 0 and 180.")
     mu = _positive(mu_km3_s2, "mu_km3_s2")
     p = a * (1.0 - e * e)
     n = sqrt(mu / (a**3))
     cos_i = cos(radians(inclination))
-    factor = float(j2) * n * (float(body_radius_km) / p) ** 2
+    factor = j2_value * n * (body_radius / p) ** 2
     raan_rate_rad_s = -1.5 * factor * cos_i
     arg_perigee_rate_rad_s = 0.75 * factor * ((5.0 * cos_i * cos_i) - 1.0)
     mean_anomaly_rate_rad_s = 0.75 * factor * sqrt(1.0 - e * e) * ((3.0 * cos_i * cos_i) - 1.0)
@@ -1313,8 +1340,9 @@ def j2_secular_rates_from_altitude(
     j2: float = EARTH_J2,
 ) -> J2SecularRatesResult:
     altitude = _nonnegative(altitude_km, "altitude_km")
+    body_radius = _positive(body_radius_km, "body_radius_km")
     return j2_secular_rates_from_elements(
-        semi_major_axis_km=float(body_radius_km) + altitude,
+        semi_major_axis_km=body_radius + altitude,
         eccentricity=eccentricity,
         inclination_deg=inclination_deg,
         mu_km3_s2=mu_km3_s2,
@@ -1680,9 +1708,10 @@ def rocket_equation_delta_v(
 ) -> RocketEquationDeltaVResult:
     isp = _positive(isp_s, "isp_s")
     ratio = _positive(mass_ratio, "mass_ratio")
+    standard_gravity = _positive(standard_gravity_m_s2, "standard_gravity_m_s2")
     if ratio < 1.0:
         raise ValueError("mass_ratio must be greater than or equal to 1.")
-    delta_v = isp * float(standard_gravity_m_s2) * log(ratio)
+    delta_v = isp * standard_gravity * log(ratio)
     return RocketEquationDeltaVResult(isp_s=isp, mass_ratio=ratio, delta_v_m_s=delta_v)
 
 
@@ -1694,7 +1723,8 @@ def rocket_equation_mass_ratio(
 ) -> RocketEquationMassRatioResult:
     delta_v = _nonnegative(delta_v_m_s, "delta_v_m_s")
     isp = _positive(isp_s, "isp_s")
-    ratio = exp(delta_v / (isp * float(standard_gravity_m_s2)))
+    standard_gravity = _positive(standard_gravity_m_s2, "standard_gravity_m_s2")
+    ratio = exp(delta_v / (isp * standard_gravity))
     return RocketEquationMassRatioResult(
         isp_s=isp,
         delta_v_m_s=delta_v,
@@ -1813,9 +1843,11 @@ def circular_orbit_drag_decay_rate(
             "Use a higher-fidelity propagator or external density model."
         )
     bc = _positive(ballistic_coefficient_kg_m2, "ballistic_coefficient_kg_m2")
+    mu = _positive(mu_km3_s2, "mu_km3_s2")
+    body_radius = _positive(body_radius_km, "body_radius_km")
     density = atmospheric_density_from_altitude(altitude)
-    mu_m3_s2 = float(mu_km3_s2) * 1.0e9
-    semi_major_axis_m = (float(body_radius_km) + altitude) * 1000.0
+    mu_m3_s2 = mu * 1.0e9
+    semi_major_axis_m = (body_radius + altitude) * 1000.0
     decay_rate_m_s = -(density.density_kg_m3 / bc) * sqrt(mu_m3_s2 * semi_major_axis_m)
     decay_rate_m_day = decay_rate_m_s * 86400.0
     return CircularOrbitDecayRateResult(

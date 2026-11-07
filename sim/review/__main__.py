@@ -92,17 +92,17 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("output_dir is required when running a query")
 
     try:
-        workspace = ReviewWorkspace.open(Path(args.output_dir))
-        max_vm_steps = (
-            max(int(args.max_vm_steps), 1)
-            if args.max_vm_steps is not None
-            else (saved_query.max_vm_steps if saved_query is not None else 250_000)
-        )
-        result = workspace.query(
-            sql,
-            max_rows=max(int(args.max_rows), 1),
-            max_vm_steps=max_vm_steps,
-        )
+        with ReviewWorkspace.open(Path(args.output_dir)) as workspace:
+            max_vm_steps = (
+                max(int(args.max_vm_steps), 1)
+                if args.max_vm_steps is not None
+                else (saved_query.max_vm_steps if saved_query is not None else 250_000)
+            )
+            result = workspace.query(
+                sql,
+                max_rows=max(int(args.max_rows), 1),
+                max_vm_steps=max_vm_steps,
+            )
     except (ReviewStoreNotFoundError, ReviewQueryError) as exc:
         print(f"review query failed: {exc}", file=sys.stderr)
         return 2

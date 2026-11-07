@@ -7,6 +7,7 @@ though both currently use the same reviewed RS256 primitive.
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import json
 import math
@@ -94,7 +95,7 @@ def verify_payload(
             _b64url_decode(value),
             key,
         )
-    except (OverflowError, ValueError):
+    except (binascii.Error, UnicodeError, OverflowError, ValueError):
         return False
 
 
@@ -117,6 +118,54 @@ def load_public_keys(path: str | Path) -> dict[str, RSAPublicKey]:
             revoked=bool(item.get("revoked", False)),
         )
         keys[key.key_id] = key
+    return keys
+
+
+def load_release_public_keys(path: str | Path) -> dict[str, RSAPublicKey]:
+    """Load an official release registry with its stronger key policy.
+
+    Community catalogs and test fixtures intentionally use ``load_public_keys``
+    with their own trust roots.  Official release registries are stricter:
+    they must be an explicit key list, contain unique IDs, and every active key
+    must use RS256 with a 2048-bit-or-larger modulus and e=65537. Historical
+    revoked entries remain parseable so key-rotation behavior is unchanged.
+    """
+
+    data = json.loads(Path(path).expanduser().read_text(encoding="utf-8"))
+    if not isinstance(data, dict) or not isinstance(data.get("keys"), list):
+        raise ValueError("Official release-key registry must contain a keys list.")
+    keys: dict[str, RSAPublicKey] = {}
+    for index, item in enumerate(data["keys"]):
+        if not isinstance(item, dict):
+            raise ValueError(f"Official release-key registry key {index} is malformed.")
+        key_id = item.get("key_id")
+        if not isinstance(key_id, str) or not key_id.strip():
+            raise ValueError(f"Official release-key registry key {index} has an empty key ID.")
+        if key_id in keys:
+            raise ValueError(f"Official release-key registry contains duplicate key ID: {key_id}.")
+        if item.get("alg", "RS256") != "RS256":
+            raise ValueError(f"Official release key {key_id} must use RS256.")
+        try:
+            modulus = _decode_int(item["n"])
+            exponent = _decode_int(item.get("e", "AQAB"))
+        except (KeyError, TypeError, ValueError, UnicodeError, binascii.Error) as exc:
+            raise ValueError(f"Official release key {key_id} has invalid RSA parameters.") from exc
+        revoked = item.get("revoked", False)
+        if not isinstance(revoked, bool):
+            raise ValueError(f"Official release key {key_id} has a malformed revoked flag.")
+        if modulus <= 0 or (not revoked and (modulus.bit_length() < 2048 or exponent != 65537)):
+            raise ValueError(f"Official release key {key_id} must be RSA-2048 or stronger with e=65537.")
+        keys[key_id] = RSAPublicKey(
+            key_id=key_id,
+            n=modulus,
+            e=exponent,
+            alg="RS256",
+            not_before=_parse_datetime(item.get("not_before")),
+            expires_at=_parse_datetime(item.get("expires_at")),
+            revoked=revoked,
+        )
+    if not keys:
+        raise ValueError("Official release-key registry must contain at least one key.")
     return keys
 
 

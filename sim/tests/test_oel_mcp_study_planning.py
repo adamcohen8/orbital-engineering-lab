@@ -119,6 +119,7 @@ def test_restricted_byo_mcp_preflight_returns_ready_but_never_authorizes() -> No
     assert result["commercial_status"]["oel_execution_amount"] == 0
     assert result["commercial_status"]["payment_authorized"] is False
     assert result["review_status"]["execution_authorized"] is False
+    assert result["plan"]["config_constraints"][0]["path"] == "/scenario_name"
     assert response["effects"] == {
         "reads": True,
         "writes": False,

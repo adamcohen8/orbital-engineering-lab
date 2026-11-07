@@ -25,6 +25,7 @@ from sim.dynamics.orbit.elements import rv_to_coe_eci
 from sim.dynamics.orbit.environment import EARTH_MU_KM3_S2, EARTH_RADIUS_KM
 from sim.dynamics.orbit.propagator import OrbitPropagator, drag_plugin, j2_plugin
 from sim.utils.io import SafeReadError, read_regular_file_nofollow
+from sim.utils.vector_math import dot3, norm3
 
 ORBIT_LIFETIME_PROBLEM_SCHEMA = "oel.orbit_lifetime_problem.v1"
 ORBIT_LIFETIME_EVIDENCE_SCHEMA = "oel.orbit_lifetime_evidence.v1"
@@ -54,6 +55,7 @@ _IMPLEMENTATION_FILES = (
     "sim/dynamics/orbit/epoch.py",
     "sim/dynamics/orbit/frames.py",
     "sim/dynamics/orbit/propagator.py",
+    "sim/utils/vector_math.py",
 )
 _ATMOSPHERE_IMPLEMENTATION_FILES = {
     "harris_priester": (
@@ -759,14 +761,14 @@ def _propagator(problem: OrbitLifetimeProblem) -> tuple[OrbitPropagator, dict[st
 
 
 def _altitude(state: np.ndarray) -> float:
-    return float(np.linalg.norm(state[:3]) - EARTH_RADIUS_KM)
+    return norm3(state[:3]) - EARTH_RADIUS_KM
 
 
 def _radial_velocity_km_s(state: np.ndarray) -> float:
-    radius = float(np.linalg.norm(state[:3]))
+    radius = norm3(state[:3])
     if radius <= 0.0:
         return 0.0
-    return float(np.dot(state[:3], state[3:]) / radius)
+    return dot3(state[:3], state[3:]) / radius
 
 
 def _propagate_checked(
@@ -780,9 +782,9 @@ def _propagate_checked(
 ) -> np.ndarray:
     try:
         if problem.numeric_backend == "rust":
-            from sim.dynamics.orbit.rust_force_plan import make_plan
+            from sim.dynamics.orbit.rust_force_plan import make_plan, native_force_plan_codes
             prepared = getattr(propagator, "_lifetime_native_plan", None)
-            if prepared is None:
+            if prepared is None and native_force_plan_codes(propagator, env) is not None:
                 propagator.numeric_backend = "rust"
                 prepared = make_plan(propagator, state, start_time_s, env, context)
                 propagator._lifetime_native_plan = prepared
@@ -856,10 +858,10 @@ def _sample(
     density = problem.atmosphere.density(state, time_s, problem.epoch_jd_utc)
     _, env, context = _propagator(problem)
     drag = _drag_acceleration_checked(problem, time_s, state, env, context)
-    radius = float(np.linalg.norm(state[:3]))
-    speed2 = float(np.dot(state[3:], state[3:]))
+    radius = norm3(state[:3])
+    speed2 = dot3(state[3:], state[3:])
     energy = 0.5 * speed2 - EARTH_MU_KM3_S2 / radius
-    angular_momentum = float(np.linalg.norm(np.cross(state[:3], state[3:])))
+    angular_momentum = norm3(np.cross(state[:3], state[3:]))
     return LifetimeSample(
         sample_index=sample_index,
         time_s=float(time_s),
@@ -879,7 +881,7 @@ def _sample(
         apogee_altitude_km=elements.a_km * (1.0 + elements.ecc) - EARTH_RADIUS_KM,
         specific_energy_km2_s2=energy,
         angular_momentum_km2_s=angular_momentum,
-        drag_acceleration_m_s2=float(np.linalg.norm(drag) * 1000.0),
+        drag_acceleration_m_s2=norm3(drag) * 1000.0,
         semi_major_axis_change_km=elements.a_km - initial_a_km,
     )
 

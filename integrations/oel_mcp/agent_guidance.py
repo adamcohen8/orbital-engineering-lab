@@ -27,7 +27,7 @@ _OPTIONAL_ROUTE_DEFINITIONS = (
         "oel.fsw.describe.v1", "oel.fsw.inspect_candidate.v1", "oel.fsw.plan_candidate.v1",
         "oel.fsw.scaffold_candidate.v1", "oel.fsw.validate_candidate.v1",
         "oel.fsw.run_candidate_tests.v1", "oel.fsw.run_candidate_smoke.v1",
-        "oel.fsw.verify_receipt.v1")),
+        "oel.fsw.verify_receipt.v1", "oel.fsw.build_candidate.v1")),
     ("pro_analytics", "Run bounded entitled Pro analytical workflows", (
         "oel.pro.inspect_ihe_dataset.v1", "oel.pro.validate_hypothesis_study.v1",
         "oel.pro.inspect_ihe_dataset.v2", "oel.pro.validate_hypothesis_study.v2",

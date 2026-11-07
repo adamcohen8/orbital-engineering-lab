@@ -12,12 +12,33 @@ from .contracts import (
     StudyContractError,
     bind_study_plan,
     bind_study_request,
+    canonical_sha256,
     classify_execution_route,
     require_valid_document,
 )
 from .edge_compiler import StudyEdgeCompilationError, verify_typed_operation_edges
 from .manifest import build_capability_manifest
+from .resource_accounting import (
+    _OBSERVATION_COUNT_KEYS,
+    _STATION_COUNT_KEYS,
+    account_plan_resources,
+)
 from .schema_validation import validate_schema
+
+_RESOURCE_METRIC_NAMES = (
+    "total_cases",
+    "cpu_time_s",
+    "work_units",
+    "propagation_steps",
+    "estimator_evaluations",
+    "batch_evaluations",
+    "arc_duration_s",
+    "peak_memory_mb",
+    "unique_input_bytes",
+    "retained_output_bytes",
+    "observation_count",
+    "station_count",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,6 +51,18 @@ class PlanningResourcePolicy:
     max_storage_mb: float = 10_240.0
     max_artifact_mb: float = 2048.0
     max_parallel_workers: int = 32
+    max_work_units: float = 1_000_000_000_000_000.0
+    max_propagation_steps: int = 1_000_000_000
+    max_estimator_evaluations: int = 1_000_000_000
+    max_batch_evaluations: int = 100_000_000
+    max_arc_duration_s: float = 31_536_000.0
+    max_input_bytes: int = 17_179_869_184
+    max_retained_output_bytes: int = 10_995_116_277_760
+    # Observation/station host ceilings are intentionally unset until an
+    # authoritative host policy declares them.  Plan envelopes and typed
+    # operation bounds still enforce their own selected ceilings.
+    max_observations: int | None = None
+    max_stations: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,6 +164,15 @@ def preflight_study_plan(
         allow_unbound_pro_planning=allow_unbound_pro_planning,
     )
     hosted_pro = execution_route["route"] == "HOSTED_PRO_REQUIRED"
+    resource_accounting = (
+        account_plan_resources(
+            bound_plan["operations"],
+            bound_plan["resource_envelope"],
+            countable_input_refs=_countable_input_refs(bound_plan["operations"], catalog),
+        ).to_dict()
+        if bound_plan is not None
+        else _unassessed_resource_accounting()
+    )
     result = {
         "schema": PLANNING_RESULT_SCHEMA_ID,
         "status": status,
@@ -140,6 +182,7 @@ def preflight_study_plan(
         "plan": bound_plan,
         "plan_sha256": None if bound_plan is None else bound_plan["plan_sha256"],
         "findings": [finding.to_dict() for finding in findings],
+        "resource_accounting": resource_accounting,
         "config_receipts": [deepcopy(dict(item)) for item in config_receipts],
         "execution_route": execution_route,
         "commercial_status": {
@@ -172,6 +215,24 @@ def preflight_study_plan(
         ],
     }
     return require_valid_document(result, expected_schema=PLANNING_RESULT_SCHEMA_ID)
+
+
+def _unassessed_resource_accounting() -> dict[str, Any]:
+    issue_code = "resource.plan_unassessed"
+    return {
+        "schema": "oel.study_resource_accounting.v1",
+        "metrics": {
+            name: {
+                "status": "unassessed",
+                "value": None,
+                "basis": "No content-bound study plan was available for accounting.",
+                "issue_codes": [issue_code],
+            }
+            for name in _RESOURCE_METRIC_NAMES
+        },
+        "worker_bound": None,
+        "issue_codes": [issue_code],
+    }
 
 
 def _request_findings(request: Mapping[str, Any]) -> list[PlanningFinding]:
@@ -489,7 +550,14 @@ def _compile_plan(
     findings.extend(_config_findings(request, plan, normalized_configs, config_receipts))
     findings.extend(_evidence_findings(plan, operation_by_id))
     findings.extend(_orphan_operation_findings(plan, operation_by_id))
-    findings.extend(_resource_findings(plan, operations, policy))
+    findings.extend(
+        _resource_findings(
+            plan,
+            operations,
+            policy,
+            countable_input_refs=_countable_input_refs(operations, catalog),
+        )
+    )
     return findings
 
 
@@ -504,7 +572,10 @@ def _config_findings(
         str(item["config_ref"])
         for item in plan["operations"]
         if item["config_ref"] is not None
-        and any(ref["kind"] == "scenario_config" for ref in item["input_refs"])
+        and any(
+            ref["kind"] in {"scenario_config", "validated_scenario"}
+            for ref in item["input_refs"]
+        )
     }
     receipt_by_ref = {str(item.get("config_ref", "")): item for item in receipts}
     request_input_by_id = {str(item["input_id"]): item for item in request["inputs"]}
@@ -546,6 +617,37 @@ def _config_findings(
                     ("$.config_receipts",),
                     {"config_ref": config_ref},
                     "Reduce or split the study; validation cannot silently relax the resource policy.",
+                )
+            )
+        try:
+            normalized_digest = canonical_sha256(config)
+        except (StudyContractError, TypeError, ValueError) as exc:
+            normalized_digest = None
+            findings.append(
+                PlanningFinding(
+                    "config.normalized_document_invalid",
+                    "blocker",
+                    "planner_error",
+                    f"Plan configuration {config_ref!r} is not a canonical normalized document: {exc}",
+                    ("$.config_receipts",),
+                    {"config_ref": config_ref},
+                    "Use the exact normalized document returned by safe configuration validation.",
+                )
+            )
+        if normalized_digest != receipt.get("normalized_config_sha256"):
+            findings.append(
+                PlanningFinding(
+                    "config.normalized_digest_mismatch",
+                    "blocker",
+                    "intent_parity",
+                    f"Normalized configuration {config_ref!r} does not match its validation receipt.",
+                    ("$.config_receipts",),
+                    {
+                        "config_ref": config_ref,
+                        "expected": receipt.get("normalized_config_sha256"),
+                        "observed": normalized_digest,
+                    },
+                    "Use the exact normalized document returned by the matching safe validation receipt.",
                 )
             )
         bound_input_ids = {
@@ -689,24 +791,140 @@ def _orphan_operation_findings(
     ]
 
 
+def _countable_input_refs(
+    operations: Sequence[Mapping[str, Any]],
+    catalog: CapabilityCatalog,
+) -> dict[str, set[tuple[int, int]]]:
+    """Classify count metrics from authoritative typed input-port metadata.
+
+    A typed problem/configuration port that does not require an observation or
+    station count is not itself a dataset for that metric.  Count metadata on
+    such a port still opts it into accounting.  Unknown or ambiguous ports are
+    retained for both metrics so missing applicability cannot make a plan look
+    assessed.
+    """
+
+    countable: dict[str, set[tuple[int, int]]] = {
+        "observation_count": set(),
+        "station_count": set(),
+    }
+    metric_keys = {
+        "observation_count": _OBSERVATION_COUNT_KEYS,
+        "station_count": _STATION_COUNT_KEYS,
+    }
+    for operation_index, operation in enumerate(operations):
+        capability = catalog.get(str(operation.get("capability_id", "")))
+        for ref_index, ref in enumerate(list(operation.get("input_refs", []) or [])):
+            metadata = ref.get("metadata", {})
+            metadata = dict(metadata) if isinstance(metadata, Mapping) else {}
+            matching_ports = []
+            if capability is not None:
+                for port in capability.compiled_input_ports:
+                    if ref.get("port_id") is not None and str(ref.get("port_id")) != port.port_id:
+                        continue
+                    if str(ref.get("kind")) != port.artifact_kind:
+                        continue
+                    if str(ref.get("schema_id")) not in port.schema_ids:
+                        continue
+                    matching_ports.append(port)
+
+            # A missing or ambiguous authoritative port is an unclassified
+            # reference. Keep it countable so the accounting remains fail-closed.
+            if len(matching_ports) != 1:
+                for metric_name in metric_keys:
+                    countable[metric_name].add((operation_index, ref_index))
+                continue
+
+            required_metadata = set(matching_ports[0].required_metadata)
+            for metric_name, accepted_keys in metric_keys.items():
+                if any(key in required_metadata or key in metadata for key in accepted_keys):
+                    countable[metric_name].add((operation_index, ref_index))
+    return countable
+
+
 def _resource_findings(
-    plan: Mapping[str, Any], operations: Sequence[Mapping[str, Any]], policy: PlanningResourcePolicy
+    plan: Mapping[str, Any],
+    operations: Sequence[Mapping[str, Any]],
+    policy: PlanningResourcePolicy,
+    *,
+    countable_input_refs: Mapping[str, set[tuple[int, int]]] | None = None,
 ) -> list[PlanningFinding]:
     envelope = plan["resource_envelope"]
-    total_cases = sum(int(item["bounds"].get("max_cases", 1)) for item in operations)
+    accounting = account_plan_resources(
+        operations,
+        envelope,
+        countable_input_refs=countable_input_refs,
+    )
+    findings = [
+        PlanningFinding(
+            issue.code,
+            "blocker",
+            "resource_limit",
+            issue.message,
+            issue.paths,
+            issue.observed,
+            issue.suggestion,
+        )
+        for issue in accounting.issues
+    ]
+    total_cases = accounting.total_cases
     wall_time = sum(float(item["bounds"].get("max_wall_time_s", 0.0)) for item in operations)
     limits = {
         "operations": (len(operations), min(int(envelope["max_operations"]), policy.max_operations)),
         "total_cases": (total_cases, min(int(envelope["max_total_cases"]), policy.max_total_cases)),
         "wall_time_s": (wall_time, min(float(envelope["max_wall_time_s"]), policy.max_wall_time_s)),
         "cpu_time_s": (float(envelope["max_cpu_time_s"]), policy.max_cpu_time_s),
+        "work_units": (
+            float(envelope["max_work_units"]),
+            policy.max_work_units,
+        ) if "max_work_units" in envelope else None,
+        "propagation_steps": (
+            int(envelope["max_propagation_steps"]),
+            policy.max_propagation_steps,
+        ) if "max_propagation_steps" in envelope else None,
+        "estimator_evaluations": (
+            int(envelope["max_estimator_evaluations"]),
+            policy.max_estimator_evaluations,
+        ) if "max_estimator_evaluations" in envelope else None,
+        "batch_evaluations": (
+            int(envelope["max_batch_evaluations"]),
+            policy.max_batch_evaluations,
+        ) if "max_batch_evaluations" in envelope else None,
+        "arc_duration_s": (
+            float(envelope["max_arc_duration_s"]),
+            policy.max_arc_duration_s,
+        ) if "max_arc_duration_s" in envelope else None,
         "peak_memory_mb": (float(envelope["max_peak_memory_mb"]), policy.max_peak_memory_mb),
         "storage_mb": (float(envelope["max_storage_mb"]), policy.max_storage_mb),
         "artifact_mb": (float(envelope["max_artifact_mb"]), policy.max_artifact_mb),
         "parallel_workers": (int(envelope["max_parallel_workers"]), policy.max_parallel_workers),
+        "input_bytes": (
+            int(envelope["max_input_bytes"]),
+            policy.max_input_bytes,
+        ) if "max_input_bytes" in envelope else None,
     }
-    findings: list[PlanningFinding] = []
-    for name, (observed, maximum) in limits.items():
+    if "max_observations" in envelope and policy.max_observations is not None:
+        limits["observation_count"] = (
+            int(envelope["max_observations"]),
+            min(int(envelope["max_observations"]), policy.max_observations),
+        )
+    if "max_stations" in envelope and policy.max_stations is not None:
+        limits["station_count"] = (
+            int(envelope["max_stations"]),
+            min(int(envelope["max_stations"]), policy.max_stations),
+        )
+    if "max_retained_output_bytes" in envelope:
+        limits["retained_output_bytes_cap"] = (
+            float(envelope["max_retained_output_bytes"]),
+            min(
+                float(policy.max_retained_output_bytes),
+                float(policy.max_storage_mb) * 1024.0 * 1024.0,
+            ),
+        )
+    for name, limit in limits.items():
+        if limit is None:
+            continue
+        observed, maximum = limit
         if observed > maximum:
             findings.append(
                 PlanningFinding(
@@ -719,6 +937,144 @@ def _resource_findings(
                     "Reduce, bound, or split the study before seeking approval.",
                 )
             )
+
+    def add_accounted_finding(
+        metric_name: str,
+        observed: float | int,
+        maximum: float | int,
+        suffix: str,
+        *,
+        label: str,
+    ) -> None:
+        if observed > maximum:
+            findings.append(
+                PlanningFinding(
+                    f"resource.{metric_name}_{suffix}",
+                    "blocker",
+                    "resource_limit",
+                    f"The accounted {label}={observed} exceeds the applicable limit {maximum}.",
+                    ("$.plan.resource_envelope", "$.plan.operations"),
+                    {"observed": observed, "maximum": maximum, "metric": metric_name},
+                    "Reduce, bound, or split the study before seeking approval.",
+                )
+            )
+
+    def check_accounted_metric(
+        metric_name: str,
+        observed: float | int | None,
+        envelope_limit: float | int | None,
+        policy_limit: float | int | None,
+        *,
+        label: str,
+    ) -> None:
+        if observed is None:
+            return
+        if envelope_limit is not None:
+            add_accounted_finding(
+                metric_name,
+                observed,
+                envelope_limit,
+                "accounted_exceeded",
+                label=label,
+            )
+        if policy_limit is not None and observed > policy_limit and envelope_limit != policy_limit:
+            add_accounted_finding(
+                metric_name,
+                observed,
+                policy_limit,
+                "policy_exceeded",
+                label=label,
+            )
+
+    check_accounted_metric(
+        "cpu_time_s",
+        accounting.cpu_time_s,
+        float(envelope["max_cpu_time_s"]),
+        policy.max_cpu_time_s,
+        label="CPU time",
+    )
+    check_accounted_metric(
+        "work_units",
+        accounting.work_units,
+        float(envelope["max_work_units"]) if "max_work_units" in envelope else None,
+        policy.max_work_units,
+        label="work units",
+    )
+    check_accounted_metric(
+        "propagation_steps",
+        accounting.propagation_steps,
+        int(envelope["max_propagation_steps"]) if "max_propagation_steps" in envelope else None,
+        policy.max_propagation_steps,
+        label="propagation steps",
+    )
+    check_accounted_metric(
+        "estimator_evaluations",
+        accounting.estimator_evaluations,
+        int(envelope["max_estimator_evaluations"])
+        if "max_estimator_evaluations" in envelope
+        else None,
+        policy.max_estimator_evaluations,
+        label="estimator evaluations",
+    )
+    check_accounted_metric(
+        "batch_evaluations",
+        accounting.batch_evaluations,
+        int(envelope["max_batch_evaluations"]) if "max_batch_evaluations" in envelope else None,
+        policy.max_batch_evaluations,
+        label="batch evaluations",
+    )
+    check_accounted_metric(
+        "arc_duration_s",
+        accounting.arc_duration_s,
+        float(envelope["max_arc_duration_s"]) if "max_arc_duration_s" in envelope else None,
+        policy.max_arc_duration_s,
+        label="per-operation arc duration",
+    )
+    check_accounted_metric(
+        "peak_memory_mb",
+        accounting.peak_memory_mb,
+        float(envelope["max_peak_memory_mb"]),
+        policy.max_peak_memory_mb,
+        label="peak memory",
+    )
+    check_accounted_metric(
+        "unique_input_bytes",
+        accounting.unique_input_bytes,
+        int(envelope["max_input_bytes"]) if "max_input_bytes" in envelope else None,
+        policy.max_input_bytes,
+        label="unique input bytes",
+    )
+    check_accounted_metric(
+        "observation_count",
+        accounting.observation_count,
+        int(envelope["max_observations"]) if "max_observations" in envelope else None,
+        policy.max_observations,
+        label="observations",
+    )
+    check_accounted_metric(
+        "station_count",
+        accounting.station_count,
+        int(envelope["max_stations"]) if "max_stations" in envelope else None,
+        policy.max_stations,
+        label="stations",
+    )
+    retained_envelope_limit = min(
+        float(envelope["max_storage_mb"]) * 1024.0 * 1024.0,
+        float(envelope["max_retained_output_bytes"])
+        if "max_retained_output_bytes" in envelope
+        else float("inf"),
+    )
+    retained_policy_limit = min(
+        float(policy.max_storage_mb) * 1024.0 * 1024.0,
+        float(policy.max_retained_output_bytes),
+    )
+    check_accounted_metric(
+        "retained_output_bytes",
+        accounting.retained_output_bytes,
+        retained_envelope_limit,
+        retained_policy_limit,
+        label="retained output bytes",
+    )
     return findings
 
 

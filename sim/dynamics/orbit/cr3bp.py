@@ -19,6 +19,20 @@ class CR3BPSystem:
     mu: float = EARTH_MOON_MU
     mean_motion_rad_s: float = EARTH_MOON_MEAN_MOTION_RAD_S
 
+    def __post_init__(self) -> None:
+        distance = float(self.distance_km)
+        mass_ratio = float(self.mu)
+        mean_motion = float(self.mean_motion_rad_s)
+        if not np.isfinite(distance) or distance <= 0.0:
+            raise ValueError("CR3BP distance_km must be finite and positive.")
+        if not np.isfinite(mass_ratio) or not 0.0 < mass_ratio < 1.0:
+            raise ValueError("CR3BP mu must be finite and satisfy 0 < mu < 1.")
+        if not np.isfinite(mean_motion) or mean_motion <= 0.0:
+            raise ValueError("CR3BP mean_motion_rad_s must be finite and positive.")
+        object.__setattr__(self, "distance_km", distance)
+        object.__setattr__(self, "mu", mass_ratio)
+        object.__setattr__(self, "mean_motion_rad_s", mean_motion)
+
 
 EARTH_MOON_CR3BP = CR3BPSystem()
 
@@ -131,17 +145,23 @@ def cr3bp_relative_state(deputy_state: np.ndarray, reference_state: np.ndarray) 
 
 def _integrate_cr3bp(deriv, state, dt_s, t_s, *, integrator, adaptive_atol, adaptive_rtol, h_init):
     method = str(integrator).strip().lower()
+    dt = float(dt_s)
+    if not np.isfinite(dt) or (method != "rk4" and dt < 0.0):
+        raise ValueError("CR3BP dt_s must be finite and nonnegative.")
+    epoch = float(t_s)
+    if not np.isfinite(epoch):
+        raise ValueError("CR3BP t_s must be finite.")
     if method == "rk4":
-        return rk4_step_state(deriv_fn=deriv, t_s=float(t_s), x=state, dt_s=float(dt_s)), None
+        return rk4_step_state(deriv_fn=deriv, t_s=epoch, x=state, dt_s=dt), None
     if method not in {"rkf78", "adaptive", "dopri5"}:
         raise ValueError(f"Unsupported CR3BP integrator '{integrator}'.")
     if not np.isfinite([adaptive_atol, adaptive_rtol]).all() or adaptive_atol <= 0 or adaptive_rtol <= 0:
         raise ValueError("CR3BP adaptive tolerances must be positive and finite.")
     return integrate_adaptive(
         deriv_fn=deriv,
-        t_s=float(t_s),
+        t_s=epoch,
         x=state,
-        dt_s=float(dt_s),
+        dt_s=dt,
         atol=adaptive_atol,
         rtol=adaptive_rtol,
         method="rkf78" if method == "adaptive" else method,
@@ -166,11 +186,18 @@ def propagate_cr3bp_state(
 ) -> np.ndarray | tuple[np.ndarray, AdaptiveStepInfo | None]:
     """Propagate physical rotating state; optional diagnostics are None for RK4."""
     sys = EARTH_MOON_CR3BP if system is None else system
+    state = _validated_cr3bp_state(state_km_s, "state_km_s")
+    signed_rk4 = str(integrator).strip().lower() == "rk4"
+    dt = _validated_cr3bp_time(dt_s, "dt_s", nonnegative=not signed_rk4)
+    epoch = _validated_cr3bp_time(t_s, "t_s")
+    _validate_cr3bp_integrator_options(integrator, adaptive_atol, adaptive_rtol)
     command = (
         None
         if command_accel_km_s2 is None
         else np.asarray(command_accel_km_s2, dtype=float).reshape(3)
     )
+    if command is not None and not np.isfinite(command).all():
+        raise ValueError("CR3BP command_accel_km_s2 must be finite.")
 
     backend = str(numeric_backend).strip().lower()
     if backend not in {"python", "rust"}:
@@ -179,7 +206,7 @@ def propagate_cr3bp_state(
         from sim.dynamics.orbit.rust_cr3bp import integrate
 
         out, info = integrate(
-            state_km_s, dt_s, t_s, system=sys, command=command,
+            state, dt, epoch, system=sys, command=command,
             integrator=integrator, adaptive_atol=adaptive_atol,
             adaptive_rtol=adaptive_rtol, h_init=h_init, collect_info=return_info,
         )
@@ -193,9 +220,9 @@ def propagate_cr3bp_state(
 
     out, info = _integrate_cr3bp(
         deriv,
-        np.array(state_km_s, dtype=float).reshape(6),
-        dt_s,
-        t_s,
+        state,
+        dt,
+        epoch,
         integrator=integrator,
         adaptive_atol=adaptive_atol,
         adaptive_rtol=adaptive_rtol,
@@ -224,9 +251,17 @@ def propagate_cr3bp_reference_stm(
     Default return shape and RK4 stepping preserve Trainer compatibility.
     """
     sys = EARTH_MOON_CR3BP if system is None else system
+    reference = _validated_cr3bp_state(reference_state_km_s, "reference_state_km_s")
+    phi = np.asarray(stm, dtype=float).reshape(6, 6).copy()
+    if not np.isfinite(phi).all():
+        raise ValueError("CR3BP stm must be finite.")
+    signed_rk4 = str(integrator).strip().lower() == "rk4"
+    dt = _validated_cr3bp_time(dt_s, "dt_s", nonnegative=not signed_rk4)
+    epoch = _validated_cr3bp_time(t_s, "t_s")
+    _validate_cr3bp_integrator_options(integrator, adaptive_atol, adaptive_rtol)
     augmented = np.empty(42, dtype=float)
-    augmented[:6] = np.asarray(reference_state_km_s, dtype=float).reshape(6)
-    augmented[6:] = np.asarray(stm, dtype=float).reshape(6, 6).reshape(36)
+    augmented[:6] = reference
+    augmented[6:] = phi.reshape(36)
 
     backend = str(numeric_backend).strip().lower()
     if backend not in {"python", "rust"}:
@@ -235,7 +270,7 @@ def propagate_cr3bp_reference_stm(
         from sim.dynamics.orbit.rust_cr3bp import integrate
 
         out, info = integrate(
-            augmented, dt_s, t_s, system=sys, stm=True,
+            augmented, dt, epoch, system=sys, stm=True,
             integrator=integrator, adaptive_atol=adaptive_atol,
             adaptive_rtol=adaptive_rtol, h_init=h_init, collect_info=return_info,
         )
@@ -251,8 +286,8 @@ def propagate_cr3bp_reference_stm(
     out, info = _integrate_cr3bp(
         deriv,
         augmented,
-        dt_s,
-        t_s,
+        dt,
+        epoch,
         integrator=integrator,
         adaptive_atol=adaptive_atol,
         adaptive_rtol=adaptive_rtol,
@@ -277,6 +312,40 @@ def cr3bp_derivative_physical(
     if command_accel_km_s2 is not None:
         deriv[3:] += np.array(command_accel_km_s2, dtype=float).reshape(3)
     return deriv
+
+
+def _validated_cr3bp_state(value: np.ndarray, name: str) -> np.ndarray:
+    try:
+        state = np.asarray(value, dtype=float).reshape(6)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"CR3BP {name} must contain six finite values.") from exc
+    if not np.isfinite(state).all():
+        raise ValueError(f"CR3BP {name} must contain six finite values.")
+    return state.copy()
+
+
+def _validated_cr3bp_time(value: float, name: str, *, nonnegative: bool = False) -> float:
+    try:
+        result = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"CR3BP {name} must be finite.") from exc
+    if not np.isfinite(result) or (nonnegative and result < 0.0):
+        qualifier = "finite and nonnegative" if nonnegative else "finite"
+        raise ValueError(f"CR3BP {name} must be {qualifier}.")
+    return result
+
+
+def _validate_cr3bp_integrator_options(integrator: str, adaptive_atol: float, adaptive_rtol: float) -> None:
+    method = str(integrator).strip().lower()
+    if method not in {"rk4", "rkf78", "adaptive", "dopri5"}:
+        raise ValueError(f"Unsupported CR3BP integrator '{integrator}'.")
+    try:
+        atol = float(adaptive_atol)
+        rtol = float(adaptive_rtol)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("CR3BP adaptive tolerances must be positive and finite.") from exc
+    if not np.isfinite([atol, rtol]).all() or atol <= 0.0 or rtol <= 0.0:
+        raise ValueError("CR3BP adaptive tolerances must be positive and finite.")
 
 
 def cr3bp_jacobian_physical(state_km_s: np.ndarray, *, system: CR3BPSystem | None = None) -> np.ndarray:

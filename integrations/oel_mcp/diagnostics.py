@@ -6,6 +6,7 @@ import os
 import platform
 import shutil
 import sys
+from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any, Callable
@@ -34,6 +35,7 @@ def _doctor_report_base(
 ) -> dict[str, Any]:
     path_policy = MCPPathPolicy.configured()
     approval_policy = ExecutionApprovalPolicy.configured()
+    grant_counts = _grant_counts(approval_policy)
     sdk_version = installed_sdk_version()
     launch_command, launch_args, launch_source = default_host_launch()
     source_version = _source_project_version()
@@ -85,15 +87,28 @@ def _doctor_report_base(
             approval_policy.write_approval_ids
             or approval_policy.execution_approval_ids
             or approval_policy.trust_approval_ids
+            or grant_counts["active_bounded_grants"]
         ),
         required=False,
         detail={
             "write_ids": len(approval_policy.write_approval_ids),
             "execute_ids": len(approval_policy.execution_approval_ids),
             "trust_ids": len(approval_policy.trust_approval_ids),
-            "meaning": "Zero configured approvals leaves write, execute, and trusted-plugin operations disabled.",
+            **grant_counts,
+            "meaning": "Counts describe configuration only; every call checks scope, input binding, expiry and revocation.",
         },
     )
+    if grant_counts["active_bounded_effect_grants"]:
+        _check(
+            checks,
+            "bounded_operation_ledger",
+            bool(os.environ.get("OEL_MCP_OPERATION_LEDGER_ROOT", "").strip()),
+            required=False,
+            detail={
+                "configured": bool(os.environ.get("OEL_MCP_OPERATION_LEDGER_ROOT", "").strip()),
+                "meaning": "Bounded effects require a valid host-private durable ledger outside authorized data roots; calls verify its location.",
+            },
+        )
     if entitlement_rows:
         _check(
             checks,
@@ -119,6 +134,24 @@ def _doctor_report_base(
         "network_listener": False,
         "checks": checks,
         "next_steps": _next_steps(failed=failed, warnings=warnings),
+    }
+
+
+def _grant_counts(policy: ExecutionApprovalPolicy) -> dict[str, int]:
+    """Report grant readiness without revealing IDs or reviewed request data."""
+    store = policy.grant_store
+    grants = () if store is None else store.grants
+    revoked = frozenset() if store is None else store.revoked_ids
+    now = datetime.now(timezone.utc)
+    active = [
+        grant for grant in grants
+        if grant.bounded and not grant.revoked and grant.grant_id not in revoked
+        and (grant.expires_at is None or now < grant.expires_at.astimezone(timezone.utc))
+    ]
+    return {
+        "bounded_grants": sum(grant.bounded for grant in grants),
+        "active_bounded_grants": len(active),
+        "active_bounded_effect_grants": sum(bool(grant.scopes & {"write", "execute"}) for grant in active),
     }
 
 
@@ -302,6 +335,8 @@ def _next_steps(*, failed: list[dict[str, Any]], warnings: list[dict[str, Any]])
         steps.append("Configure narrow existing OEL_MCP_READ_ROOTS and OEL_MCP_WRITE_ROOTS.")
     if any(row["check_id"] == "operator_approvals" for row in warnings):
         steps.append("Configure purpose-specific approval IDs only when write, execute, or plugin trust is required.")
+    if any(row["check_id"] == "bounded_operation_ledger" for row in warnings):
+        steps.append("Configure a host-private OEL_MCP_OPERATION_LEDGER_ROOT outside authorized data roots for bounded effects.")
     if any(row["check_id"] == "pro_entitlements" for row in warnings):
         steps.append("Install and validate the required offline Pro license before using entitled tools.")
     return steps

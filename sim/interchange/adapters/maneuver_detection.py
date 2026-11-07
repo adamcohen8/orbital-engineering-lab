@@ -4,14 +4,22 @@ import hashlib
 import json
 import math
 import os
+import sqlite3
+import stat
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
+from sim.interchange.manifests import bind_output_path, write_json_document
 from sim.interchange.provenance import canonical_json_bytes, compute_product_id, sha256_file
 from sim.interchange.validation import validate_product
-from sim.review import ReviewWorkspace
+from sim.review import ReviewStoreNotFoundError, ReviewWorkspace
+from sim.security.input_reads import (
+    DEFAULT_MAX_READ_BYTES,
+    SecureReadChanged,
+    SecureReadError,
+)
 
 MANEUVER_DETECTION_ADAPTER_ID = "oel.maneuver_detection.review_export"
 MANEUVER_DETECTION_ADAPTER_VERSION = "1"
@@ -25,51 +33,114 @@ def export_maneuver_detection_product(
     completed_run: str | Path,
     *,
     output_path: str | Path,
+    logical_output_path: str | Path | None = None,
+    writer: Any | None = None,
+    protected: bool | None = None,
     event_id: str | None = None,
     observer_id: str | None = None,
     target_id: str | None = None,
+    export_created_utc: str | None = None,
     overwrite: bool = False,
 ) -> dict[str, Any]:
-    target = Path(output_path).expanduser().resolve()
-    target.parent.mkdir(parents=True, exist_ok=True)
-    product = build_maneuver_detection_product(
-        completed_run,
-        output_path=target,
-        event_id=event_id,
-        observer_id=observer_id,
-        target_id=target_id,
+    target, logical_target = bind_output_path(
+        output_path,
+        logical_output_path,
+        writer=writer,
     )
-    text = json.dumps(product, indent=2, sort_keys=True) + "\n"
-    if target.exists() and target.read_text(encoding="utf-8") != text and not overwrite:
-        raise ManeuverDetectionExportError(
-            "Output product exists with different content; pass overwrite=True explicitly to replace it."
+    workspace = ReviewWorkspace.open(completed_run, protected=protected)
+    try:
+        _require_checkpointed_source(workspace)
+        product, source_bindings = _build_maneuver_detection_product_from_workspace(
+            workspace,
+            output_path=target,
+            logical_output_path=logical_target,
+            writer=writer,
+            export_created_utc=export_created_utc,
+            event_id=event_id,
+            observer_id=observer_id,
+            target_id=target_id,
         )
-    target.write_text(text, encoding="utf-8")
-    report = validate_product(product, source_path=target)
-    return {
-        "status": "exported",
-        "product_path": str(target),
-        "product_id": product["product_id"],
-        "observer_id": product["payload"]["observer"]["object_id"],
-        "target_id": product["payload"]["target"]["object_id"],
-        "event_id": product["payload"]["detection"]["event_id"],
-        "valid": report.valid,
-        "promotable": report.promotable,
-        "execution_occurred": False,
-        "issues": [item.to_dict() for item in report.issues],
-    }
+        try:
+            write_json_document(product, target, writer=writer, overwrite=overwrite)
+        except FileExistsError as exc:
+            raise ManeuverDetectionExportError(
+                "Output product exists with different content; pass overwrite=True explicitly to replace it."
+            ) from exc
+        _assert_maneuver_source_bindings(workspace, source_bindings)
+        report = validate_product(
+            product,
+            source_path=logical_target,
+            source_digest_reader=_maneuver_source_digest_reader(workspace, source_bindings),
+        )
+        _assert_maneuver_source_bindings(workspace, source_bindings)
+        return {
+            "status": "exported",
+            "product_path": str(target),
+            "product_id": product["product_id"],
+            "observer_id": product["payload"]["observer"]["object_id"],
+            "target_id": product["payload"]["target"]["object_id"],
+            "event_id": product["payload"]["detection"]["event_id"],
+            "valid": report.valid,
+            "promotable": report.promotable,
+            "execution_occurred": False,
+            "issues": [item.to_dict() for item in report.issues],
+        }
+    finally:
+        workspace.close()
 
 
 def build_maneuver_detection_product(
     completed_run: str | Path,
     *,
     output_path: str | Path,
+    logical_output_path: str | Path | None = None,
+    writer: Any | None = None,
+    protected: bool | None = None,
     event_id: str | None = None,
     observer_id: str | None = None,
     target_id: str | None = None,
+    export_created_utc: str | None = None,
 ) -> dict[str, Any]:
-    target = Path(output_path).expanduser().resolve()
-    workspace = ReviewWorkspace.open(completed_run)
+    workspace = ReviewWorkspace.open(completed_run, protected=protected)
+    try:
+        _require_checkpointed_source(workspace)
+        product, _source_bindings = _build_maneuver_detection_product_from_workspace(
+            workspace,
+            output_path=output_path,
+            logical_output_path=logical_output_path,
+            writer=writer,
+            export_created_utc=export_created_utc,
+            event_id=event_id,
+            observer_id=observer_id,
+            target_id=target_id,
+        )
+        return product
+    finally:
+        workspace.close()
+
+
+def _build_maneuver_detection_product_from_workspace(
+    workspace: ReviewWorkspace,
+    *,
+    output_path: str | Path,
+    logical_output_path: str | Path | None,
+    writer: Any | None,
+    export_created_utc: str | None,
+    event_id: str | None,
+    observer_id: str | None,
+    target_id: str | None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    target, logical_target = bind_output_path(
+        output_path,
+        logical_output_path,
+        writer=writer,
+    )
+    try:
+        workspace.freeze_source()
+    except (ReviewStoreNotFoundError, SecureReadError, sqlite3.DatabaseError) as exc:
+        raise ManeuverDetectionExportError(
+            "Completed-run review evidence could not be bound to a stable source snapshot."
+        ) from exc
     metadata = _one(
         workspace.query(
             "SELECT run_id, scenario_name, oel_version, review_schema_version, generated_utc, "
@@ -82,9 +153,18 @@ def build_maneuver_detection_product(
     if not isinstance(config, dict):
         raise ManeuverDetectionExportError("Verified run config must contain a mapping.")
     summary_path = workspace.output_dir / "master_run_summary.json"
-    if not summary_path.is_file():
-        raise ManeuverDetectionExportError("Completed run has no master_run_summary.json.")
-    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary_bytes, summary_record = _read_output_file(
+        workspace,
+        "master_run_summary.json",
+        required=True,
+    )
+    assert summary_bytes is not None and summary_record is not None
+    try:
+        summary = json.loads(summary_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ManeuverDetectionExportError(
+            "Master run summary must be bounded UTF-8 JSON."
+        ) from exc
     if not isinstance(summary, dict):
         raise ManeuverDetectionExportError("Master run summary must contain a mapping.")
     event = _select_event(workspace, event_id=event_id, target_id=target_id)
@@ -99,23 +179,80 @@ def build_maneuver_detection_product(
     detection_epoch = (
         None if initial_epoch is None else initial_epoch + float(event["time_s"]) / 86400.0
     )
-    db_path = workspace.db_path
+    db_path = workspace.logical_db_path
+    db_record = workspace.source_db_record()
     source_artifacts = [
-        _artifact(db_path, target=target, artifact_id="completed_run_review_store"),
-        _artifact(summary_path, target=target, artifact_id="completed_run_summary"),
+        _artifact(
+            db_path,
+            target=logical_target,
+            artifact_id="completed_run_review_store",
+            record=db_record,
+        ),
+        _artifact(
+            summary_path,
+            target=logical_target,
+            artifact_id="completed_run_summary",
+            record=summary_record,
+        ),
+    ]
+    source_bindings: list[dict[str, Any]] = [
+        {"kind": "db", "path": db_path, "record": db_record, "required": True},
+        {
+            "kind": "output",
+            "name": "master_run_summary.json",
+            "path": summary_path,
+            "record": summary_record,
+            "required": True,
+        },
     ]
     run_log_path = workspace.output_dir / "master_run_log.json"
-    if run_log_path.is_file():
+    _run_log_bytes, run_log_record = _read_output_file(
+        workspace,
+        "master_run_log.json",
+        required=False,
+    )
+    source_bindings.append(
+        {
+            "kind": "output",
+            "name": "master_run_log.json",
+            "path": run_log_path,
+            "record": run_log_record,
+            "required": False,
+        }
+    )
+    if run_log_record is not None:
         source_artifacts.append(
-            _artifact(run_log_path, target=target, artifact_id="completed_run_log")
+            _artifact(
+                run_log_path,
+                target=logical_target,
+                artifact_id="completed_run_log",
+                record=run_log_record,
+            )
         )
-    if workspace.schema_path.is_file():
+    schema_record = workspace.source_schema_record()
+    if schema_record is not None:
         source_artifacts.append(
-            _artifact(workspace.schema_path, target=target, artifact_id="completed_run_review_schema")
+            _artifact(
+                workspace.schema_path,
+                target=logical_target,
+                artifact_id="completed_run_review_schema",
+                record=schema_record,
+            )
         )
-    created = _normalize_utc(metadata["generated_utc"])
-    summary_hash = sha256_file(summary_path)
+        source_bindings.append(
+            {"kind": "schema", "path": workspace.schema_path, "record": schema_record, "required": True}
+        )
+    source_generated_utc = _normalize_utc(metadata["generated_utc"])
+    created = _export_created_utc(export_created_utc)
+    summary_hash = str(summary_record["sha256"])
     event_hash = hashlib.sha256(canonical_json_bytes(event)).hexdigest()
+    warnings: list[str] = []
+    if source_generated_utc is None:
+        warnings.append(
+            "Source review provenance has no generated_utc; producer timestamp is unavailable and age freshness was not evaluated."
+        )
+    if detection_epoch is None:
+        warnings.append("Source run uses relative time; supply an explicit epoch for state continuation.")
     product: dict[str, Any] = {
         "schema_id": "oel-product-envelope-v1",
         "schema_version": 1,
@@ -158,7 +295,11 @@ def build_maneuver_detection_product(
         },
         "quality": {
             "disposition": "accepted",
-            "producer_status": "confirmed",
+            "producer_status": (
+                "confirmed"
+                if source_generated_utc is not None
+                else "confirmed_timestamp_unavailable"
+            ),
             "gates": {
                 "event_unambiguous": True,
                 "summary_confirmation_count_positive": int(
@@ -177,11 +318,7 @@ def build_maneuver_detection_product(
                     "adapter_version": MANEUVER_DETECTION_ADAPTER_VERSION,
                 },
             },
-            "warnings": (
-                []
-                if detection_epoch is not None
-                else ["Source run uses relative time; supply an explicit epoch for state continuation."]
-            ),
+            "warnings": warnings,
             "non_claims": [
                 "A confirmed innovation-consistency change does not identify maneuver intent.",
                 "The product does not estimate maneuver magnitude, direction, or probability.",
@@ -189,10 +326,17 @@ def build_maneuver_detection_product(
         },
         "freshness": {
             "integrity_status": "current",
-            "age_status": "not_applicable",
+            "age_status": "not_applicable" if source_generated_utc is not None else "not_evaluated",
             "reference_epoch_jd_utc": detection_epoch,
-            "evaluated_utc": created,
-            "policy": {"assessment": "content_bound_completed_run_detection"},
+            "evaluated_utc": created if source_generated_utc is not None else None,
+            "policy": {
+                "assessment": "content_bound_completed_run_detection",
+                **(
+                    {}
+                    if source_generated_utc is not None
+                    else {"reason": "source_generated_utc_unavailable"}
+                ),
+            },
         },
         "provenance": {
             "source_artifacts": source_artifacts,
@@ -211,14 +355,25 @@ def build_maneuver_detection_product(
         },
         "data_markings": _markings(config),
     }
+    try:
+        _assert_maneuver_source_bindings(workspace, source_bindings)
+    except (ReviewStoreNotFoundError, SecureReadChanged, SecureReadError) as exc:
+        raise ManeuverDetectionExportError(
+            "Completed-run evidence changed while the maneuver detection product was being built."
+        ) from exc
     product["product_id"] = compute_product_id(product)
-    report = validate_product(product, source_path=target)
+    report = validate_product(
+        product,
+        source_path=logical_target,
+        source_digest_reader=_maneuver_source_digest_reader(workspace, source_bindings),
+    )
     if not report.valid:
         messages = "; ".join(f"{item.path}: {item.message}" for item in report.errors)
         raise ManeuverDetectionExportError(
             f"Generated maneuver detection product failed validation: {messages}"
         )
-    return product
+    _assert_maneuver_source_bindings(workspace, source_bindings)
+    return product, source_bindings
 
 
 def _select_event(
@@ -303,6 +458,8 @@ def export_event_centered_observations(
     detection_product_path: str | Path,
     *,
     output_path: str | Path,
+    logical_output_path: str | Path | None = None,
+    writer: Any | None = None,
     pre_event_s: float = 30.0,
     post_event_s: float = 30.0,
     overwrite: bool = False,
@@ -393,14 +550,17 @@ def export_event_centered_observations(
             "velocity_sigma_policy": "sqrt_median_positive_ekf_measurement_variance",
         },
     )
-    target = Path(output_path).expanduser().resolve()
-    text = json.dumps(packet, indent=2, sort_keys=True) + "\n"
-    if target.exists() and target.read_text(encoding="utf-8") != text and not overwrite:
+    target, _logical_target = bind_output_path(
+        output_path,
+        logical_output_path,
+        writer=writer,
+    )
+    try:
+        write_json_document(packet, target, writer=writer, overwrite=overwrite)
+    except FileExistsError as exc:
         raise ManeuverDetectionExportError(
             "Observation output exists with different content; pass overwrite=True explicitly to replace it."
-        )
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(text, encoding="utf-8")
+        ) from exc
     return {
         "status": "exported",
         "observation_packet_path": str(target),
@@ -565,13 +725,246 @@ def _optional_epoch(config: Mapping[str, Any]) -> float | None:
     return epoch if math.isfinite(epoch) and epoch > 0.0 else None
 
 
-def _artifact(path: Path, *, target: Path, artifact_id: str) -> dict[str, Any]:
+def _require_checkpointed_source(workspace: ReviewWorkspace) -> None:
+    try:
+        live_wal = workspace.has_live_wal()
+    except (ReviewStoreNotFoundError, SecureReadError, OSError) as exc:
+        raise ManeuverDetectionExportError(
+            "Completed-run review evidence could not be inspected securely."
+        ) from exc
+    if live_wal:
+        raise ManeuverDetectionExportError(
+            "Maneuver detection export requires a checkpointed review store; "
+            "live SQLite WAL evidence must be checkpointed before handoff."
+        )
+
+
+def _read_output_file(
+    workspace: ReviewWorkspace,
+    name: str,
+    *,
+    required: bool,
+) -> tuple[bytes | None, dict[str, int | str] | None]:
+    """Read one run artifact through the retained source directory handle."""
+
+    path = workspace.output_dir / name
+    reader = workspace.source_output_reader
+    if reader is not None:
+        try:
+            before = dict(reader.file_record(name, max_bytes=DEFAULT_MAX_READ_BYTES))
+        except (FileNotFoundError, NotADirectoryError):
+            before = None
+        if before is None:
+            _assert_output_missing_stable(workspace, name)
+            if required:
+                raise ManeuverDetectionExportError(f"Completed run has no {name}.")
+            return None, None
+        try:
+            payload = reader.read_bytes(name, max_bytes=DEFAULT_MAX_READ_BYTES)
+            after = dict(reader.file_record(name, max_bytes=DEFAULT_MAX_READ_BYTES))
+        except (FileNotFoundError, NotADirectoryError, SecureReadError) as exc:
+            raise ManeuverDetectionExportError(f"Completed run artifact {name} could not be read securely.") from exc
+    else:
+        if getattr(workspace, "_protected", False):
+            raise ManeuverDetectionExportError(
+                "Protected maneuver detection export requires a retained output directory descriptor."
+            )
+        before = _legacy_file_record(path, max_bytes=DEFAULT_MAX_READ_BYTES, optional=True)
+        if before is None:
+            _assert_output_missing_stable(workspace, name)
+            if required:
+                raise ManeuverDetectionExportError(f"Completed run has no {name}.")
+            return None, None
+        try:
+            payload = path.read_bytes()
+        except OSError as exc:
+            raise ManeuverDetectionExportError(f"Completed run artifact {name} could not be read.") from exc
+        after = _legacy_file_record(path, max_bytes=DEFAULT_MAX_READ_BYTES, optional=False)
+
+    assert after is not None
+    digest = hashlib.sha256(payload).hexdigest()
+    if (
+        before != after
+        or int(after.get("bytes", -1)) != len(payload)
+        or str(after.get("sha256", "")) != digest
+    ):
+        raise ManeuverDetectionExportError(
+            f"Completed run artifact {name} changed while it was being read."
+        )
+    return payload, after
+
+
+def _assert_output_missing_stable(workspace: ReviewWorkspace, name: str) -> None:
+    """Ensure an optional output did not appear between two descriptor reads."""
+
+    reader = workspace.source_output_reader
+    if reader is not None:
+        try:
+            reader.file_record(name, max_bytes=DEFAULT_MAX_READ_BYTES)
+        except (FileNotFoundError, NotADirectoryError):
+            return
+        raise SecureReadChanged(f"Completed run artifact appeared during its evidence read: {name}")
+    if getattr(workspace, "_protected", False):
+        raise ManeuverDetectionExportError(
+            "Protected maneuver detection export requires a retained output directory descriptor."
+        )
+    if _legacy_file_record(workspace.output_dir / name, max_bytes=DEFAULT_MAX_READ_BYTES, optional=True) is not None:
+        raise SecureReadChanged(f"Completed run artifact appeared during its evidence read: {name}")
+
+
+def _legacy_file_record(
+    path: Path,
+    *,
+    max_bytes: int,
+    optional: bool,
+) -> dict[str, int | str] | None:
+    try:
+        if path.is_symlink():
+            raise SecureReadError(f"Legacy maneuver source must not be a symbolic link: {path}")
+        before = path.stat()
+    except FileNotFoundError:
+        if optional:
+            return None
+        raise
+    if not stat.S_ISREG(before.st_mode):
+        raise SecureReadError(f"Legacy maneuver source must be a regular file: {path}")
+    if int(before.st_size) > int(max_bytes):
+        raise SecureReadError(
+            f"Legacy maneuver source exceeds the {int(max_bytes)}-byte read budget: {path}"
+        )
+    digest = hashlib.sha256()
+    size = 0
+    with path.open("rb") as stream:
+        while True:
+            chunk = stream.read(1024 * 1024)
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > int(max_bytes):
+                raise SecureReadError(
+                    f"Legacy maneuver source exceeds the {int(max_bytes)}-byte read budget: {path}"
+                )
+            digest.update(chunk)
+    after = path.stat()
+    if (
+        (
+            int(before.st_dev),
+            int(before.st_ino),
+            int(before.st_size),
+            int(before.st_mtime_ns),
+            int(before.st_ctime_ns),
+            int(before.st_nlink),
+        )
+        != (
+            int(after.st_dev),
+            int(after.st_ino),
+            int(after.st_size),
+            int(after.st_mtime_ns),
+            int(after.st_ctime_ns),
+            int(after.st_nlink),
+        )
+        or size != int(after.st_size)
+    ):
+        raise SecureReadChanged(f"Legacy maneuver source changed during its evidence read: {path}")
+    return {
+        "bytes": int(size),
+        "sha256": digest.hexdigest(),
+        "st_dev": int(after.st_dev),
+        "st_ino": int(after.st_ino),
+        "mtime_ns": int(after.st_mtime_ns),
+        "ctime_ns": int(after.st_ctime_ns),
+        "nlink": int(after.st_nlink),
+    }
+
+
+def _current_maneuver_binding_record(
+    workspace: ReviewWorkspace,
+    binding: Mapping[str, Any],
+) -> dict[str, int | str] | None:
+    kind = str(binding.get("kind", ""))
+    if kind == "db":
+        return workspace.source_db_record()
+    if kind == "schema":
+        return workspace.source_schema_record()
+    if kind == "output":
+        name = str(binding.get("name", ""))
+        _payload, record = _read_output_file(
+            workspace,
+            name,
+            required=bool(binding.get("required", True)),
+        )
+        return record
+    raise ManeuverDetectionExportError(f"Unknown retained maneuver source binding kind: {kind!r}")
+
+
+def _assert_maneuver_source_bindings(
+    workspace: ReviewWorkspace,
+    bindings: list[Mapping[str, Any]],
+) -> None:
+    try:
+        workspace.assert_source_unchanged()
+        for binding in bindings:
+            expected = binding.get("record")
+            current = _current_maneuver_binding_record(workspace, binding)
+            if expected != current:
+                raise SecureReadChanged(
+                    f"Maneuver source changed: {binding.get('path', '<unknown>')}"
+                )
+    except (ReviewStoreNotFoundError, SecureReadChanged, SecureReadError, OSError) as exc:
+        raise ManeuverDetectionExportError(
+            "Completed-run evidence changed while the maneuver detection product was being built."
+        ) from exc
+
+
+def _maneuver_source_digest_reader(
+    workspace: ReviewWorkspace,
+    bindings: list[Mapping[str, Any]],
+):
+    by_path = {
+        _absolute_lexical(Path(binding["path"])): binding
+        for binding in bindings
+    }
+
+    def read(candidate: Path) -> str | None:
+        try:
+            workspace.assert_source_unchanged()
+            binding = by_path.get(_absolute_lexical(candidate))
+            if binding is None:
+                return None
+            current = _current_maneuver_binding_record(workspace, binding)
+            expected = binding.get("record")
+            if expected != current:
+                raise SecureReadChanged(
+                    f"Maneuver source changed: {binding.get('path', '<unknown>')}"
+                )
+            if current is None:
+                return None
+            return str(current["sha256"])
+        except (ReviewStoreNotFoundError, SecureReadChanged, SecureReadError, OSError) as exc:
+            raise ManeuverDetectionExportError(
+                "Retained maneuver source verification failed."
+            ) from exc
+
+    return read
+
+
+def _absolute_lexical(path: Path) -> Path:
+    return Path(os.path.abspath(os.fspath(path)))
+
+
+def _artifact(
+    path: Path,
+    *,
+    target: Path,
+    artifact_id: str,
+    record: Mapping[str, Any],
+) -> dict[str, Any]:
     return {
         "artifact_id": artifact_id,
-        "sha256": sha256_file(path),
+        "sha256": str(record["sha256"]),
         "path": os.path.relpath(path, start=target.parent),
         "media_type": "application/vnd.sqlite3" if path.suffix == ".sqlite" else "application/json",
-        "size_bytes": path.stat().st_size,
+        "size_bytes": int(record["bytes"]),
     }
 
 
@@ -581,17 +974,34 @@ def _one(rows: list[dict[str, Any]], label: str) -> dict[str, Any]:
     return dict(rows[0])
 
 
-def _normalize_utc(value: Any) -> str:
-    text = str(value or "").strip() or "1970-01-01T00:00:00Z"
-    if text.endswith("Z"):
-        return text
+def _export_created_utc(value: str | None) -> str:
+    """Return the actual product export time, unless a test override is supplied."""
+
+    if value is None:
+        return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    normalized = _normalize_utc(value, label="export_created_utc", allow_missing=False)
+    assert normalized is not None
+    return normalized
+
+
+def _normalize_utc(
+    value: Any,
+    *,
+    label: str = "generated_utc",
+    allow_missing: bool = True,
+) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        if allow_missing:
+            return None
+        raise ManeuverDetectionExportError(f"Maneuver detection provenance has no {label}.")
     try:
-        parsed = datetime.fromisoformat(text)
-    except ValueError:
-        return text
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ManeuverDetectionExportError(f"{label} is invalid.") from exc
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    return parsed.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _markings(config: Mapping[str, Any]) -> dict[str, Any]:

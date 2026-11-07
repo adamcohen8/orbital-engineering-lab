@@ -7,7 +7,7 @@
   "required": ["schema_version", "status", "version", "edition", "channel", "installed_at", "transaction_id", "release_manifest_sha256", "release_artifact", "source", "installed_tree_manifest", "runtime", "profile", "platform", "effects"],
   "properties": {
     "schema_version": {"const": "oel.installation-record.v1"},
-    "status": {"enum": ["official", "developer", "incomplete"]},
+    "status": {"enum": ["official", "developer", "modified", "untrusted", "incomplete"]},
     "version": {"type": "string"},
     "edition": {"enum": ["public", "pro"]},
     "channel": {"enum": ["stable", "preview"]},
@@ -20,6 +20,7 @@
     "runtime": {"type": "object"},
     "profile": {"type": "string"},
     "platform": {"type": "object"},
-    "effects": {"type": "object"}
+    "effects": {"type": "object"},
+    "provenance": {"type": "object"}
   }
 }

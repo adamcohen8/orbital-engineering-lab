@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import platform
+import stat
 import subprocess
 import sys
 import time
@@ -15,6 +16,33 @@ try:
     import resource as _resource
 except ImportError:  # Windows does not provide the Unix ``resource`` module.
     _resource = None  # type: ignore[assignment]
+
+
+def canonicalize_platform_compatibility_root(path: Path) -> Path:
+    """Expand only immutable macOS compatibility roots before no-follow traversal.
+
+    macOS exposes ``/tmp`` and ``/var`` as root-owned compatibility symlinks
+    into ``/private``. Rejecting those two platform aliases makes ordinary
+    ``tempfile`` paths unusable, while resolving the complete caller path would
+    silently follow untrusted descendant symlinks. Rewrite only the known
+    system root and leave every remaining component for descriptor-anchored
+    ``O_NOFOLLOW`` traversal.
+    """
+
+    if sys.platform != "darwin" or len(path.parts) < 2:
+        return path
+    alias = Path(os.sep) / path.parts[1]
+    expected = {Path("/tmp"): Path("/private/tmp"), Path("/var"): Path("/private/var")}.get(alias)
+    if expected is None:
+        return path
+    try:
+        metadata = os.lstat(alias)
+        resolved = Path(os.path.realpath(alias))
+    except OSError:
+        return path
+    if not stat.S_ISLNK(metadata.st_mode) or metadata.st_uid != 0 or resolved != expected:
+        return path
+    return expected.joinpath(*path.parts[2:])
 
 
 def open_folder(
@@ -159,6 +187,7 @@ def _macos_available_memory_bytes() -> int | None:
 
 __all__ = [
     "available_memory_bytes",
+    "canonicalize_platform_compatibility_root",
     "max_rss_bytes",
     "max_rss_mb",
     "open_folder",

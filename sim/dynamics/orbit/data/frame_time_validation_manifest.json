@@ -13,7 +13,7 @@
     {
       "path": "frame_time_orekit_13_1_7_acceptance.json",
       "role": "retained independent implementation acceptance evidence",
-      "sha256": "aa500405aa0fe1903d1a0044141142096a82820fb1106fa2d2676acfc4389a3b"
+      "sha256": "ca3e5229befb72e9a1c125266a9dcafb22e7094a12216282ac2d8b4fee107bce"
     },
     {
       "path": "../../../../tools/external_reference/OrekitFrameTimeAcceptance.java",
@@ -33,7 +33,7 @@
     {
       "path": "../eop.py",
       "role": "authoritative Earth-orientation input implementation owner",
-      "sha256": "22ae999f97cc1d4c93c4d1c5d033cecabe9317fe2fda6faa5e56f5ea9043d261"
+      "sha256": "fbb16399448359132de851110de886036d42cc08b875fc7a1338f7227d827645"
     },
     {
       "path": "../../../frame_time.py",
@@ -56,7 +56,7 @@
   ],
   "capability": "Canonical UTC/TAI/TT/sampled-UT1 and EME2000/TEME/GCRF/ITRF transformations",
   "claim": "OEL's bounded IAU-76/FK5 + IAU-80 and IAU 2006/2000A frame/time contracts preserve leap-second semantics and agree with pinned Orekit 13.1.7 inside frozen state, Jacobian, and covariance-transform envelopes.",
-  "generated_utc": "2026-08-29T17:34:08Z",
+  "generated_utc": "2026-11-01T04:18:23Z",
   "non_claims": [
     "The contract ingests and audits Earth-orientation parameters but does not predict them or certify their accuracy.",
     "The frozen comparison covers one epoch and does not establish long-horizon interpolation accuracy.",

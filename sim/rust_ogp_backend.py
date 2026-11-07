@@ -3,12 +3,56 @@
 from __future__ import annotations
 
 import os
+from importlib import import_module
 from numbers import Integral
 
 import numpy as np
 
 from sim.dynamics.orbit.tle import TLEElements
-from sim.rust_orbit_backend import _extension
+
+_FULL_LOADER_FAILURE_MARKER = "Rust orbit backend requested but oel_rust_orbit is unavailable"
+
+
+def _is_full_loader_failure(error: RuntimeError) -> bool:
+    return _FULL_LOADER_FAILURE_MARKER in str(error) or isinstance(error.__cause__, ImportError)
+
+
+def _ogp_only_extension(full_error: BaseException | None = None):
+    """Load the public OGP-only wheel after a recognized full-wheel failure."""
+    try:
+        return import_module("oel_rust_ogp")
+    except ImportError as standalone_error:
+        detail = (
+            "Rust OGP requires the optional oel_rust_ogp wheel; a compatible "
+            "oel_rust_orbit wheel is also supported; "
+            "see docs/ogp-parallelism.md for the public source build."
+        )
+        if full_error is not None:
+            detail += f" Full-wheel compatibility failure: {full_error}."
+        detail += f" OGP-only wheel import failure: {standalone_error}."
+        raise RuntimeError(detail) from standalone_error
+
+
+def _extension():
+    """Use the full compatible native wheel or the public OGP-only build."""
+    try:
+        import_module("oel_rust_orbit")
+    except ImportError as full_error:
+        return _ogp_only_extension(full_error)
+    from sim.rust_orbit_backend import _extension as orbit_extension
+
+    try:
+        native = orbit_extension()
+    except RuntimeError as full_error:
+        # A package can import successfully while its compiled child is an
+        # older/incompatible wheel. Only catch the orbit loader's explicit
+        # availability/compatibility failure; propagation errors must surface.
+        if not _is_full_loader_failure(full_error):
+            raise
+        return _ogp_only_extension(full_error)
+    if getattr(native, "OGPContext", None) is not None:
+        return native
+    return _ogp_only_extension(RuntimeError("full oel_rust_orbit wheel does not expose OGPContext"))
 
 
 def _numeric_elements(elements: TLEElements) -> list[float]:

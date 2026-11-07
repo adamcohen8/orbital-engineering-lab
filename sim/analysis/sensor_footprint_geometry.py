@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from sim.analysis.observer_target_geometry import _validate_wgs84_surface_targets
 from sim.utils.geodesy import WGS84_A_KM, WGS84_B_KM
 
 SUPPORTED_HARD_FOV_KINDS = frozenset(
@@ -186,6 +187,7 @@ def evaluate_rich_surface_targets_ecef(
     normal_norms = np.linalg.norm(normals, axis=1)
     if np.any(np.abs(normal_norms - 1.0) > 1.0e-10):
         raise ValueError("Target outward normals must be unit vectors within 1e-10.")
+    _validate_wgs84_surface_targets(targets, normals)
     if max_range_km is not None and (
         not np.isfinite(float(max_range_km)) or float(max_range_km) <= 0.0
     ):
@@ -198,7 +200,9 @@ def evaluate_rich_surface_targets_ecef(
     direction_sensor = direction_ecef @ rotation.T
     horizontal = np.arctan2(direction_sensor[:, 0], direction_sensor[:, 2])
     vertical = np.arctan2(direction_sensor[:, 1], direction_sensor[:, 2])
-    off_axis = np.arccos(np.clip(direction_sensor[:, 2], -1.0, 1.0))
+    # atan2 remains conditioned at boresight; acos turns one-bit dot-product
+    # noise into a spurious microradian angle for an exactly tracked target.
+    off_axis = np.arctan2(np.hypot(direction_sensor[:, 0], direction_sensor[:, 1]), direction_sensor[:, 2])
     if pattern.kind == "axisymmetric_hard_cone":
         inside_pattern = off_axis <= pattern.x_half_angle_rad + tolerance
     else:

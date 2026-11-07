@@ -6,7 +6,8 @@ import hashlib
 import json
 import math
 import os
-from dataclasses import asdict, dataclass
+import shutil
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,7 @@ from sim.plotting.animation_quality import (
 from sim.plotting.style import artifact_metadata, oel_plot_context
 from sim.review.animation_planning import ReviewAnimationSpec, review_animation_frame_plan
 from sim.review.animation_recipes import ReviewAnimationRecipe
+from sim.review.plotting import _lexical_relative_path, _logical_artifact_path
 from sim.review.workspace import ReviewQueryResult, ReviewWorkspace
 from sim.runtime_environment import configure_headless_runtime
 from sim.utils.figure_size import cap_figsize
@@ -38,6 +40,11 @@ class ReviewAnimationArtifact:
     truncated: bool
     spec: ReviewAnimationSpec
     qa: dict[str, Any]
+    # ``path`` and companion paths remain physical staging paths for encoder
+    # QA and cleanup.  Logical paths are persisted in receipts and manifests.
+    logical_path: Path | None = None
+    logical_contact_sheet_path: Path | None = None
+    logical_quality_receipt_path: Path | None = None
 
 
 def render_review_animation_artifact(
@@ -48,11 +55,62 @@ def render_review_animation_artifact(
     *,
     path: str | Path,
     record: bool = True,
+    writer: Any | None = None,
+    logical_output_dir: str | Path | None = None,
+    _staging_call: bool = False,
 ) -> ReviewAnimationArtifact:
     if recipe.renderer_id != "ric_rectangular_2d":
         raise ValueError(f"Unsupported review animation renderer_id '{recipe.renderer_id}'.")
+    active_writer = writer or _current_output_writer()
+    if writer is None and active_writer is not None and not _staging_call:
+        logical_target = Path(path)
+        logical_contact_sheet = logical_target.with_suffix(".contact-sheet.png")
+        logical_quality_receipt = logical_target.with_suffix(".quality.json")
+        from sim.security.output_writes import staged_output_file
+
+        with staged_output_file(logical_target) as staged_target:
+            artifact = render_review_animation_artifact(
+                workspace,
+                recipe,
+                result,
+                spec,
+                path=staged_target,
+                record=False,
+                logical_output_dir=logical_target.parent,
+                _staging_call=True,
+            )
+            with staged_output_file(logical_contact_sheet) as staged_contact_sheet:
+                shutil.copyfile(artifact.contact_sheet_path, staged_contact_sheet)
+            with staged_output_file(logical_quality_receipt) as staged_quality_receipt:
+                shutil.copyfile(artifact.quality_receipt_path, staged_quality_receipt)
+        artifact = replace(
+            artifact,
+            path=logical_target,
+            relative_path=_relative_to_output(workspace, logical_target),
+            contact_sheet_path=logical_contact_sheet,
+            quality_receipt_path=logical_quality_receipt,
+            logical_path=logical_target,
+            logical_contact_sheet_path=logical_contact_sheet,
+            logical_quality_receipt_path=logical_quality_receipt,
+        )
+        if record:
+            record_generated_animation(
+                workspace,
+                artifact,
+                recipe=recipe,
+                writer=active_writer,
+                logical_output_dir=Path(active_writer.logical_root),
+            )
+        return artifact
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
+    logical_target = _logical_artifact_path(
+        target,
+        writer=writer,
+        logical_output_dir=logical_output_dir,
+    )
+    logical_contact_sheet = logical_target.with_suffix(".contact-sheet.png")
+    logical_quality_receipt = logical_target.with_suffix(".quality.json")
     frame_plan = review_animation_frame_plan(result, spec)
     frame_times = np.asarray(frame_plan["frame_times_s"], dtype=float)
     if frame_times.size < 2:
@@ -202,6 +260,8 @@ def render_review_animation_artifact(
                 format_limits=format_limits,
                 key_frame_indices=_extrema_frame_indices(grouped, frame_times),
                 source=source,
+                logical_contact_sheet_path=logical_contact_sheet,
+                logical_quality_receipt_path=logical_quality_receipt,
             )
         finally:
             plt.close(fig)
@@ -209,16 +269,25 @@ def render_review_animation_artifact(
     artifact = ReviewAnimationArtifact(
         artifact_id=artifact_id,
         path=target,
-        relative_path=_relative_to_output(workspace, target),
+        relative_path=_relative_to_output(workspace, logical_target),
         contact_sheet_path=target.with_suffix(".contact-sheet.png"),
         quality_receipt_path=target.with_suffix(".quality.json"),
         row_count=result.row_count,
         truncated=result.truncated,
         spec=spec,
         qa=report.to_dict(),
+        logical_path=logical_target,
+        logical_contact_sheet_path=logical_contact_sheet,
+        logical_quality_receipt_path=logical_quality_receipt,
     )
     if record:
-        record_generated_animation(workspace, artifact, recipe=recipe)
+        record_generated_animation(
+            workspace,
+            artifact,
+            recipe=recipe,
+            writer=writer,
+            logical_output_dir=logical_output_dir,
+        )
     return artifact
 
 
@@ -228,20 +297,46 @@ def record_generated_animation(
     *,
     recipe: ReviewAnimationRecipe,
     review_store_identity: dict[str, Any] | None = None,
+    writer: Any | None = None,
+    logical_output_dir: str | Path | None = None,
 ) -> None:
+    writer = writer or _current_output_writer()
     index_path = workspace.review_dir / "generated_artifacts.json"
-    if index_path.is_file():
-        payload = json.loads(index_path.read_text(encoding="utf-8"))
-        existing = list(payload.get("artifacts", []) or []) if isinstance(payload, dict) else []
+    index_relative: Path | None = None
+    if writer is not None:
+        logical_root = Path(logical_output_dir) if logical_output_dir is not None else Path(writer.logical_root)
+        index_relative = _lexical_relative_path(index_path, logical_root)
+        if index_relative is None:
+            raise ValueError("A protected generated-artifact index must be below the logical output root.")
+        try:
+            # Keep the merge on the writer-owned inode even if the visible
+            # output directory is replaced during the operation.
+            writer.file_record(index_relative)
+            payload = json.loads(writer.read_bytes(index_relative).decode("utf-8"))
+            existing = list(payload.get("artifacts", []) or []) if isinstance(payload, dict) else []
+        except FileNotFoundError:
+            existing = []
+        except Exception:
+            existing = []
     else:
-        existing = []
+        if index_path.is_file():
+            payload = json.loads(index_path.read_text(encoding="utf-8"))
+            existing = list(payload.get("artifacts", []) or []) if isinstance(payload, dict) else []
+        else:
+            existing = []
     existing.append(
         {
             "artifact_id": artifact.artifact_id,
             "artifact_type": "animation",
             "path": artifact.relative_path,
-            "contact_sheet_path": _relative_to_output(workspace, artifact.contact_sheet_path),
-            "quality_receipt_path": _relative_to_output(workspace, artifact.quality_receipt_path),
+            "contact_sheet_path": _relative_to_output(
+                workspace,
+                artifact.logical_contact_sheet_path or artifact.contact_sheet_path,
+            ),
+            "quality_receipt_path": _relative_to_output(
+                workspace,
+                artifact.logical_quality_receipt_path or artifact.quality_receipt_path,
+            ),
             "created_utc": os.environ.get("OEL_GENERATED_UTC", "").strip()
             or datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
             "source": str(dict(artifact.spec.extra or {}).get("source", "oel_review_animation_api")),
@@ -261,7 +356,15 @@ def record_generated_animation(
             "spec": asdict(artifact.spec),
         }
     )
-    index_path.write_text(json.dumps({"artifacts": existing}, indent=2) + "\n", encoding="utf-8")
+    encoded = (json.dumps({"artifacts": existing}, indent=2) + "\n").encode("utf-8")
+    if writer is None:
+        index_path.write_bytes(encoded)
+    else:
+        assert index_relative is not None
+        try:
+            writer.write_bytes(index_relative, encoded)
+        except FileExistsError:
+            writer.update_existing_bytes(index_relative, encoded)
 
 
 def _group_ric_evidence(result: ReviewQueryResult) -> dict[str, np.ndarray]:
@@ -374,6 +477,14 @@ def _relative_to_output(workspace: ReviewWorkspace, path: Path) -> str:
         return str(path.resolve().relative_to(workspace.output_dir.resolve()))
     except ValueError:
         return str(path.resolve())
+
+
+def _current_output_writer() -> Any | None:
+    try:
+        from sim.security.output_writes import current_output_writer
+    except ImportError:
+        return None
+    return current_output_writer()
 
 
 __all__ = ["ReviewAnimationArtifact", "record_generated_animation", "render_review_animation_artifact"]

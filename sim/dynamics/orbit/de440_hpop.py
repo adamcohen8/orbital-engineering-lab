@@ -37,16 +37,12 @@ def _resource_signature(path_value: str | Path) -> tuple:
     """Return a file identity used to invalidate loaded DE440 resources."""
     path = _resolve_path(path_value)
     try:
-        stat = path.stat()
+        from sim.utils.file_version import file_version
+
+        version = file_version(path)
     except OSError:
         return (str(path), None)
-    return (
-        str(path),
-        int(stat.st_ino),
-        int(stat.st_size),
-        int(stat.st_mtime_ns),
-        int(stat.st_ctime_ns),
-    )
+    return (str(path), *version)
 
 
 @lru_cache(maxsize=1)

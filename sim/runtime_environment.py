@@ -37,7 +37,12 @@ def configure_runtime_caches(
         "XDG_CACHE_HOME": str(root / "cache"),
     }
     for name, value in defaults.items():
-        os.environ.setdefault(name, value)
+        # ``setdefault`` preserves an explicitly empty variable, which
+        # Matplotlib interprets as the current directory.  That can put
+        # generated font/config caches into a source checkout or an
+        # otherwise unwritable working directory.
+        if not os.environ.get(name, "").strip():
+            os.environ[name] = value
 
     errors: list[str] = []
     for name in ("MPLCONFIGDIR", "XDG_CACHE_HOME"):

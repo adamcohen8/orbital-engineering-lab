@@ -18,11 +18,17 @@ software or an operational decision system.
 
 ![Flagship run dashboard](docs/assets/plots/run_dashboard.png)
 
+
 ## Install And Run
 
 OEL supports Python 3.10 through 3.14. Python 3.14 is recommended. Official
 public releases provide signed managed installers that keep immutable OEL
 engines separate from user-owned projects and workspaces.
+
+The **v0.36.0 managed bundle targets macOS arm64 with CPython 3.11**.
+Linux, Windows, and Intel Mac users should follow
+[Source Installation For Contributors](#source-installation-for-contributors).
+The broader engine Python range does not qualify this bundle for other hosts.
 
 Inspect the small installer before running it.
 
@@ -67,7 +73,7 @@ workspace adoption, rollback, offline installation, and troubleshooting.
 The public checkout includes the Rust implementations and build inputs for both
 required native packages. Follow [building native source](docs/native-source-build.md)
 before installing OEL from source. Install the Rust toolchain before running
-the native build commands below.
+the native build commands below. Use Rust/Cargo 1.85 or newer.
 
 Cloning the repository remains the contributor workflow and manual fallback.
 It is not required for the managed installation above. See
@@ -86,7 +92,7 @@ py -3.14 -m venv .venv
 .\.venv\Scripts\python.exe -m maturin build --release --locked --manifest-path rust/oel-orbit/Cargo.toml --interpreter .\.venv\Scripts\python.exe --out dist/native
 .\.venv\Scripts\python.exe -m maturin build --release --locked --manifest-path rust/oel-game/Cargo.toml --interpreter .\.venv\Scripts\python.exe --out dist/native
 .\.venv\Scripts\python.exe -m pip install --no-index --find-links dist/native "oel-rust-orbit>=0.18.3,<0.19" "oel-rust-game>=0.5,<0.6"
-.\.venv\Scripts\python.exe -m pip install ".[dev]"
+.\.venv\Scripts\python.exe -m pip install -c constraints\py314.txt --find-links dist/native ".[dev]"
 .\.venv\Scripts\python.exe run_simulation.py --doctor
 .\.venv\Scripts\python.exe run_simulation.py --quickstart
 ```
@@ -102,7 +108,7 @@ python3.14 -m venv .venv
 .venv/bin/python -m maturin build --release --locked --manifest-path rust/oel-orbit/Cargo.toml --interpreter .venv/bin/python --out dist/native
 .venv/bin/python -m maturin build --release --locked --manifest-path rust/oel-game/Cargo.toml --interpreter .venv/bin/python --out dist/native
 .venv/bin/python -m pip install --no-index --find-links dist/native "oel-rust-orbit>=0.18.3,<0.19" "oel-rust-game>=0.5,<0.6"
-.venv/bin/python -m pip install ".[dev]"
+.venv/bin/python -m pip install -c constraints/py314.txt --find-links dist/native ".[dev]"
 .venv/bin/python run_simulation.py --doctor
 .venv/bin/python run_simulation.py --quickstart
 ```
@@ -345,7 +351,7 @@ analysis at scale: controller benchmarks, general optimization and gain tuning,
 Monte Carlo and sensitivity campaigns, curated validation packs, AI-assisted
 reports, custom GNC workbench scaffolding, and program-specific integrations.
 The private FSWDK adds Controller Bench, tuning, qualification, baseline
-promotion, packaged evidence, external-process candidates, and cFS/SIL.
+promotion, packaged evidence, mission-specific external integrations, and cFS/SIL.
 
 See [Public Core And Pro Boundary](docs/public-vs-pro.md) for the product and
 repository boundary. Public examples do not require hosted AI accounts or API

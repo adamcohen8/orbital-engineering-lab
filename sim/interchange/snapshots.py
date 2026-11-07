@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from sim.interchange.completed_runs import build_completed_run_state_product
+from sim.interchange.manifests import bind_output_path, write_json_document
 from sim.interchange.materialization import (
+    _ensure_distinct_materialization_paths,
     _manifest_base,
     _onp_cadence_override,
     _onp_compatibility_errors,
@@ -28,6 +29,10 @@ def export_completed_run_snapshot(
     completed_run: str | Path,
     *,
     output_path: str | Path,
+    logical_output_path: str | Path | None = None,
+    writer: Any | None = None,
+    export_created_utc: str | None = None,
+    protected: bool | None = None,
     object_ids: Sequence[str],
     selector: str = "final",
     sample_index: int | None = None,
@@ -36,12 +41,16 @@ def export_completed_run_snapshot(
     epoch_jd_utc: float | None = None,
     overwrite: bool = False,
 ) -> dict[str, Any]:
-    target = Path(output_path).expanduser().resolve()
-    target.parent.mkdir(parents=True, exist_ok=True)
+    target, logical_target = bind_output_path(
+        output_path,
+        logical_output_path,
+        writer=writer,
+    )
     ids = [str(item).strip() for item in object_ids]
     if len(ids) < 2 or any(not item for item in ids) or len(set(ids)) != len(ids):
         raise CompletedRunSnapshotError("object_ids must contain at least two unique non-empty IDs.")
-    workspace = ReviewWorkspace.open(completed_run)
+    workspace = ReviewWorkspace.open(completed_run, protected=protected)
+    workspace.freeze_source()
     event: dict[str, Any] | None = None
     effective_selector = selector
     effective_sample_index = sample_index
@@ -65,6 +74,10 @@ def export_completed_run_snapshot(
         build_completed_run_state_product(
             completed_run,
             output_path=target,
+            logical_output_path=logical_target,
+            writer=writer,
+            export_created_utc=export_created_utc,
+            protected=protected,
             object_id=object_id,
             selector=effective_selector,
             sample_index=effective_sample_index,
@@ -191,16 +204,16 @@ def export_completed_run_snapshot(
         }
     ]
     product["product_id"] = compute_product_id(product)
-    report = validate_product(product, source_path=target)
+    report = validate_product(product, source_path=logical_target)
     if not report.valid:
         messages = "; ".join(f"{item.path}: {item.message}" for item in report.errors)
         raise CompletedRunSnapshotError(f"Generated snapshot failed validation: {messages}")
-    text = json.dumps(product, indent=2, sort_keys=True) + "\n"
-    if target.exists() and target.read_text(encoding="utf-8") != text and not overwrite:
+    try:
+        write_json_document(product, target, writer=writer, overwrite=overwrite)
+    except FileExistsError as exc:
         raise CompletedRunSnapshotError(
             "Snapshot output exists with different content; pass overwrite=True explicitly to replace it."
-        )
-    target.write_text(text, encoding="utf-8")
+        ) from exc
     return {
         "status": "exported",
         "product_path": str(target),
@@ -221,11 +234,35 @@ def materialize_snapshot_onp(
     output_dir: str | Path,
     duration_s: float,
     dt_s: float,
+    logical_scenario_path: str | Path | None = None,
+    logical_manifest_path: str | Path | None = None,
+    logical_output_dir: str | Path | None = None,
+    validation_path_policy: Any | None = None,
     trust_plugins: bool = False,
     overwrite: bool = False,
 ) -> dict[str, Any]:
     source = Path(snapshot_product).expanduser().resolve()
     destination = Path(scenario_path).expanduser().resolve()
+    logical_destination = (
+        Path(logical_scenario_path).expanduser().resolve()
+        if logical_scenario_path is not None
+        else destination
+    )
+    logical_manifest_target = (
+        Path(logical_manifest_path).expanduser().resolve()
+        if logical_manifest_path is not None
+        else logical_destination.with_name(f"{logical_destination.stem}.handoff_manifest.json")
+    )
+    logical_output = (
+        Path(logical_output_dir).expanduser().resolve()
+        if logical_output_dir is not None
+        else Path(output_dir).expanduser().resolve()
+    )
+    manifest_target = destination.with_name(f"{destination.stem}.handoff_manifest.json")
+    _ensure_distinct_materialization_paths(
+        (("source product", source), ("scenario", destination), ("manifest", manifest_target)),
+        CompletedRunSnapshotError,
+    )
     product = load_interchange_document(source)
     report = validate_product(product, source_path=source)
     if product.get("product_kind") != "oel.completed_run_snapshot" or not report.promotable:
@@ -250,10 +287,10 @@ def materialize_snapshot_onp(
     scenario = build_onp_scenario(
         first_product,
         scenario_name=str(scenario_name),
-        output_dir=output_dir,
+        output_dir=logical_output,
         duration_s=float(duration_s),
         dt_s=float(dt_s),
-        manifest_path=destination.with_name(f"{destination.stem}.handoff_manifest.json"),
+        manifest_path=logical_manifest_target,
         adapter_id="oel.completed_run_snapshot_to_onp",
         adapter_version="1",
         scenario_description=f"Passive atomic continuation from {product['product_id']}.",
@@ -286,15 +323,14 @@ def materialize_snapshot_onp(
                 "hardware_profile": "hardware.passive.v1",
             },
         }
-    manifest_target = destination.with_name(f"{destination.stem}.handoff_manifest.json")
     base_manifest = _manifest_base(
         created_utc=datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         source_id=str(product["product_id"]),
         source_hash=sha256_file(source),
         product=product,
         scenario_name=scenario_name,
-        destination=destination,
-        output_dir=output_dir,
+        destination=logical_destination,
+        output_dir=logical_output,
         duration_s=duration_s,
         dt_s=dt_s,
         overwrite=overwrite,
@@ -312,6 +348,12 @@ def materialize_snapshot_onp(
         scenario=scenario,
         destination=destination,
         manifest_target=manifest_target,
+        protected_paths=(("source product", source),),
+        collision_error_type=CompletedRunSnapshotError,
+        logical_destination=logical_destination,
+        logical_manifest_target=logical_manifest_target,
+        logical_output_dir=logical_output,
+        validation_path_policy=validation_path_policy,
         base_manifest=base_manifest,
         product_report=report.to_dict(),
         output_kind="snapshot_onp_scenario",

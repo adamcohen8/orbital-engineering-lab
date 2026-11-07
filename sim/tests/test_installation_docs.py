@@ -18,14 +18,14 @@ def test_authoritative_installation_guide_covers_supported_platforms_and_minors(
         "py -0p",
         "py -3.14 -m venv .venv",
         r".\.venv\Scripts\python.exe -m pip install --upgrade pip",
-        r'.\.venv\Scripts\python.exe -m pip install ".[dev]"',
+        r'.\.venv\Scripts\python.exe -m pip install -c constraints\py314.txt --find-links dist/native ".[dev]"',
         r".\.venv\Scripts\python.exe run_simulation.py --doctor",
         r".\.venv\Scripts\python.exe run_simulation.py --quickstart",
     ]
     posix_commands = [
         "python3.14 -m venv .venv",
         ".venv/bin/python -m pip install --upgrade pip",
-        '.venv/bin/python -m pip install ".[dev]"',
+        '.venv/bin/python -m pip install -c constraints/py314.txt --find-links dist/native ".[dev]"',
         ".venv/bin/python run_simulation.py --doctor",
         ".venv/bin/python run_simulation.py --quickstart",
     ]

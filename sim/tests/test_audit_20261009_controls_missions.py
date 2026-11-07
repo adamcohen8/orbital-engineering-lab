@@ -58,3 +58,24 @@ def test_scores_are_finite_for_single_row_run() -> None:
     assert scores.p95_runtime_ms["sat"] == 0.0
     assert scores.jitter_ms["sat"] == 0.0
     assert scores.controller_overruns["sat"] == 0
+
+
+def test_scores_keep_finite_pairwise_separation_after_invalid_sample() -> None:
+    zeros = np.zeros((3, 3))
+    target = np.zeros((3, 14), dtype=float)
+    target[:, 13] = 100.0
+    chaser = target.copy()
+    chaser[:, 0] = [np.nan, 2.0, 8.0]
+    log = SimLog(
+        t_s=np.array([0.0, 1.0, 2.0]),
+        truth_by_object={"target": target, "chaser": chaser},
+        belief_by_object={"target": target[:, :6], "chaser": chaser[:, :6]},
+        applied_thrust_by_object={"target": zeros, "chaser": zeros},
+        applied_torque_by_object={"target": zeros, "chaser": zeros},
+        controller_runtime_ms_by_object={"target": np.zeros(3), "chaser": np.zeros(3)},
+        controller_skipped_by_object={"target": np.zeros(3, dtype=bool), "chaser": np.zeros(3, dtype=bool)},
+    )
+
+    scores = compute_scores(log)
+
+    assert scores.min_separation_km == 2.0

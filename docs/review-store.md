@@ -291,8 +291,10 @@ Recommended columns:
 content remains byte-reproducible. Set `OEL_GENERATED_UTC` to an explicit ISO
 timestamp when a release or operator workflow needs a recorded generation time;
 semantic parity checks must not derive physics identity from that field. Interchange
-adapters map the empty reproducibility value to a valid deterministic timestamp in
-product envelopes whose versioned schemas require one.
+adapters preserve the missing source timestamp and record the actual adapter
+creation time separately in product envelopes whose versioned schemas require
+one (or a caller-supplied `export_created_utc`); those products mark source
+timestamp availability and age freshness explicitly.
 
 ### `objects`
 

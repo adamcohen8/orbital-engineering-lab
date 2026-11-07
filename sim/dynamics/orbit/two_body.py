@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import numpy as np
 
+from sim.utils.vector_math import dot3
+
 
 def _two_body_accel(r: np.ndarray, mu_km3_s2: float, accel_cmd_eci_km_s2: np.ndarray) -> np.ndarray:
-    r2 = float(np.dot(r, r))
+    r2 = dot3(r, r)
     if r2 == 0.0:
         return np.array(accel_cmd_eci_km_s2, dtype=float)
     r_norm = float(np.sqrt(r2))

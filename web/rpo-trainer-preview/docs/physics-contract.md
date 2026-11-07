@@ -68,6 +68,31 @@ This supports the browser arcade and hosted leaderboard without running the
 full Python game server-side. It is still not the downloadable trainer physics
 stack.
 
+## Fast-Coast Frame Budget
+
+The preview keeps deterministic fixed-step simulation while bounding work per
+browser frame to 32 steps. Any fractional pending step remains in the timing
+accumulator for the next frame. A long browser pause can create more pending
+simulation time than the renderer can safely retain, so pending work is capped
+at 8 simulated seconds; work outside the frame admission interval and excess
+pending work are dropped and recorded. The timing record exposes
+the current-frame drop, cumulative dropped simulation time, pending time, and
+the achieved simulation-rate multiple measured against actual active wall time
+(including a long browser suspension). The Trainer HUD shows that status so a
+fast coast that cannot keep up is visible to the operator.
+
+The full wall-time request is retained in the timing record. Work beyond the
+per-frame admission interval and work beyond the pending bound are both
+classified as dropped, so requested time equals executed time, remaining
+pending time, and reported dropped time. If a terminal state ends a frame
+early, planned fixed steps that did not advance physics are refunded to the
+pending remainder rather than counted as executed work.
+
+Maneuver input continues to use the existing 10x control-speed cap even when a
+higher coast speed is selected. The frame budget changes scheduling and
+reporting only; it does not change the deterministic physics step or add a
+second propagation model.
+
 ## Boundary
 
 The preview does not include:

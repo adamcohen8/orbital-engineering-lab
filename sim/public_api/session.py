@@ -319,16 +319,27 @@ class SimulationSession:
         self._apply_runtime_overrides()
 
     def _shutdown_engine_workers(self, *, suppress_errors: bool = False) -> None:
+        """Close live FSW runtimes before releasing the object-step executor."""
+
         engine = self._engine
-        executor = None if engine is None else getattr(engine, "object_step_executor", None)
-        shutdown = None if executor is None else getattr(executor, "shutdown", None)
-        if not callable(shutdown):
-            return
+        shutdown_flight_software = (
+            None if engine is None else getattr(engine, "_shutdown_flight_software", None)
+        )
         try:
-            shutdown()
+            if callable(shutdown_flight_software):
+                shutdown_flight_software()
         except Exception:
             if not suppress_errors:
                 raise
+        finally:
+            executor = None if engine is None else getattr(engine, "object_step_executor", None)
+            shutdown = None if executor is None else getattr(executor, "shutdown", None)
+            if callable(shutdown):
+                try:
+                    shutdown()
+                except Exception:
+                    if not suppress_errors:
+                        raise
 
     def _apply_runtime_overrides(self) -> None:
         for (kind, object_id), factory in self._controller_overrides.items():

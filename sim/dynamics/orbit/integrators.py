@@ -357,6 +357,7 @@ def integrate_rkf78_hpop(
     tolerance = float(tolerance)
     if not np.isfinite(tolerance) or tolerance <= 0.0:
         raise ValueError("HPOP RKF78 tolerance must be positive and finite.")
+    max_attempt_count = _validated_positive_integer(max_attempts, "max_attempts")
     if dt_s == 0.0:
         return _finish(np.array(x, dtype=float, copy=True), float(h_init if h_init is not None else 0.01), 0.0)
 
@@ -377,7 +378,7 @@ def integrate_rkf78_hpop(
 
     while x_now < x_end:
         scale = 1.0
-        for _attempt in range(max_attempts):
+        for _attempt in range(max_attempt_count):
             attempted_steps += 1
             h_attempt = float(h)
             y_trial, err_vec = rkf78_step(deriv_fn, x_now, y, h)
@@ -406,7 +407,9 @@ def integrate_rkf78_hpop(
             elif x_now + h + 0.5 * h > x_end:
                 h = 0.5 * h
         else:
-            raise RuntimeError(f"HPOP-style RKF78 failed to converge within {max_attempts} attempts at t={x_now:.9f}s.")
+            raise RuntimeError(
+                f"HPOP-style RKF78 failed to converge within {max_attempt_count} attempts at t={x_now:.9f}s."
+            )
 
         y = y_trial
         x_now += h
@@ -465,11 +468,18 @@ def integrate_adaptive(
             return state, info
         return state
 
-    dt_s = float(dt_s)
-    if not np.isfinite(dt_s):
+    try:
+        dt_s = float(dt_s)
+        t_s = float(t_s)
+        x = np.asarray(x, dtype=float).copy()
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("Adaptive integrator requires finite numeric time and state inputs.") from exc
+    if not np.isfinite(dt_s) or not np.isfinite(t_s):
         raise ValueError("dt_s must be finite.")
     if dt_s < 0.0:
         raise ValueError("dt_s must be non-negative.")
+    if not np.all(np.isfinite(x)):
+        raise ValueError("Adaptive integrator state must be finite.")
 
     method_name = str(method).strip().lower()
     if method_name not in {"rkf78", "dopri5", "dopri45"}:
@@ -483,6 +493,7 @@ def integrate_adaptive(
         or rtol < 0.0
     ):
         raise ValueError("Adaptive integrator tolerances must be finite and non-negative.")
+    max_substep_count = _validated_positive_integer(max_substeps, "max_substeps")
     if dt_s == 0.0:
         return _finish(np.array(x, dtype=float, copy=True), AdaptiveStepInfo(method=method_name))
 
@@ -507,7 +518,7 @@ def integrate_adaptive(
     final_step_s: float | None = None
     max_error_ratio = 0.0
 
-    while remain > 0.0 and steps < max_substeps:
+    while remain > 0.0 and steps < max_substep_count:
         h = min(h, remain)
         x_next, err = step_fn(deriv_fn, t, xk, h)
         attempted_steps += 1
@@ -538,7 +549,7 @@ def integrate_adaptive(
 
     if remain > max(min_h, 1e-9 * max(1.0, abs(dt_s))):
         raise RuntimeError(
-            f"Adaptive integrator exhausted {max_substeps} internal substeps with {remain:.9e}s remaining."
+            f"Adaptive integrator exhausted {max_substep_count} internal substeps with {remain:.9e}s remaining."
         )
     info = AdaptiveStepInfo(
         method=method_name,
@@ -552,3 +563,16 @@ def integrate_adaptive(
         max_error_ratio=max_error_ratio,
     )
     return _finish(xk, info)
+
+
+def _validated_positive_integer(value: int, name: str) -> int:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{name} must be a positive integer.") from exc
+    if not np.isfinite(numeric) or not numeric.is_integer():
+        raise ValueError(f"{name} must be a positive integer.")
+    result = int(numeric)
+    if result <= 0:
+        raise ValueError(f"{name} must be a positive integer.")
+    return result

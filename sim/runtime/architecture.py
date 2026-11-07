@@ -78,5 +78,6 @@ SINGLE_RUN_COLLABORATORS: tuple[tuple[str, str], ...] = (
     ("object-step coordination", "sim.execution.object_step_coordinator"),
     ("history storage", "sim.execution.single_run_history"),
     ("passive native histories", "sim.execution.passive_history"),
+    ("public OGP history preparation", "sim.execution.ogp_history"),
     ("payload assembly", "sim.reporting.run_payload_assembly"),
 )

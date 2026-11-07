@@ -20,6 +20,33 @@ from sim.platform_compat import (
 )
 
 
+def test_file_version_detects_same_tick_same_size_rewrite(tmp_path, monkeypatch):
+    from sim.utils import file_version
+
+    resource = tmp_path / "resource.txt"
+    resource.write_bytes(b"before")
+    metadata = resource.stat()
+    monkeypatch.setattr(file_version, "_stat", lambda path: metadata)
+    first = file_version.file_version(resource)
+    resource.write_bytes(b"after!")
+    assert file_version.file_version(resource) != first
+
+
+def test_file_version_stays_stable_after_timestamp_tick_settles(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from sim.utils import file_version
+
+    resource = tmp_path / "resource.txt"
+    resource.write_bytes(b"stable")
+    first = file_version.file_version(resource)
+    metadata = resource.stat()
+    monkeypatch.setattr(file_version, "time", SimpleNamespace(
+        time_ns=lambda: max(metadata.st_mtime_ns, metadata.st_ctime_ns) + 10_000_000_000,
+    ))
+    assert file_version.file_version(resource) == first
+
+
 def test_windows_folder_opener_preserves_path_with_spaces(tmp_path: Path) -> None:
     folder = tmp_path / "Orbital Engineering Lab" / "run output"
     folder.mkdir(parents=True)

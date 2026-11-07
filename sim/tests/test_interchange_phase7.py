@@ -16,6 +16,7 @@ from sim.interchange.cli import main as handoff_main
 from sim.interchange.materialization import materialize_onp
 from sim.interchange.validation import validate_document, validate_product
 from sim.review import ReviewWorkspace
+from sim.security.output_writes import staged_output
 
 
 def _run_config(
@@ -178,6 +179,57 @@ def test_final_completed_run_state_seeds_a_new_validated_onp_study(tmp_path: Pat
     )
     assert first.row_count == 1
     assert list(first.rows[0].values()) == pytest.approx(product["payload"]["state"]["values"])
+
+
+def test_completed_run_export_separates_export_time_from_missing_source_timestamp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("OEL_GENERATED_UTC", raising=False)
+    source_output = tmp_path / "source_run"
+    _run(source_output)
+    product_path = tmp_path / "state.json"
+    export_time = "2026-10-23T00:00:00Z"
+
+    emission = handoff.export_completed_run_state(
+        source_output,
+        output_path=product_path,
+        object_id="target",
+        selector="final",
+        export_created_utc=export_time,
+    )
+    product = _load(product_path)
+
+    assert emission["valid"] is True
+    assert product["created_utc"] == export_time
+    assert product["payload"]["source_run"]["generated_utc"] is None
+    assert product["freshness"]["age_status"] == "not_evaluated"
+    assert product["freshness"]["evaluated_utc"] is None
+    assert product["quality"]["producer_status"] == "completed_run_sample_selected_timestamp_unavailable"
+    assert any("producer timestamp is unavailable" in warning for warning in product["quality"]["warnings"])
+    assert validate_product(product, source_path=product_path).promotable is True
+
+
+def test_staged_completed_run_export_validates_logical_provenance_before_publish(tmp_path: Path) -> None:
+    source_output = tmp_path / "source_run"
+    _run(source_output)
+    approved_root = tmp_path / "approved"
+    logical_product_path = approved_root / "state.json"
+
+    with staged_output(approved_root, approved_roots=(tmp_path,), require_empty=True) as transaction:
+        staged_product_path = transaction.staging_path / logical_product_path.name
+        emission = handoff.export_completed_run_state(
+            source_output,
+            output_path=staged_product_path,
+            logical_output_path=logical_product_path,
+            writer=transaction.staging,
+            object_id="target",
+            selector="final",
+        )
+        assert emission["valid"] is True
+        product = _load(staged_product_path)
+        assert validate_product(product, source_path=logical_product_path).promotable is True
+
+    assert logical_product_path.is_file()
 
 
 def test_completed_run_export_creates_new_destination_parent_before_provenance_validation(tmp_path: Path) -> None:

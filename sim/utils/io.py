@@ -6,7 +6,6 @@ import math
 import os
 import sqlite3
 import stat
-import sys
 from functools import lru_cache
 from importlib import import_module
 from json import dumps
@@ -14,6 +13,14 @@ from json.encoder import encode_basestring_ascii
 from numbers import Integral, Real
 from pathlib import Path
 from typing import Any
+
+from sim.platform_compat import canonicalize_platform_compatibility_root as _canonicalize_platform_compatibility_root
+from sim.security.output_writes import (
+    SecureWriteConflict,
+    current_output_writer,
+    update_output_text,
+    write_output_text,
+)
 
 _JSON_SCALAR_TYPES = frozenset((str, int, float, bool, type(None)))
 _JSON_LEAF_BATCH_LIMIT = 2048
@@ -75,33 +82,6 @@ def sha256_regular_file_nofollow(
         raise
     except OSError as exc:
         raise SafeReadError(f"Could not safely hash regular file {lexical}: {exc}") from exc
-
-
-def _canonicalize_platform_compatibility_root(path: Path) -> Path:
-    """Expand only immutable macOS compatibility roots before no-follow traversal.
-
-    macOS exposes ``/tmp`` and ``/var`` as root-owned compatibility symlinks
-    into ``/private``.  Rejecting those two platform aliases makes ordinary
-    ``tempfile`` paths unusable, while resolving the complete caller path would
-    silently follow untrusted descendant symlinks.  Rewrite only the known
-    system root and leave every remaining component for descriptor-anchored
-    ``O_NOFOLLOW`` traversal.
-    """
-
-    if sys.platform != "darwin" or len(path.parts) < 2:
-        return path
-    alias = Path(os.sep) / path.parts[1]
-    expected = {Path("/tmp"): Path("/private/tmp"), Path("/var"): Path("/private/var")}.get(alias)
-    if expected is None:
-        return path
-    try:
-        metadata = os.lstat(alias)
-        resolved = Path(os.path.realpath(alias))
-    except OSError:
-        return path
-    if not stat.S_ISLNK(metadata.st_mode) or metadata.st_uid != 0 or resolved != expected:
-        return path
-    return expected.joinpath(*path.parts[2:])
 
 
 def _read_posix_nofollow(path: Path, *, minimum: int, maximum: int) -> bytes:
@@ -405,6 +385,15 @@ def json_safe(value: Any) -> Any:
 
 
 def write_json(path: str, payload: dict[str, Any]) -> None:
+    if current_output_writer() is not None:
+        encoder = _native_json_encoder()
+        chunks = _iter_json_safe(payload, indent=2) if encoder is None else encoder(payload, _native_json_fallback)
+        serialized = "".join(chunks)
+        try:
+            write_output_text(path, serialized)
+        except SecureWriteConflict:
+            update_output_text(path, serialized)
+        return
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
     tmp = out.with_name(out.name + ".tmp")

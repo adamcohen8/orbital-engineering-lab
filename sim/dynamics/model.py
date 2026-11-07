@@ -80,12 +80,16 @@ class OrbitalAttitudeDynamics(DynamicsModel):
             delattr(self.orbit_propagator, "_pending_orbital_attitude_default_configuration")
 
     def step(self, state: StateTruth, command: Command, env: dict, dt_s: float) -> StateTruth:
+        try:
+            dt_s = float(dt_s)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("dynamics timestep must be finite and positive") from exc
+        if not np.isfinite(dt_s) or dt_s <= 0.0:
+            raise ValueError("dynamics timestep must be finite and positive")
         if self.resource_model is None:
             return self._step_mechanical(state, command, env, dt_s)
         if self.orbit_propagator.state_frame != "eci":
             raise ValueError("spacecraft resources currently require Earth-centered ECI dynamics")
-        if not np.isfinite(dt_s) or dt_s <= 0.0:
-            raise ValueError("resource timestep must be finite and positive")
         count = max(1, int(np.ceil(dt_s / self.resource_model.max_step_s)))
         h = dt_s / count
         current = state
@@ -262,6 +266,7 @@ class OrbitalAttitudeDynamics(DynamicsModel):
                     torque_body_nm=np.asarray(command.torque_body_nm, dtype=float),
                     dt_s=0.5 * float(h),
                     acceleration_mode=self.acceleration_mode,
+                    numeric_backend=self.attitude_numeric_backend,
                 )
             stage_env = stage_environment(
                 x_orbit_next[:3],
@@ -285,6 +290,7 @@ class OrbitalAttitudeDynamics(DynamicsModel):
                     torque_body_nm=np.asarray(command.torque_body_nm, dtype=float),
                     dt_s=float(h),
                     acceleration_mode=self.acceleration_mode,
+                    numeric_backend=self.attitude_numeric_backend,
                 )
             t_local += float(h)
 
@@ -609,7 +615,7 @@ class OrbitalAttitudeDynamics(DynamicsModel):
         if self.rectangular_prism_dims_m is not None:
             return None
         from sim.dynamics.orbit.environment import srp_pressure_n_m2
-        from sim.dynamics.orbit.rust_force_plan import _CODES, make_plan
+        from sim.dynamics.orbit.rust_force_plan import _CODES, make_plan, native_force_plan_codes
         from sim.rust_orbit_backend import native_harmonic_degree_limit
 
         prop = self.orbit_propagator
@@ -635,6 +641,8 @@ class OrbitalAttitudeDynamics(DynamicsModel):
             base_env["srp_area_m2"] = float(self.srp_area_m2)
         initial6 = np.concatenate((state.position_eci_km, state.velocity_eci_km_s))
         context = OrbitContext(self.mu_km3_s2, state.mass_kg, self.area_m2, self.cd, self.cr)
+        if native_force_plan_codes(prop, base_env) is None:
+            return None
         if any(_CODES[plugin] == 1 for plugin in prop.plugins):
             from sim.dynamics.orbit.propagator import spherical_harmonics_plugin
 

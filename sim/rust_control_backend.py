@@ -348,10 +348,21 @@ def finite_difference_jacobian(
 
 def prepare_rcs_geometry(force_matrix: np.ndarray, torque_matrix: np.ndarray) -> Any:
     """Copy content-bound matrices once; older wheels retain scalar matvecs."""
+    force = np.asarray(force_matrix, dtype=np.float64)
+    torque = np.asarray(torque_matrix, dtype=np.float64)
+    if (
+        force.ndim != 2
+        or force.shape[0] != 3
+        or force.shape[1] == 0
+        or torque.shape != force.shape
+        or not np.all(np.isfinite(force))
+        or not np.all(np.isfinite(torque))
+    ):
+        raise ValueError("RCS force and torque matrices must be finite with matching shape (3, 1..4096)")
     cls = getattr(_extension(), "RCSGeometryContext", None)
-    if cls is None or force_matrix.shape[1] > 4096:
+    if cls is None or force.shape[1] > 4096:
         return None
-    return cls(_packed(force_matrix), _packed(torque_matrix), int(force_matrix.shape[1]))
+    return cls(_packed(force), _packed(torque), int(force.shape[1]))
 
 
 def rcs_achieved(context: Any, forces: np.ndarray, body_to_eci: np.ndarray) -> np.ndarray:

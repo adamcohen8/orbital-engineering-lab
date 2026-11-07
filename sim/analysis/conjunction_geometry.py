@@ -188,7 +188,7 @@ def refine_time_of_closest_approach(primary: StateHistory, secondary: StateHisto
                            - interpolate(secondary_context, breakpoints[1:], side="left"))
     pending = []
     cases = []
-    candidates: list[tuple[float, float, bool, int, int]] = []
+    candidates: list[tuple[float, float, bool, int, int, str]] = []
     evaluations = 0
     for index, (left, right) in enumerate(zip(breakpoints[:-1], breakpoints[1:], strict=True)):
         duration = float(right - left)
@@ -205,7 +205,13 @@ def refine_time_of_closest_approach(primary: StateHistory, secondary: StateHisto
         for fraction in fractions:
             time_s = float(left) + fraction * duration
             evaluations += 1
-            descriptor = (time_s, fraction in {0.0, 1.0}, index, len(fractions) - 2)
+            # A breakpoint has two physically meaningful velocity states.  The
+            # left endpoint is post-impulse (the right side of the preceding
+            # interval), while the right endpoint is pre-impulse (the left
+            # side of this interval).  Keep that side with the candidate so
+            # the selected metrics and returned states describe one state.
+            candidate_side = "left" if fraction == 1.0 else "right"
+            descriptor = (time_s, fraction in {0.0, 1.0}, index, len(fractions) - 2, candidate_side)
             if backend == "rust":
                 pending.append(descriptor)
                 cases.append(np.concatenate((relative_left, relative_right, [duration, fraction])))
@@ -216,10 +222,20 @@ def refine_time_of_closest_approach(primary: StateHistory, secondary: StateHisto
     if backend == "rust":
         for relative, descriptor in zip(hermite_batch(cases), pending, strict=True):
             candidates.append((float(relative[:3] @ relative[:3]), *descriptor))
-    distance2, time_s, boundary, interval_index, stationary_roots = min(candidates, key=lambda item: item[0])
-    primary_state = _interpolate_prepared(primary, primary_times, primary_states, time_s)
-    secondary_state = _interpolate_prepared(secondary, secondary_times, secondary_states, time_s)
+    distance2, time_s, boundary, interval_index, stationary_roots, winner_side = min(
+        candidates, key=lambda item: item[0]
+    )
+    primary_state = _interpolate_prepared(
+        primary, primary_times, primary_states, time_s, side=winner_side
+    )
+    secondary_state = _interpolate_prepared(
+        secondary, secondary_times, secondary_states, time_s, side=winner_side
+    )
     relative = primary_state - secondary_state
+    # Recompute the metric from the same one-sided state returned to callers.
+    # This keeps range-rate and miss-distance evidence internally consistent
+    # even when an impulse lies at the winning interval boundary.
+    distance2 = float(relative[:3] @ relative[:3])
     r_dot_v = float(relative[:3] @ relative[3:])
     result = {
         "time_s": time_s,

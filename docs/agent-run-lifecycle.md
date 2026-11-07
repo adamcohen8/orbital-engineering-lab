@@ -99,6 +99,16 @@ the non-authoritative locator. A wake notification therefore tells the caller
 to inspect committed state; it does not replace review queries or artifact
 validation.
 
+The local lifecycle store retains the authorized state and output directories
+through descriptor-bound, no-follow handles. Locators, manifests, events,
+owner records, and lock publication/reclamation are opened relative to those
+handles; a descendant symlink, unsupported secure-path primitive, or visible
+replacement of a retained root fails closed. The macOS `/tmp` and `/var`
+compatibility aliases are canonicalized only at the platform root before the
+component walk. The lifecycle store keeps the existing JSON schemas, event
+ordering, and stale-owner recovery rules while refusing to use a replacement
+directory that happens to reuse the same visible pathname.
+
 ## Provider-Neutral Reference Client
 
 `examples/python/run_lifecycle_client.py` demonstrates the subprocess pattern

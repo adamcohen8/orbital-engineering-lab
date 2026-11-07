@@ -85,6 +85,25 @@ def force_codes(propagator, env):
     return codes
 
 
+def native_force_plan_codes(propagator, env):
+    """Return native-plan force codes when the environment is representable.
+
+    The compact native frame carries an optional ``jd_utc_start`` plus elapsed
+    stage time.  A current-only ``jd_utc`` is intentionally kept on the
+    authoritative Python callback route because deriving the start epoch in a
+    plan would require binding the caller's stage clock into the immutable
+    frame context.  This preserves the explicit-start optimized path while
+    preventing a silent identity-frame substitution.
+    """
+
+    codes = force_codes(propagator, env)
+    if codes is None:
+        return None
+    if 1 in codes and env.get("jd_utc_start") is None and env.get("jd_utc") is not None:
+        return None
+    return codes
+
+
 def immutable_builtin_plan_signature(propagator, env: dict, ctx) -> tuple | None:
     """Bind speculative passive rows to all built-in numeric inputs.
 
@@ -92,7 +111,8 @@ def immutable_builtin_plan_signature(propagator, env: dict, ctx) -> tuple | None
     truth and internal scratch caches are not read by these built-in forces;
     compiled harmonic coefficient content is bound separately.
     """
-    if force_codes(propagator, env) is None:
+    codes = native_force_plan_codes(propagator, env)
+    if codes is None:
         return None
 
     def frozen(value):
@@ -138,7 +158,7 @@ def immutable_builtin_plan_signature(propagator, env: dict, ctx) -> tuple | None
         )
         return (
             id(propagator), str(propagator.numeric_backend), str(propagator.integrator), str(propagator.model),
-            tuple(force_codes(propagator, env)),
+            tuple(codes),
             tuple(frozen(getattr(plugin, f.name)) for plugin in propagator.plugins if hasattr(plugin, "__dataclass_fields__") for f in fields(plugin) if f.init),
             tuple((_table_signature(plugin._factors), _table_signature(plugin._coefficients)) for plugin in propagator.plugins if hasattr(plugin, "_coefficients")),
             float(ctx.mu_km3_s2), float(ctx.mass_kg), float(ctx.area_m2), float(ctx.cd), float(ctx.cr),
@@ -151,10 +171,12 @@ def immutable_builtin_plan_signature(propagator, env: dict, ctx) -> tuple | None
 def _resource_signature(path) -> tuple:
     """Return a small invalidation key for a native copied resource."""
     try:
-        stat = os.stat(path)
+        from sim.utils.file_version import file_version
+
+        version = file_version(path)
     except OSError:
         return (str(path), None)
-    return (str(path), int(stat.st_ino), int(stat.st_size), int(stat.st_mtime_ns), int(stat.st_ctime_ns))
+    return (str(path), *version)
 
 
 def _table_signature(values) -> tuple:
@@ -252,9 +274,9 @@ def _prepared_frame(propagator, env, model_key, path_key, native_context):
 def make_plan(propagator, state, t_s, env, ctx):
     """Return immutable Rust plan inputs and an authoritative stage callback."""
 
-    if force_codes(propagator, env) is None:
-        raise ValueError("Rust force plan does not support a selected plugin")
-    codes = force_codes(propagator, env)
+    codes = native_force_plan_codes(propagator, env)
+    if codes is None:
+        raise ValueError("Rust force plan does not support the selected plugin/environment")
     if 1 in codes and env.get("_compiled_spherical_harmonics_terms") is None:
         spherical_harmonics_plugin(t_s, np.asarray(state, dtype=float), env, ctx)
     harmonic = env.get("_compiled_spherical_harmonics_terms")

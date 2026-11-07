@@ -46,8 +46,22 @@ def _default_engine_requirement(version: str) -> str:
 
 
 def _inside(path: Path, root: Path, *, label: str, must_exist: bool = True) -> Path:
-    if path.is_symlink():
-        raise ContractError(f"{label} may not be a symbolic link: {path}")
+    lexical = path.expanduser()
+    try:
+        relative = lexical.relative_to(root)
+    except ValueError:
+        relative = None
+    if relative is not None:
+        current = root
+        for part in relative.parts:
+            current = current / part
+            # ``Path.exists()`` is deliberately not part of this guard: a
+            # dangling link is still a routing decision and must be rejected
+            # before resolution.
+            if current.is_symlink():
+                if current == lexical:
+                    raise ContractError(f"{label} may not be a symbolic link: {path}")
+                raise ContractError(f"{label} may not contain symbolic links: {path}")
     resolved = path.expanduser().resolve()
     try:
         resolved.relative_to(root)

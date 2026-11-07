@@ -10,7 +10,9 @@ Pro-only native owners are omitted from the public crate's build.
 ## Build and install
 
 Use an activated Python environment supported by `docs/installation.md`.
-Install the Rust toolchain and Maturin, then run from the repository root:
+Install Rust/Cargo 1.85 or newer and Maturin, then run from the repository root.
+The example uses CPython 3.14; select the matching constraints file for your
+interpreter (for example, `constraints/py313.txt` for Python 3.13):
 
 ```bash
 python -m pip install "maturin>=1.10,<2"
@@ -18,8 +20,9 @@ cargo test --locked --manifest-path rust/oel-orbit/Cargo.toml
 cargo test --locked --manifest-path rust/oel-game/Cargo.toml
 python -m maturin build --release --locked --manifest-path rust/oel-orbit/Cargo.toml --interpreter python --out dist/native
 python -m maturin build --release --locked --manifest-path rust/oel-game/Cargo.toml --interpreter python --out dist/native
-python -m pip install --no-index --find-links dist/native "oel-rust-orbit>=0.18.3,<0.19" "oel-rust-game>=0.5,<0.6"
-python -m pip install .
+python -m pip install -c constraints/py314.txt --find-links dist/native ".[dev,game]"
+python -m pip check
+oel trainer --help
 python run_simulation.py --doctor
 python run_simulation.py --quickstart --validate-only
 ```

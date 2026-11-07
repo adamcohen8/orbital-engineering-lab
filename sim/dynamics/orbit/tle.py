@@ -379,13 +379,10 @@ def tle_to_rv_eci_ogp(
     frame_transform: str = "teme_to_eci_iau80",
     numeric_backend: str = "rust",
 ) -> tuple[np.ndarray, np.ndarray]:
-    transform = str(frame_transform or "teme_to_eci_iau80").strip().lower()
-    if transform not in {"teme_as_eci", "teme_to_eci_iau80"}:
-        raise ValueError(
-            "TLE OGP initialization supports initialization_frame_transform values "
-            "'teme_as_eci' and 'teme_to_eci_iau80'."
-        )
+    transform = _normalize_ogp_initialization_frame_transform(frame_transform)
     jd_utc = float(elements.epoch_jd_utc if target_jd_utc is None else target_jd_utc)
+    if not math.isfinite(jd_utc):
+        raise ValueError("TLE OGP target_jd_utc must be finite.")
     tsince_min = (jd_utc - float(elements.epoch_jd_utc)) * 1440.0
     from sim.dynamics.orbit.ogp import ogp_propagate_teme
     from sim.dynamics.orbit.sgp4 import transform_teme_to_output_frame
@@ -434,16 +431,15 @@ def tle_block_initialization_metadata(
     elements = parse_tle_lines(line1, line2, require_checksum=bool(block.get("require_checksum", True)))
     propagate = bool(block.get("propagate_to_initial_epoch", True))
     effective_jd = float(target_jd_utc if propagate and target_jd_utc is not None else elements.epoch_jd_utc)
+    if not math.isfinite(effective_jd):
+        raise ValueError("TLE initialization target_jd_utc must be finite.")
     model = _normalise_initialization_model(block.get("initialization_model"))
     if model == TLE_INITIALIZATION_MODEL_OGP:
         from sim.dynamics.orbit.ogp import ogp_propagator_name_for_elements
 
         native_frame = "teme"
-        frame_transform = (
-            str(
-                block.get("initialization_frame_transform", "teme_to_eci_iau80")
-                or "teme_to_eci_iau80"
-            ).strip().lower()
+        frame_transform = _normalize_ogp_initialization_frame_transform(
+            block.get("initialization_frame_transform", "teme_to_eci_iau80")
         )
         propagator_family = "OGP"
         propagator_name = ogp_propagator_name_for_elements(elements)
@@ -469,3 +465,13 @@ def tle_block_initialization_metadata(
         "simulation_duration_s": float(duration_s),
         "note": "TLE recovered the initial state only; subsequent trajectory uses configured ONP dynamics.",
     }
+
+
+def _normalize_ogp_initialization_frame_transform(value: Any) -> str:
+    transform = str(value or "teme_to_eci_iau80").strip().lower()
+    if transform not in {"teme_as_eci", "teme_to_eci_iau80"}:
+        raise ValueError(
+            "TLE OGP initialization supports initialization_frame_transform values "
+            "'teme_as_eci' and 'teme_to_eci_iau80'."
+        )
+    return transform

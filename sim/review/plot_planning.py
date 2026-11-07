@@ -39,27 +39,36 @@ def plot_spec_from_mapping(arguments: Mapping[str, Any], *, source: str) -> Revi
     )
 
 
-def plan_review_plot(output_dir: str | Path, spec: ReviewPlotSpec) -> dict[str, Any]:
-    workspace = ReviewWorkspace.open(output_dir)
-    dry_run = _dry_run(workspace, spec)
-    plan_id = review_plot_plan_id(workspace, spec)
-    warnings: list[str] = []
-    if dry_run["truncated"]:
-        warnings.append("The query reached max_rows; render evidence would be truncated.")
-    return {
-        "status": "planned",
-        "output_dir": str(workspace.output_dir),
-        "review_store": "review/run.sqlite",
-        "plot_plan_id": plan_id,
-        "spec": asdict(spec),
-        "columns": dry_run["columns"],
-        "numeric_columns": dry_run["numeric_columns"],
-        "row_count": dry_run["row_count"],
-        "truncated": dry_run["truncated"],
-        "warnings": warnings,
-        "render_authorized": False,
-        "visual_review_required": True,
-    }
+def plan_review_plot(
+    output_dir: str | Path,
+    spec: ReviewPlotSpec,
+    *,
+    protected: bool | None = None,
+) -> dict[str, Any]:
+    with (
+        ReviewWorkspace.open(output_dir)
+        if protected is None
+        else ReviewWorkspace.open(output_dir, protected=protected)
+    ) as workspace:
+        dry_run = _dry_run(workspace, spec)
+        plan_id = review_plot_plan_id(workspace, spec)
+        warnings: list[str] = []
+        if dry_run["truncated"]:
+            warnings.append("The query reached max_rows; render evidence would be truncated.")
+        return {
+            "status": "planned",
+            "output_dir": str(workspace.output_dir),
+            "review_store": "review/run.sqlite",
+            "plot_plan_id": plan_id,
+            "spec": asdict(spec),
+            "columns": dry_run["columns"],
+            "numeric_columns": dry_run["numeric_columns"],
+            "row_count": dry_run["row_count"],
+            "truncated": dry_run["truncated"],
+            "warnings": warnings,
+            "render_authorized": False,
+            "visual_review_required": True,
+        }
 
 
 def render_review_plot(
@@ -68,8 +77,17 @@ def render_review_plot(
     *,
     plot_plan_id: str,
     path: str | Path,
+    record: bool = True,
+    writer: Any | None = None,
+    logical_output_dir: str | Path | None = None,
+    protected: bool | None = None,
 ) -> ReviewPlotArtifact:
-    workspace = ReviewWorkspace.open(output_dir)
+    workspace = (
+        ReviewWorkspace.open(output_dir)
+        if protected is None
+        else ReviewWorkspace.open(output_dir, protected=protected)
+    )
+    active_writer = writer or _current_output_writer()
     initial_identity = workspace.evidence_identity()
     current_id = review_plot_plan_id(workspace, spec, review_store_identity=initial_identity)
     if str(plot_plan_id) != current_id:
@@ -80,12 +98,32 @@ def render_review_plot(
         raise ValueError(
             "The planned review query is truncated at max_rows; increase the bound or narrow the query."
         )
-    artifact = _save_review_plot_from_result(workspace, spec, result=result, path=path, record=False)
+    artifact = _save_review_plot_from_result(
+        workspace,
+        spec,
+        result=result,
+        path=path,
+        record=False,
+        writer=writer,
+        logical_output_dir=logical_output_dir,
+    )
     final_identity = workspace.evidence_identity()
     if review_plot_plan_id(workspace, spec, review_store_identity=final_identity) != current_id:
-        artifact.path.unlink(missing_ok=True)
+        # Protected renders may already have been published through a
+        # descriptor-bound writer.  A pathname unlink here could remove a
+        # concurrent replacement at the same logical path; isolated staging
+        # transactions own their cleanup instead.
+        if active_writer is None:
+            artifact.path.unlink(missing_ok=True)
         raise ValueError("The review store changed while the planned plot was rendering; no artifact was recorded.")
-    record_generated_artifact(workspace, artifact, review_store_identity=final_identity)
+    if record:
+        record_generated_artifact(
+            workspace,
+            artifact,
+            review_store_identity=final_identity,
+            writer=writer,
+            logical_output_dir=logical_output_dir,
+        )
     return artifact
 
 
@@ -108,6 +146,14 @@ def _dry_run(workspace: ReviewWorkspace, spec: ReviewPlotSpec) -> dict[str, Any]
     from sim.review.plotting import EvidencePlotter
 
     return EvidencePlotter(workspace).dry_run(spec)
+
+
+def _current_output_writer() -> Any | None:
+    try:
+        from sim.security.output_writes import current_output_writer
+    except ImportError:
+        return None
+    return current_output_writer()
 
 
 __all__ = [

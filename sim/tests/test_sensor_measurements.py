@@ -70,6 +70,21 @@ def test_own_state_sensor_latency_preserves_acquisition_time() -> None:
     assert np.allclose(second.vector[:3], np.array([7000.0, 0.0, 0.0]))
 
 
+def test_sensor_models_reject_invalid_noise_and_timing_domains() -> None:
+    with pytest.raises(ValueError, match="sigma"):
+        SensorNoiseConfig(sigma=np.array([]))
+    with pytest.raises(ValueError, match="sigma"):
+        SensorNoiseConfig(sigma=np.array([-1.0]))
+    with pytest.raises(ValueError, match="dropout_prob"):
+        SensorNoiseConfig(sigma=np.ones(1), dropout_prob=1.01)
+    with pytest.raises(ValueError, match="latency_s"):
+        SensorNoiseConfig(sigma=np.ones(1), latency_s=-1.0)
+    with pytest.raises(ValueError, match="pos_sigma_km"):
+        NoisyOwnStateSensor(-1.0, 0.0, np.random.default_rng(1))
+    with pytest.raises(ValueError, match="dropout_prob"):
+        JointStateSensor(dropout_prob=-0.1)
+
+
 class _FixedSensor:
     def __init__(self, vector: list[float], sample_t_s: float) -> None:
         self.vector = np.array(vector, dtype=float)
@@ -77,6 +92,11 @@ class _FixedSensor:
 
     def measure(self, truth: StateTruth, env: dict, t_s: float) -> Measurement:
         return Measurement(vector=self.vector, t_s=self.sample_t_s)
+
+
+def test_composite_sensor_rejects_negative_time_tolerance() -> None:
+    with pytest.raises(ValueError, match="time_tolerance_s"):
+        CompositeSensorModel(sensors=[], time_tolerance_s=-1.0)
 
 
 def test_composite_sensor_rejects_mixed_acquisition_times() -> None:

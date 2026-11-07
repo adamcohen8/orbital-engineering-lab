@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 from collections.abc import Sequence
@@ -9,18 +8,81 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
+from sim.security.input_reads import SecureReadError, SecureReadRoot
+from sim.security.output_writes import current_output_writer, staged_output_file
+
 SCHEMA_VERSION = 1
 SCHEMA_ID = "oel-workflow-evidence-v1"
 _ARTIFACT_KEYS = {"artifact_id", "path", "media_type", "required", "exists", "sha256"}
 _SHA256_RE = re.compile(r"^[a-fA-F0-9]{64}$")
+_MAX_WORKFLOW_EVIDENCE_BYTES = 64 * 1024 * 1024
+
+
+def _lexical_file_path(path: str | Path) -> Path:
+    candidate = Path(path).expanduser()
+    if not candidate.is_absolute():
+        candidate = Path.cwd() / candidate
+    return candidate
+
+
+def _open_file_reader(path: str | Path) -> tuple[SecureReadRoot, Path]:
+    """Open the containing directory and return its one-component child."""
+
+    candidate = _lexical_file_path(path)
+    reader = SecureReadRoot.open(
+        candidate.parent,
+        approved_roots=(candidate.parent.parent,),
+    )
+    return reader, candidate.name
+
+
+def _writer_relative(path: Path, writer: Any) -> tuple[Path, Path] | None:
+    """Return logical and physical paths when ``path`` is writer-owned."""
+
+    logical_root = Path(writer.logical_root).expanduser()
+    physical_root = Path(writer.root).expanduser()
+    for candidate, mapped_root in ((logical_root, logical_root), (physical_root, logical_root)):
+        try:
+            relative = path.relative_to(candidate)
+        except ValueError:
+            continue
+        return mapped_root / relative, physical_root / relative
+    return None
+
+
+def _artifact_state(path: str | Path) -> tuple[Path, bool, str | None]:
+    """Read existence and hash through the retained writer when applicable."""
+
+    raw = Path(path).expanduser()
+    if not raw.is_absolute():
+        raw = Path.cwd() / raw
+    writer = current_output_writer()
+    if writer is not None:
+        mapped = _writer_relative(raw, writer)
+        if mapped is not None:
+            logical, _physical = mapped
+            try:
+                digest = writer.sha256(logical.relative_to(Path(writer.logical_root)))
+            except (FileNotFoundError, OSError, ValueError):
+                return logical, False, None
+            return logical, True, digest
+    try:
+        reader, name = _open_file_reader(raw)
+        try:
+            record = reader.file_record(name, max_bytes=_MAX_WORKFLOW_EVIDENCE_BYTES)
+            return reader.path / name, True, str(record["sha256"])
+        finally:
+            reader.close()
+    except (FileNotFoundError, NotADirectoryError, SecureReadError, OSError):
+        return _lexical_file_path(raw), False, None
 
 
 def sha256_file(path: str | Path) -> str:
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    reader, name = _open_file_reader(path)
+    try:
+        return reader.sha256(name, max_bytes=2 * 1024**3)
+    finally:
+        reader.close()
 
 
 def artifact_reference(
@@ -30,15 +92,14 @@ def artifact_reference(
     media_type: str,
     required: bool = True,
 ) -> dict[str, Any]:
-    resolved = Path(path).expanduser().resolve()
-    exists = resolved.is_file()
+    resolved, exists, digest = _artifact_state(path)
     return {
         "artifact_id": str(artifact_id),
         "path": str(resolved),
         "media_type": str(media_type),
         "required": bool(required),
         "exists": exists,
-        "sha256": sha256_file(resolved) if exists else None,
+        "sha256": digest if exists else None,
     }
 
 
@@ -97,21 +158,42 @@ def build_workflow_evidence(
 
 
 def write_workflow_evidence(path: str | Path, payload: Mapping[str, Any]) -> Path:
-    target = Path(path).expanduser().resolve()
-    target.parent.mkdir(parents=True, exist_ok=True)
+    target, _exists, _digest = _artifact_state(path)
     normalized = dict(payload)
     _validate_workflow_evidence(normalized, verify_artifacts=True)
-    tmp = target.with_name(target.name + ".tmp")
-    tmp.write_text(
-        json.dumps(normalized, indent=2, sort_keys=True, allow_nan=False) + "\n",
-        encoding="utf-8",
-    )
-    tmp.replace(target)
+    serialized = json.dumps(normalized, indent=2, sort_keys=True, allow_nan=False) + "\n"
+    writer = current_output_writer()
+    if writer is None:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_name(target.name + ".tmp")
+        tmp.write_text(serialized, encoding="utf-8")
+        tmp.replace(target)
+    else:
+        with staged_output_file(target) as staged:
+            staged.write_text(serialized, encoding="utf-8")
     return target
 
 
 def load_workflow_evidence(path: str | Path) -> dict[str, Any]:
-    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    raw = _lexical_file_path(path)
+    writer = current_output_writer()
+    if writer is not None:
+        mapped = _writer_relative(raw if raw.is_absolute() else Path.cwd() / raw, writer)
+    else:
+        mapped = None
+    if mapped is None:
+        reader, name = _open_file_reader(raw)
+        try:
+            payload = json.loads(
+                reader.read_text(name, max_bytes=_MAX_WORKFLOW_EVIDENCE_BYTES)
+            )
+        finally:
+            reader.close()
+    else:
+        logical, _physical = mapped
+        payload = json.loads(
+            writer.read_bytes(logical.relative_to(Path(writer.logical_root))).decode("utf-8")
+        )
     if not isinstance(payload, dict):
         raise ValueError("OEL workflow evidence must contain a JSON object.")
     if payload.get("schema_id") != SCHEMA_ID or payload.get("schema_version") != SCHEMA_VERSION:
@@ -155,15 +237,17 @@ def _validate_workflow_evidence(payload: Mapping[str, Any], *, verify_artifacts:
         media_type = str(raw.get("media_type", "") or "").strip()
         if not artifact_id or not path_text or not media_type:
             raise ValueError(f"Workflow evidence artifact[{index}] identifiers, path, and media_type are required.")
-        path = Path(path_text).expanduser().resolve()
-        actual_exists = path.is_file()
-        actual_sha = sha256_file(path) if actual_exists else None
+        required = raw.get("required")
+        exists = raw.get("exists")
+        if not isinstance(required, bool) or not isinstance(exists, bool):
+            raise ValueError(f"Workflow evidence artifact[{index}] required and exists must be booleans.")
+        path, actual_exists, actual_sha = _artifact_state(path_text)
         declared_sha = raw.get("sha256")
         if declared_sha is not None and not _SHA256_RE.fullmatch(str(declared_sha)):
             raise ValueError(f"Workflow evidence artifact[{index}] has an invalid sha256.")
-        if verify_artifacts and (bool(raw.get("exists")) != actual_exists or declared_sha != actual_sha):
+        if verify_artifacts and (exists != actual_exists or declared_sha != actual_sha):
             raise ValueError(f"Workflow evidence artifact integrity mismatch for '{artifact_id}'.")
-        if bool(raw.get("required")) and not actual_exists:
+        if required and not actual_exists:
             missing_required.append(artifact_id)
     integrity = dict(payload.get("artifact_integrity", {}) or {})
     expected = {

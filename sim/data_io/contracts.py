@@ -50,7 +50,10 @@ def text(value: str, label: str) -> str:
 
 def validated_times(value: Any) -> np.ndarray:
     reject_booleans(value)
-    result = np.array(value, dtype=float, copy=True)
+    try:
+        result = np.array(value, dtype=float, copy=True)
+    except (ValueError, TypeError) as exc:
+        raise DataIOError("Sample times must be numeric.") from exc
     if result.ndim != 1 or not 1 <= len(result) <= MAX_SAMPLES:
         raise DataIOError(f"Expected 1..{MAX_SAMPLES} sample times.")
     if not np.all(np.isfinite(result)) or np.any(np.diff(result) <= 0):

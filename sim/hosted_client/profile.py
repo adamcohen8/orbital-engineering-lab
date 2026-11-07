@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from sim.platform_compat import canonicalize_platform_compatibility_root as _canonicalize_platform_compatibility_root
 from sim.study_planning import canonical_sha256
 
 HOSTED_PROFILE_SCHEMA = "oel.hosted_client_profile.v1"
@@ -31,7 +32,11 @@ def link_profile(
     if float(timeout_s) <= 0:
         raise ValueError("Hosted profile transport timeout must be positive.")
     token = dict(session_token)
-    if token.get("schema") != "oel.hosted_session_token.v1":
+    if (
+        token.get("schema") != "oel.hosted_session_token.v1"
+        or not isinstance(token.get("tenant_id"), str)
+        or not token["tenant_id"].strip()
+    ):
         raise ValueError("Hosted profile requires a signed Hosted OEL session token.")
     profile = {
         "schema": HOSTED_PROFILE_SCHEMA,
@@ -55,7 +60,7 @@ def link_profile(
 
 
 def load_profile(path: str | Path) -> dict[str, Any]:
-    source = Path(path).expanduser().absolute()
+    source = _canonicalize_platform_compatibility_root(Path(path).expanduser().absolute())
     if any(p.is_symlink() for p in (source, *source.parents)) or not source.is_file():
         raise ValueError("Hosted profile must be a regular file.")
     if os.name == "posix" and stat.S_IMODE(source.stat().st_mode) & 0o077:
@@ -63,6 +68,15 @@ def load_profile(path: str | Path) -> dict[str, Any]:
     value = json.loads(source.read_text(encoding="utf-8"))
     if not isinstance(value, dict) or value.get("schema") != HOSTED_PROFILE_SCHEMA:
         raise ValueError("Unsupported Hosted OEL profile schema.")
+    token = value.get("session_token")
+    if (
+        not isinstance(token, Mapping)
+        or token.get("schema") != "oel.hosted_session_token.v1"
+        or not isinstance(token.get("tenant_id"), str)
+        or not token["tenant_id"].strip()
+        or value.get("tenant_id") != token.get("tenant_id")
+    ):
+        raise ValueError("Hosted profile session tenant identity is invalid.")
     expected = canonical_sha256(
         {key: item for key, item in value.items() if key != "profile_sha256"}
     )
@@ -110,7 +124,11 @@ def link_https_profile(path, *, service_label, service_url, account_key, scopes,
 
 
 def _write_private_json(path: Path, value: Mapping[str, Any]) -> None:
-    target = path.expanduser().resolve()
+    # Keep the destination lexical until every component has been checked.  A
+    # caller supplied profile path must never be allowed to redirect an
+    # atomic replace through a pre-existing symlink.
+    target = _canonicalize_platform_compatibility_root(path.expanduser().absolute())
+    _reject_symlink_components(target)
     target.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(prefix=f".{target.name}.", dir=target.parent)
     temporary = Path(temporary_name)
@@ -124,6 +142,12 @@ def _write_private_json(path: Path, value: Mapping[str, Any]) -> None:
         os.replace(temporary, target)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def _reject_symlink_components(path: Path) -> None:
+    path = _canonicalize_platform_compatibility_root(path)
+    if any(component.is_symlink() for component in (path, *path.parents)):
+        raise ValueError("Hosted profile destination must not contain symbolic links.")
 
 
 __all__ = ["HOSTED_PROFILE_SCHEMA", "link_profile", "link_https_profile", "load_profile"]

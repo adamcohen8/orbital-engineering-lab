@@ -221,7 +221,18 @@ def encode_data(value, *, format: str, options=None) -> tuple[bytes, dict]:
     options = _options(options)
     if isinstance(value, dict) and value.get("schema") == "oel.maneuver-plan.v1":
         if format == "maneuver-plan-json":
+            # Keep the non-execution boundary enforced for direct API callers
+            # as well as for files loaded through ``read_data``.  The receipt
+            # metadata alone is not a contract: serializing an authorized
+            # plan would preserve a caller-controlled execution flag while
+            # falsely reporting ``execution_authorized=False``.
+            if value.get("execution_authorized") is not False:
+                raise DataIOError("IO maneuver plans must set execution_authorized=false.")
             return json_bytes(value), {"execution_authorized": False}
+        if format in {"opm-kvn", "opm-xml"} and options.get("sample_index") is None:
+            raise DataIOError(
+                f"{format} output requires sample_index; select final or sample_index for the reference trajectory."
+            )
         from .products import opm_from_maneuver_plan
 
         reference = as_trajectory(
@@ -320,6 +331,10 @@ def encode_data(value, *, format: str, options=None) -> tuple[bytes, dict]:
         from .navigation import encode_navigation
         from .products import opm_from_trajectory
 
+        if options.get("sample_index") is None:
+            raise DataIOError(
+                f"{format} output requires sample_index; select final or sample_index for the review history."
+            )
         message = opm_from_trajectory(
             value, sample_index=options["sample_index"], maneuvers=options.get("maneuvers", ())
         )

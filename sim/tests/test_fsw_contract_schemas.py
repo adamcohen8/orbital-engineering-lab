@@ -78,3 +78,19 @@ def test_snapshot_hash_is_verified() -> None:
             state_bytes=state,
             state_hash_sha256="0" * 64,
         )
+
+
+@pytest.mark.parametrize("revision", [True, 1.5, "1"])
+def test_snapshot_rejects_non_integer_active_load_revision(revision: object) -> None:
+    state = b"deterministic-state"
+    with pytest.raises(TypeError, match="active_load_revision must be an integer"):
+        FlightSoftwareSnapshot(
+            stack_id="fsw.reference",
+            stack_version="2.0.0",
+            boot_id="boot",
+            invocation_id=4,
+            active_load_id="load-1",
+            active_load_revision=revision,  # type: ignore[arg-type]
+            state_bytes=state,
+            state_hash_sha256=sha256(state).hexdigest(),
+        )

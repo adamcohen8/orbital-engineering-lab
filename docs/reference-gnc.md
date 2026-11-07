@@ -117,6 +117,6 @@ one accepted command may have more than one realization row.
 .venv/bin/python run_simulation.py --config configs/controller_electric_propulsion_smoke.yaml --validate-only
 ```
 
-See [GNC v2 migration](gnc-v2-migration.md) and
-[GNC v2 evidence](gnc-v2-evidence.md). The cFS/SIL adapter and its ICD are a
+See [flight-software profiles](flight-software-profiles.md) for the public
+profile-selection and maturity workflow. The cFS/SIL adapter and its ICD are a
 Pro/private integration excluded from the public export.

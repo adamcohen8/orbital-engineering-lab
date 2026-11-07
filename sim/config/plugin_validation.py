@@ -365,19 +365,51 @@ def _validate_object_propagation(agent: Any, propagation_method: str, path: str)
     return errs
 
 
+def _validate_knowledge_ekf_diag(value: Any, path: str, errs: list[str]) -> None:
+    if isinstance(value, (str, bytes, dict)):
+        errs.append(f"{path}: must contain six finite nonnegative values.")
+        return
+    try:
+        values = list(value)
+    except TypeError:
+        errs.append(f"{path}: must contain six finite nonnegative values.")
+        return
+    if len(values) != 6:
+        errs.append(f"{path}: must contain six finite nonnegative values.")
+        return
+    for index, item in enumerate(values):
+        parsed = _parse_finite_float(item, f"{path}[{index}]", errs)
+        if parsed is not None and parsed < 0.0:
+            errs.append(f"{path}[{index}]: must be >= 0.")
+
+
 def _validate_object_knowledge(knowledge: dict[str, Any], path: str) -> list[str]:
     raw = dict(knowledge or {})
     errs: list[str] = []
+    targets = raw.get("targets")
+    if targets is not None:
+        if isinstance(targets, (str, bytes, dict)) or not isinstance(targets, (list, tuple)):
+            errs.append(f"{path}.targets: must be a list of object IDs.")
+        else:
+            for index, target_id in enumerate(targets):
+                if isinstance(target_id, (dict, list, tuple, set)) or not str(target_id).strip():
+                    errs.append(f"{path}.targets[{index}]: must be a non-empty object ID.")
     backend_values: list[tuple[str, Any]] = [(f"{path}.numeric_backend", raw.get("numeric_backend", "rust"))]
     estimation = raw.get("estimation")
+    if estimation is not None and not isinstance(estimation, dict):
+        errs.append(f"{path}.estimation: must be a mapping/object.")
     if isinstance(estimation, dict):
         backend_values.append((f"{path}.estimation.numeric_backend", estimation.get("numeric_backend", "rust")))
         estimation_ekf = estimation.get("ekf")
+        if estimation_ekf is not None and not isinstance(estimation_ekf, dict):
+            errs.append(f"{path}.estimation.ekf: must be a mapping/object.")
         if isinstance(estimation_ekf, dict):
             backend_values.append(
                 (f"{path}.estimation.ekf.numeric_backend", estimation_ekf.get("numeric_backend", "rust"))
             )
     top_level_ekf = raw.get("ekf")
+    if top_level_ekf is not None and not isinstance(top_level_ekf, dict):
+        errs.append(f"{path}.ekf: must be a mapping/object.")
     if isinstance(top_level_ekf, dict):
         backend_values.append((f"{path}.ekf.numeric_backend", top_level_ekf.get("numeric_backend", "rust")))
     for backend_path, backend_value in backend_values:
@@ -388,8 +420,13 @@ def _validate_object_knowledge(knowledge: dict[str, Any], path: str) -> list[str
     # Validate the opt-in policy before execution, including misspelled fields.
     estimation_map = dict(estimation or {}) if isinstance(estimation, dict) else {}
     ekf_map = estimation_map.get("ekf", raw.get("ekf", {})) or {}
+    ekf_path = f"{path}.estimation.ekf" if "ekf" in estimation_map else f"{path}.ekf"
+    if isinstance(ekf_map, dict):
+        for field_name in ("process_noise_diag", "meas_noise_diag", "init_cov_diag"):
+            if field_name in ekf_map:
+                _validate_knowledge_ekf_diag(ekf_map[field_name], f"{ekf_path}.{field_name}", errs)
     if isinstance(ekf_map, dict) and ekf_map.get("innovation_recovery") is not None:
-        recovery_path = f"{path}.estimation.ekf.innovation_recovery"
+        recovery_path = f"{ekf_path}.innovation_recovery"
         try:
             from sim.estimation.innovation_recovery import InnovationRecoveryConfig, validate_recovery_config
 

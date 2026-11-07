@@ -12,6 +12,8 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
+from sim.data_io.common import read_bytes as read_bounded_bytes
+from sim.data_io.contracts import DataIOError
 from sim.frame_time import FrameTimeError, TimeScale, parse_epoch
 from sim.interchange.public_mission_input import MissionInputPacket, ingest_ephemeris_samples
 
@@ -226,9 +228,11 @@ def parse_odm_kvn(text: str, *, source_sha256: str | None = None) -> OdmMessage:
 
 def read_odm_kvn(path: str | Path, *, max_bytes: int = MAX_ODM_BYTES) -> OdmMessage:
     source = Path(path).expanduser().resolve()
-    raw = source.read_bytes()
-    if len(raw) > int(max_bytes):
-        raise CcsdsOdmError(f"ODM input exceeds the {int(max_bytes)} byte limit.")
+    limit = int(max_bytes)
+    try:
+        raw = read_bounded_bytes(source, limit=limit)
+    except DataIOError as exc:
+        raise CcsdsOdmError(f"ODM input exceeds the {limit} byte limit.") from exc
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as exc:

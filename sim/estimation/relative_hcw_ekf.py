@@ -8,6 +8,7 @@ from sim.core.interfaces import Estimator
 from sim.core.models import Measurement, StateBelief
 from sim.dynamics.orbit.environment import EARTH_J2, EARTH_RADIUS_KM
 from sim.dynamics.orbit.relative_linear import RelativeLinearDynamics
+from sim.estimation.covariance import validate_covariance
 from sim.estimation.innovation_recovery import (
     FullStateInnovationRecovery,
     InnovationRecoveryConfig,
@@ -116,8 +117,14 @@ class HCWRelativeEKFEstimator(Estimator):
 
     def _update_standard(self, belief: StateBelief, measurement: Measurement | None, t_s: float) -> StateBelief:
         output_t_s, meas_t_s = _validated_update_epochs(belief, measurement, t_s)
+        belief_covariance = validate_covariance(belief.covariance, 6, name="belief covariance")
 
-        x_pred, p_pred = self._predict(belief.state, belief.covariance, from_t_s=belief.last_update_t_s, to_t_s=meas_t_s)
+        x_pred, p_pred = self._predict(
+            belief.state,
+            belief_covariance,
+            from_t_s=belief.last_update_t_s,
+            to_t_s=meas_t_s,
+        )
 
         if measurement is None:
             if meas_t_s < output_t_s:

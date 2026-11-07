@@ -11,6 +11,8 @@ from typing import Any, Mapping
 
 import numpy as np
 
+from sim.data_io.common import read_bytes as read_bounded_bytes
+from sim.data_io.contracts import DataIOError
 from sim.frame_time import FrameTimeError, TimeScale, parse_epoch
 
 CCSDS_CDM_PROFILE = "oel.ccsds-cdm-kvn.v0.1"
@@ -377,9 +379,11 @@ def parse_cdm_kvn(text: str, *, source_sha256: str | None = None) -> CdmMessage:
 
 def read_cdm_kvn(path: str | Path, *, max_bytes: int = MAX_CDM_BYTES) -> CdmMessage:
     source = Path(path).expanduser().resolve()
-    raw = source.read_bytes()
-    if len(raw) > int(max_bytes):
-        raise CcsdsCdmError(f"CDM input exceeds the {int(max_bytes)} byte limit.")
+    limit = int(max_bytes)
+    try:
+        raw = read_bounded_bytes(source, limit=limit)
+    except DataIOError as exc:
+        raise CcsdsCdmError(f"CDM input exceeds the {limit} byte limit.") from exc
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as exc:
@@ -392,12 +396,46 @@ def validate_cdm(message: CdmMessage) -> None:
         raise CcsdsCdmError(f"{CCSDS_CDM_PROFILE} supports CCSDS CDM version 1.0 only.")
     _date(message.header.creation_date, "CREATION_DATE")
     _date(message.relative.tca, "TCA")
-    if message.relative.miss_distance_m < 0.0 or message.relative.relative_speed_m_s < 0.0:
+    scalar_values = (
+        ("MISS_DISTANCE", message.relative.miss_distance_m),
+        ("RELATIVE_SPEED", message.relative.relative_speed_m_s),
+    )
+    for label, value in scalar_values:
+        try:
+            finite_value = float(value)
+        except (TypeError, ValueError) as exc:
+            raise CcsdsCdmError(f"{label} must be finite numeric data.") from exc
+        if not math.isfinite(finite_value):
+            raise CcsdsCdmError(f"{label} must be finite numeric data.")
+    try:
+        relative_position = np.asarray(message.relative.relative_position_rtn_m, dtype=float)
+        relative_velocity = np.asarray(message.relative.relative_velocity_rtn_m_s, dtype=float)
+    except (TypeError, ValueError) as exc:
+        raise CcsdsCdmError("CDM relative position and velocity must contain finite length-3 vectors.") from exc
+    if (
+        relative_position.shape != (3,)
+        or relative_velocity.shape != (3,)
+        or not np.all(np.isfinite(relative_position))
+        or not np.all(np.isfinite(relative_velocity))
+    ):
+        raise CcsdsCdmError("CDM relative position and velocity must contain finite length-3 vectors.")
+    if float(message.relative.miss_distance_m) < 0.0 or float(message.relative.relative_speed_m_s) < 0.0:
         raise CcsdsCdmError("MISS_DISTANCE and RELATIVE_SPEED must be nonnegative.")
-    if message.relative.collision_probability is not None and not 0.0 <= message.relative.collision_probability <= 1.0:
-        raise CcsdsCdmError("COLLISION_PROBABILITY must lie in [0, 1].")
+    if message.relative.collision_probability is not None:
+        try:
+            probability = float(message.relative.collision_probability)
+        except (TypeError, ValueError) as exc:
+            raise CcsdsCdmError("COLLISION_PROBABILITY must be finite numeric data.") from exc
+        if not math.isfinite(probability) or not 0.0 <= probability <= 1.0:
+            raise CcsdsCdmError("COLLISION_PROBABILITY must be finite and lie in [0, 1].")
     for item in message.objects:
-        covariance = np.asarray(item.covariance_rtn_si, dtype=float)
+        try:
+            state = np.asarray(item.state_eci_km_km_s, dtype=float)
+            covariance = np.asarray(item.covariance_rtn_si, dtype=float)
+        except (TypeError, ValueError) as exc:
+            raise CcsdsCdmError(f"{item.object} state and covariance must be numeric arrays.") from exc
+        if state.shape != (6,) or not np.all(np.isfinite(state)):
+            raise CcsdsCdmError(f"{item.object} state must contain six finite values.")
         if covariance.shape != (6, 6) or not np.all(np.isfinite(covariance)):
             raise CcsdsCdmError(f"{item.object} covariance must be a finite 6x6 matrix.")
         scale = max(1.0, float(np.max(np.abs(covariance))))

@@ -19,6 +19,7 @@ from sim.project_version import installed_project_version, source_project_versio
 
 from .contracts import load_json_object
 from .manager import (
+    _record_path,
     activate,
     check_channel,
     cleanup,
@@ -74,13 +75,24 @@ def _find_workspace(start: str | Path | None = None) -> Path | None:
 def _source_from_record(version: str, paths: InstallationPaths) -> tuple[Path, Path]:
     root = paths.version_root(version)
     record = load_json_object(root / "installation-record.json")
-    source = root / str(dict(record.get("source", {}) or {}).get("path", "source"))
-    runtime = dict(record.get("runtime", {}) or {})
+    source_record = record.get("source", {})
+    if not isinstance(source_record, dict):
+        raise RuntimeError("Installed source record is malformed.")
+    source = _record_path(root, source_record.get("path", "source"), label="installed source")
+    if not source.is_dir():
+        raise RuntimeError(f"Installed source directory is missing: {source}")
+    runtime_record = record.get("runtime", {})
+    if not isinstance(runtime_record, dict):
+        raise RuntimeError("Installed runtime record is malformed.")
+    runtime = runtime_record
     python = Path(str(runtime.get("python") or sys.executable))
     if runtime.get("created"):
         relocated = root / "runtime" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
-        if relocated.is_file():
-            python = relocated
+        if not relocated.is_file():
+            raise RuntimeError(f"Managed runtime interpreter is missing: {relocated}")
+        python = relocated
+    elif not python.name.lower().startswith("python"):
+        raise RuntimeError(f"Recorded runtime interpreter is not a Python executable: {python}")
     # Preserve the managed virtualenv interpreter path. Resolving its POSIX
     # ``bin/python`` symlink selects the base interpreter and drops the
     # installed OEL dependency environment during command dispatch.
@@ -150,6 +162,12 @@ def _dispatch(command: str, arguments: list[str], *, paths: InstallationPaths, w
     environment["OEL_INSTALLATION_DISPOSITION"] = disposition
     environment["OEL_MANAGED_DATA_ROOT"] = str(paths.data_root)
     environment["OEL_MANAGED_CONFIG_ROOT"] = str(paths.config_root)
+    # Module commands must run against the selected managed source tree.  The
+    # launcher may be invoked from an arbitrary workspace whose cwd happens
+    # to contain another ``sim`` package.
+    # The isolated bootstrap below inserts the authenticated source explicitly;
+    # do not carry a caller-controlled path into the managed interpreter.
+    environment.pop("PYTHONPATH", None)
     if version and paths.version_root(version).is_dir():
         # Managed source trees are content-bound installation evidence. Keep
         # normal Python imports from adding bytecode caches beside that source.
@@ -179,6 +197,8 @@ def _dispatch(command: str, arguments: list[str], *, paths: InstallationPaths, w
         argv = [str(python), "-m", "sim.review", *arguments]
     elif command == "io":
         argv = [str(python), "-m", "sim.data_io", *arguments]
+    elif command == "data":
+        argv = [str(python), "-m", "sim.data_acquisition", *arguments]
     elif command == "runs":
         argv = [str(python), "-m", "sim.execution.run_lifecycle", *arguments]
     elif command == "study":
@@ -205,6 +225,14 @@ def _dispatch(command: str, arguments: list[str], *, paths: InstallationPaths, w
         argv = [str(python), "-m", "sim.hosted_client", *arguments]
     else:
         raise ValueError(f"Unsupported dispatch command: {command}")
+    if len(argv) > 2 and argv[1] == "-m":
+        # ``python -m`` puts cwd before PYTHONPATH. Select the managed source
+        # before importing the module, including on supported Python 3.10.
+        bootstrap = (
+            "import sys; sys.path.insert(0, sys.argv.pop(1)); "
+            "import runpy; runpy.run_module(sys.argv.pop(1), run_name='__main__', alter_sys=True)"
+        )
+        argv = [str(python), "-I", "-B", "-c", bootstrap, str(source), argv[2], *argv[3:]]
     execution_cwd = workspace_path.parent if workspace_path is not None else Path.cwd()
     if command == "trainer":
         execution_cwd = paths.data_root
@@ -275,14 +303,28 @@ def _workspace_rollback(workspace_path: Path, *, paths: InstallationPaths) -> di
 def _fswdk_available() -> bool:
     """Return whether this installed edition includes the private FSWDK CLI."""
 
-    return importlib.util.find_spec("sim.fswdk") is not None
+    return _optional_module_available("sim.fswdk")
+
+
+def _optional_module_available(name: str) -> bool:
+    try:
+        spec = importlib.util.find_spec(name)
+    except (ImportError, ModuleNotFoundError, ValueError):
+        return False
+    if spec is None or spec.origin is None:
+        return False
+    package_root = Path(__file__).resolve().parents[1]
+    try:
+        return Path(spec.origin).resolve().is_relative_to(package_root)
+    except (OSError, RuntimeError, ValueError):
+        return False
 
 
 def _dispatch_commands() -> tuple[str, ...]:
-    commands = ["sim", "review", "io", "runs", "study", "power", "lifetime", "fsw", "hosted", "trainer"]
+    commands = ["sim", "review", "io", "data", "runs", "study", "power", "lifetime", "fsw", "hosted", "trainer"]
     if _fswdk_available():
         commands.append("fswdk")
-    if importlib.util.find_spec("sim.spacecraft_twin") is not None:
+    if _optional_module_available("sim.spacecraft_twin"):
         commands.append("twin")
     commands.append("mcp")
     return tuple(commands)

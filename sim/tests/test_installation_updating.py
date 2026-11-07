@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import importlib.util
 import io
 import json
@@ -9,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import venv
 import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -16,6 +19,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from sim.installation import manager as installation_manager
 from sim.installation.archive import UnsafeArchiveError, safe_extract
 from sim.installation.cli import _build_parser, _dispatch, _engine_lease, _source_from_record, _split_dispatch_argv
 from sim.installation.contracts import (
@@ -26,6 +30,7 @@ from sim.installation.contracts import (
     validate_release_manifest,
     version_satisfies,
 )
+from sim.installation.integrity import build_installation_integrity, build_runtime_inventory
 from sim.installation.manager import (
     _source_and_python,
     _validate_offline_runtime_compatibility,
@@ -84,8 +89,15 @@ def signing_keys() -> tuple[object, dict[str, RSAPublicKey]]:
     return private, {private.key_id: RSAPublicKey(key_id=private.key_id, n=private.n)}
 
 
-def _paths(tmp_path: Path) -> InstallationPaths:
-    return InstallationPaths(tmp_path / "managed data", tmp_path / "managed config")
+def _paths(tmp_path: Path, public: dict[str, RSAPublicKey] | None = None) -> InstallationPaths:
+    paths = InstallationPaths(tmp_path / "managed data", tmp_path / "managed config")
+    if public is not None:
+        paths.config_root.mkdir(parents=True, exist_ok=True)
+        paths.trusted_release_keys.write_text(
+            json.dumps({"keys": [public_key_to_json(key) for key in public.values()]}, sort_keys=True),
+            encoding="utf-8",
+        )
+    return paths
 
 
 @pytest.mark.parametrize(
@@ -114,6 +126,7 @@ def _release(
     *,
     edition: str = "public",
     artifact_platform: str | None = None,
+    include_wheel: bool = False,
 ) -> tuple[Path, Path]:
     release = root / f"release-{version}"
     source = release / f"source-{version}"
@@ -137,6 +150,19 @@ def _release(
         "sha256": sha256_file(archive),
         **({"platform": artifact_platform} if artifact_platform else {}),
     }
+    wheel: Path | None = None
+    wheel_artifact: dict[str, object] | None = None
+    if include_wheel:
+        wheel = _write_fixture_wheel(release / "wheelhouse" / f"oel_fixture-{version}-py3-none-any.whl", version=version)
+        wheel_artifact = {
+            "name": wheel.name,
+            "kind": "wheel",
+            "path": f"wheelhouse/{wheel.name}",
+            "bytes": wheel.stat().st_size,
+            "sha256": sha256_file(wheel),
+            "media_type": "application/zip",
+        }
+    artifacts = [artifact, *([wheel_artifact] if wheel_artifact is not None else [])]
     manifest = {
         "schema_version": RELEASE_MANIFEST_SCHEMA,
         "product": "orbital-engagement-lab",
@@ -144,16 +170,152 @@ def _release(
         "version": version,
         "channel": "stable",
         "published_at": "2026-08-15T00:00:00Z",
-        "artifacts": [artifact],
+        "artifacts": artifacts,
         "platforms": [platform.system()],
+        **({"architecture": platform.machine()} if include_wheel else {}),
         "python": {"requires": ">=3.10,<3.15"},
         "profiles": ["core"],
         "contracts": {"workspace": "oel.workspace.v1", "scenario": SCENARIO_SCHEMA_VERSION},
+        "supply_chain": {
+            "installation_integrity": build_installation_integrity(
+                source,
+                [wheel] if wheel is not None else [],
+                interpreter="Scripts/python.exe" if os.name == "nt" else "bin/python",
+                provider={"boundary": "external-interpreter", "trust": "operator-owned"},
+            ),
+            **(
+                {"offline_runtime_qualification": {"python": platform.python_version()}}
+                if include_wheel
+                else {}
+            ),
+        },
     }
     signed = sign_payload(manifest, private_key)  # type: ignore[arg-type]
     manifest_path = release / "release-manifest.json"
     manifest_path.write_text(json.dumps(signed, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if include_wheel and wheel is not None:
+        tag = f"py{sys.version_info.major}{sys.version_info.minor}"
+        bundle = release / f"oel-{edition}-{version}-{platform.machine().lower()}-{tag}.bundle.zip"
+        with zipfile.ZipFile(bundle, "w", compression=zipfile.ZIP_DEFLATED) as archive_bundle:
+            archive_bundle.writestr("release-manifest.json", manifest_path.read_bytes())
+            archive_bundle.write(wheel, arcname=f"wheelhouse/{wheel.name}")
     return manifest_path, archive
+
+
+def _approved_external_provider() -> Path:
+    """Return the interpreter identity accepted by the managed-runtime gate."""
+
+    return Path(getattr(sys, "_base_executable", sys.executable)).expanduser().resolve()
+
+
+def _record_digest(data: bytes) -> str:
+    encoded = base64.urlsafe_b64encode(hashlib.sha256(data).digest()).decode("ascii").rstrip("=")
+    return f"sha256={encoded}"
+
+
+def _write_fixture_wheel(path: Path, *, version: str) -> Path:
+    """Write the tiny dependency-free wheel used by closed-wheel fixtures."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    dist_info = f"oel_fixture-{version}.dist-info"
+    members: dict[str, bytes] = {
+        "oel_fixture/__init__.py": b"fixture_value = 1\n",
+        f"{dist_info}/METADATA": (
+            b"Metadata-Version: 2.1\n"
+            b"Name: oel-fixture\n"
+            + f"Version: {version}\n\n".encode()
+        ),
+        f"{dist_info}/WHEEL": b"Wheel-Version: 1.0\nGenerator: oel-test\nRoot-Is-Purelib: true\nTag: py3-none-any\n\n",
+    }
+    record_rows = [
+        f"{name},{_record_digest(data)},{len(data)}"
+        for name, data in sorted(members.items())
+    ]
+    members[f"{dist_info}/RECORD"] = ("\n".join(record_rows) + f"\n{dist_info}/RECORD,,\n").encode()
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, data in sorted(members.items()):
+            archive.writestr(name, data)
+    return path
+
+
+def _materialize_fixture_wheels(runtime_root: Path, wheel_paths: list[Path]) -> None:
+    site_packages = runtime_root / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
+    for wheel in wheel_paths:
+        with zipfile.ZipFile(wheel) as archive:
+            for info in archive.infolist():
+                if info.filename.endswith("/"):
+                    continue
+                target = site_packages / Path(info.filename)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(archive.read(info))
+                mode = (info.external_attr >> 16) & 0o777
+                target.chmod(mode or 0o644)
+
+
+def _patch_minimal_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Patch manager provisioning to create the signed fixture runtime surface."""
+
+    if os.name == "nt":
+        pytest.skip("the minimal provider-boundary fixture is POSIX-only")
+
+    def fake_install_runtime(source_root: Path, runtime_root: Path, **kwargs: object) -> dict[str, object]:
+        del source_root
+        provider = _approved_external_provider()
+        site_packages = (
+            runtime_root
+            / "lib"
+            / f"python{sys.version_info.major}.{sys.version_info.minor}"
+            / "site-packages"
+        )
+        site_packages.mkdir(parents=True)
+        scripts = runtime_root / "bin"
+        scripts.mkdir(parents=True)
+        for name in ("python", "python3", f"python{sys.version_info.major}.{sys.version_info.minor}"):
+            (scripts / name).symlink_to(provider)
+        (runtime_root / "pyvenv.cfg").write_text(
+            f"home = {provider.parent}\ninclude-system-site-packages = false\n",
+            encoding="utf-8",
+        )
+        (runtime_root / "lib64").symlink_to("lib", target_is_directory=True)
+        raw_wheels = kwargs.get("signed_wheels")
+        wheel_paths = [Path(item) for item in list(raw_wheels or [])]
+        if not wheel_paths:
+            raise AssertionError("official fixture provisioning requires a signed wheel closure")
+        _materialize_fixture_wheels(runtime_root, wheel_paths)
+        return {
+            "python": str(scripts / "python"),
+            "install_command": ["test-minimal-runtime"],
+            "pip_check": "No broken requirements found.",
+        }
+
+    monkeypatch.setattr(installation_manager, "_install_runtime", fake_install_runtime)
+
+
+def _install_minimal_official(
+    manifest: Path,
+    *,
+    paths: InstallationPaths,
+    public: dict[str, RSAPublicKey],
+    monkeypatch: pytest.MonkeyPatch,
+) -> dict[str, object]:
+    """Provision the signed fixture inventory without downloading a runtime.
+
+    The release fixture signs the complete venv convenience surface emitted by
+    ``build_runtime_inventory``.  Recreating that small surface keeps these
+    manager tests focused on installation state while preserving the official
+    provider, pyvenv and alias checks.
+    """
+
+    _patch_minimal_runtime(monkeypatch)
+    receipt = install_release(
+        manifest,
+        paths=paths,
+        public_keys=public,
+        create_runtime=True,
+        offline_wheelhouse=manifest.parent / "wheelhouse",
+    )
+    assert receipt["installation"]["status"] == "official"  # type: ignore[index]
+    return receipt
 
 
 def test_version_range_grammar_is_bounded() -> None:
@@ -209,7 +371,7 @@ def test_pro_installation_fails_closed_without_license_module(
     monkeypatch.setattr("sim.installation.manager.importlib.util.find_spec", lambda _name: None)
     assert pro_installation_available() is False
     with pytest.raises(ContractError, match="Managed OEL Pro installation is unavailable"):
-        install_release(manifest, paths=_paths(tmp_path), public_keys=public, create_runtime=False)
+        install_release(manifest, paths=_paths(tmp_path, public), public_keys=public, create_runtime=False)
 
 
 def test_pro_installation_rejects_license_module_from_another_tree(
@@ -383,17 +545,18 @@ def test_migration_is_explicit_recoverable_and_idempotent(tmp_path: Path) -> Non
 def test_side_by_side_install_activation_rollback_integrity_and_uninstall(
     tmp_path: Path,
     signing_keys: tuple[object, dict[str, RSAPublicKey]],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     private, keys = signing_keys
-    paths = _paths(tmp_path)
-    manifest_a, _ = _release(tmp_path, "0.25.0", private)
-    manifest_b, _ = _release(tmp_path, "0.26.0", private)
+    paths = _paths(tmp_path, keys)
+    manifest_a, _ = _release(tmp_path, "0.25.0", private, include_wheel=True)
+    manifest_b, _ = _release(tmp_path, "0.26.0", private, include_wheel=True)
     workspace_root = tmp_path / "workspace"
     init_workspace(workspace_root, engine_version="0.25.0")
     register_workspace(workspace_root, registry_path=paths.workspaces_state)
 
-    first = install_release(manifest_a, paths=paths, public_keys=keys, create_runtime=False)
-    second = install_release(manifest_b, paths=paths, public_keys=keys, create_runtime=False)
+    first = _install_minimal_official(manifest_a, paths=paths, public=keys, monkeypatch=monkeypatch)
+    second = _install_minimal_official(manifest_b, paths=paths, public=keys, monkeypatch=monkeypatch)
     assert first["installation"]["status"] == "official"
     assert second["installation"]["status"] == "official"
     activate("0.25.0", paths=paths)
@@ -407,6 +570,28 @@ def test_side_by_side_install_activation_rollback_integrity_and_uninstall(
     source = next(paths.version_root("0.26.0").glob("source/*"))
     (source / "run_simulation.py").write_text("modified\n", encoding="utf-8")
     assert verify_installation("0.26.0", paths=paths, full=True)["status"] == "modified"
+
+
+def test_existing_install_reverification_rejects_source_tamper(
+    tmp_path: Path,
+    signing_keys: tuple[object, dict[str, RSAPublicKey]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private, keys = signing_keys
+    paths = _paths(tmp_path, keys)
+    manifest, _ = _release(tmp_path, "0.26.0", private, include_wheel=True)
+    _install_minimal_official(manifest, paths=paths, public=keys, monkeypatch=monkeypatch)
+    source = next(paths.version_root("0.26.0").glob("source/*"))
+    (source / "run_simulation.py").write_text("tampered\n", encoding="utf-8")
+
+    with pytest.raises(FileExistsError, match="not verified"):
+        install_release(
+            manifest,
+            paths=paths,
+            public_keys=keys,
+            create_runtime=True,
+            offline_wheelhouse=manifest.parent / "wheelhouse",
+        )
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX virtualenv interpreters are symlinks")
@@ -512,7 +697,8 @@ def test_managed_dispatch_routes_hosted_client(tmp_path: Path, monkeypatch: pyte
     monkeypatch.setattr("sim.installation.cli.subprocess.run", fake_run)
 
     assert _dispatch("hosted", ["--help"], paths=paths, workspace_path=None) == 0
-    assert captured["command"] == [sys.executable, "-m", "sim.hosted_client", "--help"]
+    assert captured["command"][0:4] == [sys.executable, "-I", "-B", "-c"]
+    assert captured["command"][5:] == [str(source), "sim.hosted_client", "--help"]
 
 
 @pytest.mark.parametrize(
@@ -545,7 +731,9 @@ def test_dispatch_preserves_both_study_cli_workflows(
 
     monkeypatch.setattr("sim.installation.cli.subprocess.run", fake_run)
     assert _dispatch("study", arguments, paths=paths, workspace_path=None) == 0
-    assert captured == [[sys.executable, "-m", module, *arguments]]
+    assert len(captured) == 1
+    assert captured[0][0:4] == [sys.executable, "-I", "-B", "-c"]
+    assert captured[0][5:] == [str(tmp_path), module, *arguments]
 
 
 def test_wrong_platform_and_source_version_are_rejected(
@@ -556,7 +744,7 @@ def test_wrong_platform_and_source_version_are_rejected(
     wrong_platform = "Windows" if platform.system() != "Windows" else "Linux"
     manifest, _ = _release(tmp_path, "0.25.0", private, artifact_platform=wrong_platform)
     with pytest.raises(ContractError, match="no source artifact"):
-        install_release(manifest, paths=_paths(tmp_path), public_keys=keys, create_runtime=False)
+        install_release(manifest, paths=_paths(tmp_path, keys), public_keys=keys, create_runtime=False)
 
     manifest, _ = _release(tmp_path / "mismatch", "0.26.0", private)
     payload = json.loads(manifest.read_text(encoding="utf-8"))
@@ -564,7 +752,7 @@ def test_wrong_platform_and_source_version_are_rejected(
     payload = sign_payload(payload, private)  # type: ignore[arg-type]
     manifest.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(ContractError, match="does not match signed manifest"):
-        install_release(manifest, paths=_paths(tmp_path / "mismatch"), public_keys=keys, create_runtime=False)
+        install_release(manifest, paths=_paths(tmp_path / "mismatch", keys), public_keys=keys, create_runtime=False)
 
 
 @pytest.mark.parametrize("defect", [None, "wheel", "manifest", "extra"])
@@ -621,6 +809,42 @@ def test_bundled_online_download_rejects_wrong_minor_before_network(
         download_release_wheelhouse(manifest, "https://example.test/release-manifest.json", tmp_path)
 
 
+@pytest.mark.parametrize("system,machine", [("Linux", "x86_64"), ("Windows", "AMD64"), ("Darwin", "x86_64")])
+def test_bootstrap_rejects_other_hosts_before_python_selection_or_artifact_download(
+    monkeypatch: pytest.MonkeyPatch, system: str, machine: str,
+) -> None:
+    from tools.installers import bootstrap_install as bootstrap
+
+    manifest = {"version": "0.35.0", "platforms": ["Darwin"], "architecture": "arm64"}
+    calls = []
+    monkeypatch.setattr(bootstrap, "_fetch", lambda *a, **k: json.dumps(manifest).encode())
+    monkeypatch.setattr(bootstrap, "_validate_bootstrap_manifest", lambda value, **k: value)
+    monkeypatch.setattr(bootstrap, "TRUSTED_KEYS_RENDERED", "true")
+    monkeypatch.setattr(bootstrap, "TRUSTED_KEYS_B64", base64.b64encode(b"{}").decode())
+    monkeypatch.setattr(bootstrap, "_validate_trusted_keys_payload", lambda value: value)
+    monkeypatch.setattr(bootstrap, "_verify", lambda *a: calls.append("signature") or True)
+    monkeypatch.setattr(bootstrap.platform, "system", lambda: system)
+    monkeypatch.setattr(bootstrap.platform, "machine", lambda: machine)
+    monkeypatch.setattr(bootstrap, "_use_qualified_python", lambda *a: pytest.fail("interpreter selection reached"))
+    monkeypatch.setattr(bootstrap, "_fetch_to_file", lambda *a, **k: pytest.fail("artifact download reached"))
+    with pytest.raises(SystemExit, match="source-build instructions"):
+        bootstrap.main(["--manifest-url", "https://example.test/release-manifest.json"])
+    assert calls == ["signature"]
+
+    monkeypatch.setattr(bootstrap, "_verify", lambda *a: False)
+    with pytest.raises(SystemExit, match="signature verification failed"):
+        bootstrap.main(["--manifest-url", "https://example.test/release-manifest.json"])
+
+
+@pytest.mark.parametrize("expected,actual", [("arm64", "aarch64"), ("x86_64", "AMD64"), ("any", "x86_64")])
+def test_bootstrap_host_admission_normalizes_architecture_aliases(monkeypatch, expected, actual):
+    from tools.installers import bootstrap_install as bootstrap
+
+    monkeypatch.setattr(bootstrap.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(bootstrap.platform, "machine", lambda: actual)
+    bootstrap._validate_host_compatibility({"version": "0.35.0", "platforms": ["Linux"], "architecture": expected})
+
+
 def test_bootstrap_selects_signed_qualified_python_before_install(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -646,14 +870,15 @@ def test_bootstrap_selects_signed_qualified_python_before_install(
 def test_download_preserves_signed_manifest_and_rejects_feed_rollback(
     tmp_path: Path,
     signing_keys: tuple[object, dict[str, RSAPublicKey]],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     private, keys = signing_keys
-    manifest_path, _ = _release(tmp_path, "0.26.0", private)
-    paths = _paths(tmp_path)
+    manifest_path, _ = _release(tmp_path, "0.26.0", private, include_wheel=True)
+    paths = _paths(tmp_path, keys)
     receipt = download_release(manifest_path.as_uri(), paths=paths, public_keys=keys, allow_local_file=True)
     downloaded = json.loads(Path(receipt["manifest"]).read_text(encoding="utf-8"))
     assert verify_payload(downloaded, keys)
-    install_release(receipt["manifest"], paths=paths, public_keys=keys, create_runtime=False)
+    _install_minimal_official(Path(receipt["manifest"]), paths=paths, public=keys, monkeypatch=monkeypatch)
 
     channel = {
         "schema_version": CHANNEL_INDEX_SCHEMA,
@@ -694,7 +919,7 @@ def test_download_cache_isolated_by_edition_and_channel(
         json.dumps(sign_payload(preview_payload, private)),  # type: ignore[arg-type]
         encoding="utf-8",
     )
-    paths = _paths(tmp_path / "managed")
+    paths = _paths(tmp_path / "managed", keys)
 
     stable = download_release(stable_manifest.as_uri(), paths=paths, public_keys=keys, allow_local_file=True)
     preview = download_release(preview_manifest.as_uri(), paths=paths, public_keys=keys, allow_local_file=True)
@@ -732,9 +957,10 @@ def test_engine_lease_checks_selected_version_while_holding_transaction_lock(
 def test_install_latest_uses_configured_channel_without_activation(
     tmp_path: Path,
     signing_keys: tuple[object, dict[str, RSAPublicKey]],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     private, keys = signing_keys
-    manifest_path, _ = _release(tmp_path, "0.26.0", private)
+    manifest_path, _ = _release(tmp_path, "0.26.0", private, include_wheel=True)
     channel = {
         "schema_version": CHANNEL_INDEX_SCHEMA,
         "edition": "public",
@@ -745,18 +971,19 @@ def test_install_latest_uses_configured_channel_without_activation(
     }
     channel_path = tmp_path / "channel.json"
     channel_path.write_text(json.dumps(sign_payload(channel, private)), encoding="utf-8")  # type: ignore[arg-type]
-    paths = _paths(tmp_path / "managed")
+    paths = _paths(tmp_path / "managed", keys)
     configure_channel(
         channel_path.as_uri(),
         paths=paths,
         source="test-bootstrap",
         allow_local_file=True,
     )
+    _patch_minimal_runtime(monkeypatch)
 
     receipt = install_latest_release(
         paths=paths,
         public_keys=keys,
-        create_runtime=False,
+        create_runtime=True,
         allow_local_file=True,
     )
 
@@ -774,7 +1001,7 @@ def test_install_latest_uses_configured_channel_without_activation(
         install_latest_release(
             paths=paths,
             public_keys=keys,
-            create_runtime=False,
+            create_runtime=True,
             allow_local_file=True,
         )
 
@@ -826,21 +1053,31 @@ def test_template_sync_classifies_user_and_upstream_changes(tmp_path: Path) -> N
     assert current.read_text(encoding="utf-8").endswith("# user edit\n")
 
 
+@pytest.mark.parametrize("hashed_constraints", [True, False])
 def test_release_build_is_reproducible_signed_and_contains_evidence(
     tmp_path: Path,
     signing_keys: tuple[object, dict[str, RSAPublicKey]],
     monkeypatch: pytest.MonkeyPatch,
+    hashed_constraints: bool,
 ) -> None:
     private, keys = signing_keys
     source = tmp_path / "public-source"
     source.mkdir()
     (source / "pyproject.toml").write_text(
-        '[project]\nname = "orbital-engineering-lab"\nversion = "0.25.0"\n',
+        '[build-system]\n'
+        'requires = ["setuptools>=61"]\n'
+        'build-backend = "setuptools.build_meta"\n\n'
+        '[project]\n'
+        'name = "orbital-engineering-lab"\n'
+        'version = "0.25.0"\n\n'
+        '[tool.setuptools]\n'
+        'packages = []\n',
         encoding="utf-8",
     )
     (source / "README.md").write_text("public fixture\n", encoding="utf-8")
     (source / "constraints").mkdir()
-    (source / "constraints" / "py314.txt").write_text("example==1 --hash=sha256:" + "0" * 64 + "\n", encoding="utf-8")
+    constraint = "example==1" + (" --hash=sha256:" + "0" * 64 if hashed_constraints else "")
+    (source / "constraints" / "py314.txt").write_text(constraint + "\n", encoding="utf-8")
     evidence = tmp_path / "evidence"
     evidence.mkdir()
     private_path = tmp_path / "private-key.json"
@@ -852,12 +1089,36 @@ def test_release_build_is_reproducible_signed_and_contains_evidence(
     )
     wheelhouse = tmp_path / "wheelhouse"
     wheelhouse.mkdir()
+
+    def write_valid_wheel(path: Path, *, distribution: str) -> None:
+        """Create a tiny wheel whose RECORD authenticates every member."""
+
+        normalized = distribution.replace("-", "_")
+        dist_info = f"{normalized}-1.0.dist-info"
+        members: dict[str, bytes] = {
+            f"{normalized}/__init__.py": b"",
+            f"{dist_info}/METADATA": (
+                f"Metadata-Version: 2.1\nName: {distribution}\nVersion: 1.0\n\n".encode()
+            ),
+            f"{dist_info}/WHEEL": (
+                b"Wheel-Version: 1.0\n"
+                b"Generator: oel-installation-test\n"
+                b"Root-Is-Purelib: true\n"
+                b"Tag: py3-none-any\n\n"
+            ),
+        }
+        record_rows = [
+            f"{name},{_record_digest(data)},{len(data)}"
+            for name, data in sorted(members.items())
+        ]
+        record_path = f"{dist_info}/RECORD"
+        members[record_path] = ("\n".join(record_rows) + f"\n{record_path},,\n").encode()
+        with zipfile.ZipFile(path, "w") as archive:
+            for name, data in sorted(members.items()):
+                archive.writestr(name, data)
+
     wheel = wheelhouse / "fixture-1.0-py3-none-any.whl"
-    with zipfile.ZipFile(wheel, "w") as archive:
-        archive.writestr("fixture/__init__.py", "")
-        archive.writestr("fixture-1.0.dist-info/METADATA", "Name: fixture\nVersion: 1.0\n")
-        archive.writestr("fixture-1.0.dist-info/WHEEL", "Wheel-Version: 1.0\nTag: py3-none-any\n")
-        archive.writestr("fixture-1.0.dist-info/RECORD", "")
+    write_valid_wheel(wheel, distribution="fixture")
     from tools.build_installable_release import release_source_identity
     from tools.native_source_identity import native_source_identity
 
@@ -869,10 +1130,7 @@ def test_release_build_is_reproducible_signed_and_contains_evidence(
         for file in ("Cargo.toml", "Cargo.lock", "pyproject.toml", "src/lib.rs"):
             (crate / file).write_text("# public native fixture\n", encoding="utf-8")
         native_wheel = wheelhouse / f"{name.replace('-', '_')}-1.0-py3-none-any.whl"
-        with zipfile.ZipFile(native_wheel, "w") as archive:
-            archive.writestr(f"{name.replace('-', '_')}-1.0.dist-info/METADATA", f"Name: {name}\nVersion: 1.0\n")
-            archive.writestr(f"{name.replace('-', '_')}-1.0.dist-info/WHEEL", "Wheel-Version: 1.0\nTag: py3-none-any\n")
-            archive.writestr(f"{name.replace('-', '_')}-1.0.dist-info/RECORD", "")
+        write_valid_wheel(native_wheel, distribution=name)
         native_receipts.append({
             "package": name, "wheel": native_wheel.name, "sha256": sha256_file(native_wheel),
             "source_identity_sha256": native_source_identity(crate)["sha256"],
@@ -921,10 +1179,44 @@ def test_release_build_is_reproducible_signed_and_contains_evidence(
         "status": "passed",
         "network_used": False,
         "profile": "full",
-        "python": "3.14.0",
+        "python": platform.python_version(),
         "platform": "fixture",
         "architecture": "fixture",
     }
+
+    def fake_profile_runtime_inventories(
+        *,
+        archive: Path,
+        wheelhouse: Path,
+        version: str,
+        wheel_files: list[Path],
+        profiles: list[str],
+        wheel_digests: dict[str, str] | None = None,
+    ) -> tuple[dict[str, dict[str, object]], dict[str, object]]:
+        """Use the real wheel inventory contract without creating six venvs."""
+
+        del archive, wheelhouse, version, wheel_digests
+        provider = {"boundary": "external-interpreter", "trust": "operator-owned"}
+        # Probe one real host layout, including CPython 3.14's Unicode alias,
+        # while leaving all six profile wheel installations mocked.
+        layout_root = tmp_path / "inventory-runtime"
+        venv.EnvBuilder(with_pip=False, symlinks=os.name != "nt").create(layout_root)
+        inventories = {
+            profile: build_runtime_inventory(
+                wheel_files,
+                interpreter="Scripts/python.exe" if os.name == "nt" else "bin/python",
+                provider=provider,
+                profile=profile,
+                runtime_root=layout_root,
+            )
+            for profile in profiles
+        }
+        return inventories, qualification
+
+    monkeypatch.setattr(
+        "tools.build_installable_release._build_profile_runtime_inventories",
+        fake_profile_runtime_inventories,
+    )
     monkeypatch.setattr(
         "tools.build_installable_release._verify_offline_runtime_install",
         lambda **_kwargs: qualification,
@@ -972,7 +1264,9 @@ def test_release_build_is_reproducible_signed_and_contains_evidence(
     assert "full" in manifest["profiles"]
     assert manifest["supply_chain"]["status"] == "passed"
     assert manifest["supply_chain"]["offline_runtime_qualification"] == qualification
-    assert Path(first["offline_bundle"]).name.endswith("-py314.bundle.zip")
+    assert Path(first["offline_bundle"]).name.endswith(
+        f"-py{sys.version_info.major}{sys.version_info.minor}.bundle.zip"
+    )
     assert {row["name"] for row in first["release_assets"]} == {
         "SHA256SUMS",
         "bootstrap_install.py",
@@ -995,12 +1289,32 @@ def test_release_build_is_reproducible_signed_and_contains_evidence(
     assert first["channel_url"] == "https://downloads.example.test/oel/stable/channel.json"
     offline = install_bundle(
         first["offline_bundle"],
-        paths=_paths(tmp_path / "offline-install"),
+        paths=_paths(tmp_path / "offline-install", keys),
         public_keys=keys,
-        create_runtime=False,
+        create_runtime=True,
     )
     assert offline["installation"]["status"] == "official"
     assert offline["effects"]["network_used"] is False
+
+    # Change a valid wheel after the signed inventory has been checked.  Pip
+    # must still enforce the original release hash, with or without hashes in
+    # the constraints file; a fresh digest here would bless the changed bytes.
+    install_runtime = installation_manager._install_runtime
+
+    def install_changed_wheel(source_root: Path, runtime_root: Path, **kwargs: object) -> dict[str, object]:
+        selected_wheels = kwargs["signed_wheels"]
+        assert isinstance(selected_wheels, list) and selected_wheels
+        changed_wheel = selected_wheels[0]
+        changed_wheel.write_bytes(changed_wheel.read_bytes() + b"changed after signed verification")
+        return install_runtime(source_root, runtime_root, **kwargs)
+
+    tampered_paths = _paths(tmp_path / "changed-wheel-install", keys)
+    with monkeypatch.context() as patch:
+        patch.setattr(installation_manager, "_install_runtime", install_changed_wheel)
+        with pytest.raises(RuntimeError, match="DO NOT MATCH THE HASHES"):
+            install_bundle(first["offline_bundle"], paths=tampered_paths, public_keys=keys, create_runtime=True)
+    assert not tampered_paths.version_root("0.25.0").exists()
+
     with zipfile.ZipFile(first["offline_bundle"]) as archive:
         names = set(archive.namelist())
         assert "release-evidence/public-supply-chain-attestation.json" in names
@@ -1031,6 +1345,29 @@ def test_release_build_is_reproducible_signed_and_contains_evidence(
         "status": "passed",
     }
     assert "build-install-report.json" in {row["name"] for row in attestation["source_evidence"]}
+
+
+@pytest.mark.parametrize("hash_case", ["missing", "extra", "malformed", "duplicate"])
+def test_signed_runtime_rejects_incomplete_or_invalid_wheel_hashes(tmp_path: Path, hash_case: str) -> None:
+    from sim.installation.manager import _install_runtime
+
+    wheel = tmp_path / "fixture-1.0-py3-none-any.whl"
+    wheels = [wheel]
+    hashes: dict[str, str] | None = {wheel.name: "a" * 64}
+    if hash_case == "missing":
+        hashes = None
+    elif hash_case == "extra":
+        hashes["other-1.0-py3-none-any.whl"] = "b" * 64
+    elif hash_case == "malformed":
+        hashes[wheel.name] = "invalid#hash"
+    else:
+        wheels.append(tmp_path / "other-directory" / wheel.name)
+    runtime = tmp_path / "runtime"
+    with pytest.raises(ContractError, match="Signed runtime wheel"):
+        _install_runtime(
+            tmp_path, runtime, profile="core", constraints=None, signed_wheels=wheels, signed_wheel_hashes=hashes,
+        )
+    assert not runtime.exists()
 
 
 def test_developer_unsigned_build_does_not_require_trusted_keys(
@@ -1238,26 +1575,21 @@ def test_rendered_powershell_installer_routes_verified_bootstrap_arguments(tmp_p
         base_url="https://downloads.example.test/oel/0.26.0",
         channel_url="https://downloads.example.test/oel/stable/channel.json",
     )
-    fake_bin = tmp_path / "fake-bin"
-    fake_bin.mkdir()
-    fake_py = fake_bin / "py"
-    fake_py.write_text(
-        "#!/bin/sh\n"
-        "if [ \"${2:-}\" = \"-c\" ]; then exit 0; fi\n"
-        "printf '%s\\n' \"$@\" > \"$OEL_TEST_RECORD\"\n",
-        encoding="utf-8",
-    )
-    fake_py.chmod(0o755)
     record = tmp_path / "powershell-arguments.txt"
     env = {
         **os.environ,
-        "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}",
         "OEL_TEST_BOOTSTRAP": str(bootstrap),
         "OEL_TEST_INSTALLER": str(install_ps1),
         "OEL_TEST_RECORD": str(record),
     }
+    # A PowerShell launcher stub works on native Windows as well as POSIX;
+    # an executable /bin/sh fixture cannot qualify the Windows script route.
     command = (
-        "function global:Invoke-WebRequest { param($UseBasicParsing, $Uri, $OutFile) "
+        "function global:py { "
+        "if ($args[1] -ne '-c') { "
+        "[System.IO.File]::WriteAllLines($env:OEL_TEST_RECORD, [string[]]$args) }; "
+        "$global:LASTEXITCODE = 0 }; "
+        "function global:Invoke-WebRequest { param([switch]$UseBasicParsing, $Uri, $OutFile) "
         "Copy-Item -LiteralPath $env:OEL_TEST_BOOTSTRAP -Destination $OutFile }; "
         "& $env:OEL_TEST_INSTALLER --data-root test-data"
     )

@@ -8,6 +8,7 @@ import json
 import math
 import sqlite3
 import tempfile
+from contextlib import closing
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -154,8 +155,9 @@ def create_review_slice(
         if logical.resolve() == target or logical.name != "run.sqlite":
             raise ValueError("A review slice requires a complete single-run review/run.sqlite source.")
         source_identity = workspace.evidence_identity()
-        with sqlite3.connect(f"{workspace.db_path.resolve().as_uri()}?mode=ro", uri=True) as original:
-            if original.execute("PRAGMA quick_check").fetchone() != ("ok",):
+        with closing(workspace._connect(integrity=True)) as original:
+            quick_check = original.execute("PRAGMA quick_check").fetchone()
+            if quick_check is None or quick_check[0] != "ok":
                 raise ValueError("Source review store failed SQLite quick_check.")
             tables = _tables(original)
             unsupported_schema = original.execute(
@@ -287,11 +289,8 @@ def query_review_slice(path: str | Path, sql: str, *, max_rows: int = 1000) -> A
     verify_review_slice(path)
     directory = Path(path).expanduser().resolve(strict=True)
     database = directory / SLICE_DATABASE
-    workspace = ReviewWorkspace(
-        output_dir=directory, db_path=database,
-        schema_path=directory / "schema.json", saved_views_path=directory / "saved_views.json",
-    )
-    return workspace.query(_validate_select_sql(sql), max_rows=max_rows)
+    with ReviewWorkspace.open(database) as workspace:
+        return workspace.query(_validate_select_sql(sql), max_rows=max_rows)
 
 
 def main(argv: list[str] | None = None) -> int:

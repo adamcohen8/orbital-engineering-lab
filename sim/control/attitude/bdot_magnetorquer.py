@@ -4,12 +4,15 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from sim.control.attitude._validation import require_finite_scalar, require_finite_vector
 from sim.core.interfaces import Controller
 from sim.core.models import Command, StateBelief
 
 
 def _unit(vec: np.ndarray, eps: float = 1e-12) -> np.ndarray:
     arr = np.array(vec, dtype=float).reshape(3)
+    if not np.all(np.isfinite(arr)):
+        raise ValueError("vector must contain finite values.")
     mag = float(np.linalg.norm(arr))
     if mag <= eps:
         return np.zeros(3, dtype=float)
@@ -23,20 +26,32 @@ class MagnetorquerBdotController(Controller):
     max_torque_nm: float = 1.0e-4
     angular_rate_slice: tuple[int, int] = (10, 13)
 
+    def __post_init__(self) -> None:
+        self.magnetic_field_body_t = require_finite_vector(
+            self.magnetic_field_body_t,
+            "magnetic_field_body_t",
+            size=3,
+            allow_positive_inf=False,
+        )
+        self.gain = require_finite_scalar(self.gain, "gain")
+        self.max_torque_nm = require_finite_scalar(self.max_torque_nm, "max_torque_nm", allow_positive_inf=True)
+
     def act(self, belief: StateBelief, t_s: float, budget_ms: float) -> Command:
         i0, i1 = self.angular_rate_slice
         if belief.state.size < i1:
             return Command.zero()
-        omega = np.array(belief.state[i0:i1], dtype=float).reshape(3)
-        b_body = np.array(self.magnetic_field_body_t, dtype=float).reshape(3)
+        omega = require_finite_vector(belief.state[i0:i1], "belief angular rate", size=3)
+        b_body = require_finite_vector(self.magnetic_field_body_t, "magnetic_field_body_t", size=3)
         b_hat = _unit(b_body)
         if float(np.linalg.norm(b_hat)) <= 0.0:
             torque = np.zeros(3, dtype=float)
         else:
             omega_perp = omega - b_hat * float(np.dot(omega, b_hat))
-            torque = -float(self.gain) * omega_perp * float(np.linalg.norm(b_body)) ** 2
+            gain = require_finite_scalar(self.gain, "gain")
+            torque = -gain * omega_perp * float(np.linalg.norm(b_body)) ** 2
             n = float(np.linalg.norm(torque))
-            max_torque = float(max(self.max_torque_nm, 0.0))
+            max_torque = require_finite_scalar(self.max_torque_nm, "max_torque_nm", allow_positive_inf=True)
+            max_torque = float(max(max_torque, 0.0))
             if max_torque <= 0.0:
                 torque = np.zeros(3, dtype=float)
             elif n > max_torque:

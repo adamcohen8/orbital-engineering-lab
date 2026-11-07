@@ -28,7 +28,7 @@
     {
       "path": "../ccsds_odm.py",
       "role": "authoritative ODM implementation owner",
-      "sha256": "5f5cbdad3a3ee3e1c00fcfd788cc3840969782429dc21e38a5415428cb53d943"
+      "sha256": "1ed11b9cc0af6a7cdce0f741c5655777d2a20bd7b98ed1213076decb8145bf85"
     },
     {
       "path": "../../ccsds.py",

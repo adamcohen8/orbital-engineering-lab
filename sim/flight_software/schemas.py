@@ -64,17 +64,18 @@ def _path_text(path: list[str]) -> str:
 
 
 def register_record_types(record_types: tuple[type[Any], ...]) -> None:
-    """Register dataclass types that carry a unique literal ``schema`` field."""
+    """Register dataclass types that carry one or more literal ``schema`` values."""
 
     for record_type in record_types:
-        schema = _literal_default(record_type, "schema")
-        if schema is None:
+        schemas = _literal_defaults(record_type, "schema")
+        if not schemas:
             continue
-        with _SCHEMA_CACHE_LOCK:
-            previous = _SCHEMA_TYPES.get(schema)
-            if previous is not None and previous is not record_type:
-                raise ValueError(f"schema {schema!r} is already registered to {previous.__qualname__}")
-            _SCHEMA_TYPES[schema] = record_type
+        for schema in schemas:
+            with _SCHEMA_CACHE_LOCK:
+                previous = _SCHEMA_TYPES.get(schema)
+                if previous is not None and previous is not record_type:
+                    raise ValueError(f"schema {schema!r} is already registered to {previous.__qualname__}")
+                _SCHEMA_TYPES[schema] = record_type
 
 
 def registered_schemas() -> Mapping[str, type[Any]]:
@@ -155,13 +156,21 @@ def canonical_loads(data: bytes | bytearray | str, record_type: type[Any] | None
     return from_primitive(record_type, primitive)
 
 
-def _literal_default(record_type: type[Any], field_name: str) -> str | None:
+def _literal_defaults(record_type: type[Any], field_name: str) -> tuple[str, ...]:
     if not is_dataclass(record_type):
-        return None
+        return ()
+    try:
+        annotation = get_type_hints(record_type).get(field_name)
+    except (NameError, TypeError):
+        annotation = None
+    if get_origin(annotation) is Literal:
+        values = tuple(value for value in get_args(annotation) if isinstance(value, str))
+        if values:
+            return values
     for item in fields(record_type):
         if item.name == field_name and isinstance(item.default, str):
-            return item.default
-    return None
+            return (item.default,)
+    return ()
 
 
 def _to_primitive(value: object, *, path: list[str]) -> object:

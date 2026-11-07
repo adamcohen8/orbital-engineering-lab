@@ -28,10 +28,13 @@ from sim.estimation.weighting import (
     whiten_residual_block,
     whiten_residual_with_factor,
 )
+from sim.ground_stations import _ground_measurement_physical_validity
 from sim.numeric_backend import normalize_numeric_backend
 from sim.review import write_workflow_review
 from sim.scenarios import ScenarioArtifact
+from sim.security.output_writes import mkdir_output, staged_output_file, write_output_text
 from sim.utils.geodesy import ecef_to_enu_rotation, enu_to_ecef_rotation, geodetic_to_ecef_km
+from sim.utils.vector_math import dot3, norm3
 
 _DAY_S = 86400.0
 _DEFAULT_ANGLE_SIGMA_DEG = 0.02
@@ -98,8 +101,8 @@ def _predict_ground_station_measurement(
         station_ecef, station_eci, station_vel_eci, enu_rotation = geometry
     target_ecef = transform_position(state[:3], "eci", "ecef", t_s=float(t_s), context=frame_ctx)
     rho_ecef = target_ecef - station_ecef
-    enu = enu_rotation @ rho_ecef
-    slant_range_km = float(np.linalg.norm(rho_ecef))
+    enu = np.array([dot3(row, rho_ecef) for row in enu_rotation])
+    slant_range_km = norm3(rho_ecef)
     if slant_range_km <= 0.0:
         azimuth_deg = 0.0
         elevation_deg = 90.0
@@ -107,8 +110,8 @@ def _predict_ground_station_measurement(
     else:
         azimuth_deg = float(np.rad2deg(np.arctan2(enu[0], enu[1])) % 360.0)
         elevation_deg = float(np.rad2deg(np.arcsin(np.clip(enu[2] / slant_range_km, -1.0, 1.0))))
-        los_eci = (state[:3] - station_eci) / max(float(np.linalg.norm(state[:3] - station_eci)), 1.0e-12)
-        range_rate_km_s = float(np.dot(state[3:6] - station_vel_eci, los_eci))
+        los_eci = (state[:3] - station_eci) / max(norm3(state[:3] - station_eci), 1.0e-12)
+        range_rate_km_s = dot3(state[3:6] - station_vel_eci, los_eci)
     return {
         "azimuth_deg": azimuth_deg,
         "elevation_deg": elevation_deg,
@@ -203,7 +206,7 @@ def solve_ground_station_measurement_od(
         for row in rows
     ]
     output_root = Path(output_dir).expanduser().resolve()
-    output_root.mkdir(parents=True, exist_ok=True)
+    mkdir_output(output_root)
     frame_ctx = frame_context or frame_context_from_mapping(
         {},
         jd_utc_start=epoch_jd_utc,
@@ -475,7 +478,8 @@ def solve_ground_station_measurement_od(
     fitted_packet_path = output_root / "fitted_mission_input_packet.json"
     _write_residual_csv(residual_csv_path, [*prefit_residuals, *fit_residuals, *holdout_residuals])
     _write_residual_plot(residual_plot_path, [*prefit_residuals, *fit_residuals, *holdout_residuals])
-    fitted_packet_path.write_text(
+    write_output_text(
+        str(fitted_packet_path),
         json.dumps(
             _fitted_state_packet(
                 object_id=object_id,
@@ -487,7 +491,6 @@ def solve_ground_station_measurement_od(
             sort_keys=True,
         )
         + "\n",
-        encoding="utf-8",
     )
     decision_records = _label_sensor_residual_decisions(
         solve.decision_records,
@@ -613,8 +616,8 @@ def solve_ground_station_measurement_od(
         "saved_views_json": str(review_root / "saved_views.json"),
     }
     report["review"] = anticipated_review_outputs
-    report_json_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    report_md_path.write_text(_render_report_md(report), encoding="utf-8")
+    write_output_text(str(report_json_path), json.dumps(report, indent=2, sort_keys=True) + "\n")
+    write_output_text(str(report_md_path), _render_report_md(report))
     review_outputs = write_workflow_review(
         output_dir=output_root,
         workflow_type="ground_station_orbit_determination",
@@ -777,6 +780,20 @@ def _normalize_measurements(measurements: Sequence[Mapping[str, Any]]) -> list[d
         if not np.all(np.isfinite(np.asarray(vector, dtype=float))):
             raise ValueError(f"measurement row {idx} vector must be finite.")
         values = {name: value for name, value in zip(components, vector, strict=False)}
+        if "valid" in raw and type(raw["valid"]) is not bool:
+            raise ValueError(f"measurement row {idx} validity flag must be boolean.")
+        if raw.get("valid", True) is False:
+            reason = str(raw.get("validity_reason", "flagged_invalid") or "flagged_invalid")
+            raise ValueError(
+                f"measurement row {idx} is physically invalid ({reason}); "
+                "invalid raw measurements cannot enter orbit determination."
+            )
+        physically_valid, validity_reason = _ground_measurement_physical_validity(values)
+        if not physically_valid:
+            raise ValueError(
+                f"measurement row {idx} is physically invalid ({validity_reason}); "
+                "impossible angular/range domains cannot enter orbit determination."
+            )
         sigma_values = [float(item) for item in raw.get("sigma", []) or []]
         if sigma_values and len(sigma_values) != len(components):
             raise ValueError(f"measurement row {idx} sigma must match the measurement dimension.")
@@ -1879,10 +1896,12 @@ def _write_residual_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
         "refraction_correction_deg",
         "elevation_sigma_scale",
     ]
-    with path.open("w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows([{key: row.get(key, "") for key in fieldnames} for row in rows])
+    mkdir_output(path.parent)
+    with staged_output_file(path) as target:
+        with target.open("w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows([{key: row.get(key, "") for key in fieldnames} for row in rows])
 
 
 def _write_residual_plot(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
@@ -1970,8 +1989,9 @@ def _write_residual_plot(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
             labelcolor="black",
         )
     fig.tight_layout(rect=(0.0, 0.0, 0.82, 1.0))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(path, dpi=140, facecolor="white", transparent=False)
+    mkdir_output(path.parent)
+    with staged_output_file(path) as target:
+        fig.savefig(target, dpi=140, facecolor="white", transparent=False)
     plt.close(fig)
 
 

@@ -50,15 +50,15 @@ def validate_mass_properties(
     *,
     path: str = "specs.mass_properties",
 ) -> MassPropertyValidationResult:
+    errors: list[str] = _validate_object_mass_fields(specs, path)
+    warnings: list[str] = []
     raw_mp = specs.get("mass_properties")
     if raw_mp in (None, ""):
-        return MassPropertyValidationResult()
+        return MassPropertyValidationResult(errors=errors, warnings=warnings)
     if not isinstance(raw_mp, dict):
-        return MassPropertyValidationResult(errors=[f"{path}: must be a mapping/object."])
+        return MassPropertyValidationResult(errors=[*errors, f"{path}: must be a mapping/object."], warnings=warnings)
 
     mp = dict(raw_mp)
-    errors: list[str] = []
-    warnings: list[str] = []
 
     inertia = _array3x3_or_error(mp.get("inertia_kg_m2"), f"{path}.inertia_kg_m2", errors)
     if inertia is not None:
@@ -107,6 +107,33 @@ def validate_mass_properties(
         errors.append(f"{path}.frame: runtime inertia must be expressed in the body frame.")
 
     return MassPropertyValidationResult(errors=errors, warnings=warnings)
+
+
+def _validate_object_mass_fields(specs: dict[str, Any], path: str) -> list[str]:
+    """Validate the mass fields consumed by the runtime before auditing inertia."""
+
+    object_path = path[:-len(".mass_properties")] if path.endswith(".mass_properties") else path
+    errors: list[str] = []
+    if "dry_mass_kg" in specs or "fuel_mass_kg" in specs:
+        dry = _mass_component_or_error(
+            specs.get("dry_mass_kg", 0.0),
+            f"{object_path}.dry_mass_kg",
+            errors,
+            required="dry_mass_kg" in specs,
+        )
+        fuel = _mass_component_or_error(
+            specs.get("fuel_mass_kg", 0.0),
+            f"{object_path}.fuel_mass_kg",
+            errors,
+            required="fuel_mass_kg" in specs,
+        )
+        if dry is not None and fuel is not None and dry + fuel <= 0.0:
+            errors.append(f"{object_path}: dry_mass_kg + fuel_mass_kg must be > 0.")
+    elif "mass_kg" in specs:
+        mass = _mass_component_or_error(specs.get("mass_kg"), f"{object_path}.mass_kg", errors, required=True)
+        if mass is not None and mass <= 0.0:
+            errors.append(f"{object_path}.mass_kg: must be > 0.")
+    return errors
 
 
 def resolve_inertia_kg_m2(specs: dict[str, Any], *, default: np.ndarray | None = None) -> np.ndarray:
@@ -375,6 +402,17 @@ def _finite_float_or_error(
     if min_value is not None and parsed < min_value:
         errors.append(f"{path}: must be >= {min_value:g}.")
     return parsed
+
+
+def _mass_component_or_error(value: Any, path: str, errors: list[str], *, required: bool) -> float | None:
+    if value is None:
+        if required:
+            errors.append(f"{path}: must be a finite number.")
+        return None
+    if isinstance(value, (bool, np.bool_)):
+        errors.append(f"{path}: must be a finite number.")
+        return None
+    return _finite_float_or_error(value, path, errors, required=required, min_value=0.0)
 
 
 def _finite_float(value: Any) -> float | None:

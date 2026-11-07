@@ -6,6 +6,7 @@ from scipy.integrate import solve_ivp
 
 from sim.dynamics.orbit.accelerations import OrbitContext
 from sim.dynamics.orbit.cr3bp import (
+    CR3BPSystem,
     cr3bp_derivative_physical,
     cr3bp_halo_seed_state_km_s,
     propagate_cr3bp_reference_stm,
@@ -114,6 +115,20 @@ def test_invalid_integrator_and_tolerances_rejected(function):
     for bad in [0.0, -1.0, np.nan, np.inf]:
         with pytest.raises(ValueError, match="tolerances"):
             function(*args, integrator="rkf78", adaptive_rtol=bad)
+
+
+def test_cr3bp_rejects_invalid_state_time_and_system_before_backend_dispatch():
+    state = cr3bp_halo_seed_state_km_s()
+    with pytest.raises(ValueError, match="state_km_s"):
+        propagate_cr3bp_state(np.array([np.nan] * 6), 60.0, 0.0)
+    with pytest.raises(ValueError, match="dt_s"):
+        propagate_cr3bp_state(state, -1.0, 0.0, integrator="rkf78")
+    with pytest.raises(ValueError, match="t_s"):
+        propagate_cr3bp_state(state, 60.0, np.inf)
+    with pytest.raises(ValueError, match="stm"):
+        propagate_cr3bp_reference_stm(state, np.full((6, 6), np.nan), 60.0, 0.0)
+    with pytest.raises(ValueError, match="mu"):
+        CR3BPSystem(mu=np.nan)
 
 
 def test_configured_cr3bp_integrator_reaches_runtime():

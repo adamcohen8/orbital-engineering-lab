@@ -255,6 +255,11 @@ class TestOrbitAtmosphereModels(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "scale_height"):
             density_exponential(r, 0.0, {"exponential_scale_height_km": 0.0})
 
+    def test_density_exponential_rejects_nonfinite_position_before_native_dispatch(self):
+        r = np.array([6378.137 + 220.0, np.nan, 0.0], dtype=float)
+        with self.assertRaisesRegex(ValueError, "r_eci_km"):
+            density_exponential(r, 0.0, {"_rust_numeric_backend": "rust"})
+
     def test_density_exponential_skips_ecef_conversion(self):
         r = np.array([6378.137 + 200.0, 0.0, 0.0], dtype=float)
         with patch("sim.dynamics.orbit.atmosphere.eci_to_ecef_harmonic", side_effect=AssertionError("should not be called")):

@@ -10,6 +10,29 @@ from sim.numeric_backend import normalize_numeric_backend
 from sim.utils.quaternion import quaternion_to_dcm_bn
 
 
+def _validate_config_values(
+    value: object,
+    name: str,
+    *,
+    allow_none: bool = False,
+    allow_positive_inf: bool = False,
+) -> None:
+    if value is None and allow_none:
+        return
+    try:
+        array = np.asarray(value, dtype=float)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must contain numeric values.") from exc
+    if allow_positive_inf:
+        valid = np.all(np.isfinite(array) | np.isposinf(array))
+    else:
+        valid = np.all(np.isfinite(array))
+    if not valid:
+        if allow_positive_inf:
+            raise ValueError(f"{name} must contain finite values or positive infinity.")
+        raise ValueError(f"{name} must contain finite values.")
+
+
 @dataclass(frozen=True)
 class ReactionWheelLimits:
     max_torque_nm: np.ndarray
@@ -22,16 +45,32 @@ class ReactionWheelLimits:
     coulomb_friction_nm: np.ndarray | float = 0.0
     numeric_backend: str = "rust"
 
+    def __post_init__(self) -> None:
+        _validate_config_values(self.max_torque_nm, "max_torque_nm", allow_positive_inf=True)
+        _validate_config_values(self.max_momentum_nms, "max_momentum_nms", allow_positive_inf=True)
+        _validate_config_values(self.wheel_inertia_kg_m2, "wheel_inertia_kg_m2", allow_none=True)
+        _validate_config_values(self.max_speed_rad_s, "max_speed_rad_s", allow_none=True, allow_positive_inf=True)
+        _validate_config_values(self.torque_time_constant_s, "torque_time_constant_s")
+        _validate_config_values(self.viscous_friction_nms, "viscous_friction_nms", allow_positive_inf=False)
+        _validate_config_values(self.coulomb_friction_nm, "coulomb_friction_nm", allow_positive_inf=False)
+
 
 @dataclass(frozen=True)
 class MagnetorquerLimits:
     max_dipole_a_m2: np.ndarray
+
+    def __post_init__(self) -> None:
+        _validate_config_values(self.max_dipole_a_m2, "max_dipole_a_m2", allow_positive_inf=True)
 
 
 @dataclass(frozen=True)
 class ThrusterPulseLimits:
     max_torque_nm: np.ndarray
     pulse_quantum_s: float = 0.02
+
+    def __post_init__(self) -> None:
+        _validate_config_values(self.max_torque_nm, "max_torque_nm", allow_positive_inf=True)
+        _validate_config_values(self.pulse_quantum_s, "pulse_quantum_s")
 
 
 @dataclass(frozen=True)
@@ -41,12 +80,24 @@ class ControlMomentGyroLimits:
     gimbal_rate_limit_rad_s: np.ndarray | float = np.inf
     torque_time_constant_s: float = 0.0
 
+    def __post_init__(self) -> None:
+        _validate_config_values(self.max_torque_nm, "max_torque_nm", allow_positive_inf=True)
+        _validate_config_values(self.momentum_nms, "momentum_nms", allow_positive_inf=True)
+        # Positive infinity is the documented unlimited gimbal-rate default.
+        _validate_config_values(self.gimbal_rate_limit_rad_s, "gimbal_rate_limit_rad_s", allow_positive_inf=True)
+        _validate_config_values(self.torque_time_constant_s, "torque_time_constant_s")
+
 
 @dataclass(frozen=True)
 class WheelDesaturationLimits:
     momentum_fraction_threshold: float = 0.8
     unload_gain_s_inv: float = 0.02
     max_unload_torque_nm: float = 0.01
+
+    def __post_init__(self) -> None:
+        _validate_config_values(self.momentum_fraction_threshold, "momentum_fraction_threshold")
+        _validate_config_values(self.unload_gain_s_inv, "unload_gain_s_inv")
+        _validate_config_values(self.max_unload_torque_nm, "max_unload_torque_nm")
 
 
 @dataclass
@@ -172,9 +223,11 @@ class AttitudeActuator(Actuator):
             raise ValueError("wheel_axes_body must have shape (3,N) or (N,3).")
         if g.shape[1] != n:
             raise ValueError(f"wheel_axes_body must contain {n} wheel axes.")
+        if not np.all(np.isfinite(g)):
+            raise ValueError("wheel_axes_body must contain finite values.")
         for k in range(n):
             norm = float(np.linalg.norm(g[:, k]))
-            if norm <= 0.0:
+            if not np.isfinite(norm) or norm <= 0.0:
                 raise ValueError("wheel_axes_body contains a zero vector.")
             g[:, k] /= norm
         return g
@@ -227,8 +280,8 @@ class AttitudeActuator(Actuator):
                                viscous_nms, coulomb_nm, j_kg_m2)
             self._wheel_native_prepared = (
                 b"".join(np.asarray(value, dtype="<f8").tobytes() for value in prepared_values)
-                if all(not np.any(np.isnan(value)) for value in prepared_values)
-                and np.all(np.isfinite(j_kg_m2)) else None
+                if all(np.all(np.isfinite(value)) for value in prepared_values)
+                else None
             )
         _, g, max_torque_nm, max_momentum_nms, max_speed_rad_s, viscous_nms, coulomb_nm, j_kg_m2 = cached
         torque_tau_s = float(max(rw.torque_time_constant_s, 0.0))
@@ -357,6 +410,8 @@ class AttitudeActuator(Actuator):
             }
 
         b = np.array(b_body, dtype=float).reshape(3)
+        if not np.all(np.isfinite(b)):
+            raise ValueError("magnetic field must contain finite values.")
         b2 = float(np.dot(b, b))
         if b2 <= 1e-24:
             dipole = np.zeros(3, dtype=float)

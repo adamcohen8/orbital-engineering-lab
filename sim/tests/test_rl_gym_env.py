@@ -77,6 +77,22 @@ def _base_scenario() -> dict:
 
 
 class TestGymSimulationEnv(unittest.TestCase):
+    def test_default_enabled_objects_are_available_to_observation_probe(self):
+        scenario = _base_scenario()
+        scenario["objects"]["target"].pop("enabled")
+        scenario["objects"]["chaser"].pop("enabled")
+        env = GymSimulationEnv(
+            GymEnvConfig(
+                scenario=scenario,
+                controlled_agent_id="chaser",
+                action_fields=(),
+            )
+        )
+
+        observation, _ = env.reset(seed=17)
+
+        self.assertEqual(observation.shape, (6,))
+
     def test_default_observations_use_belief_not_truth(self):
         env = GymSimulationEnv(
             GymEnvConfig(

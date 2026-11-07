@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass, field
 from functools import lru_cache
+from numbers import Integral
 from typing import Any
 
 import numpy as np
@@ -31,21 +32,28 @@ class EKFManeuverDetectionConfig:
     cooldown_updates: int = 0
 
     def __post_init__(self) -> None:
+        if type(self.enabled) is not bool:
+            raise ValueError("enabled must be a boolean.")
         if not 0.0 < float(self.warning_probability) < 1.0:
             raise ValueError("warning_probability must be between 0 and 1.")
         if not 0.0 < float(self.detection_probability) < 1.0:
             raise ValueError("detection_probability must be between 0 and 1.")
         if float(self.warning_probability) > float(self.detection_probability):
             raise ValueError("warning_probability must be <= detection_probability.")
-        if int(self.window_size) <= 0:
+        integer_fields = ("window_size", "warning_count", "detection_count", "min_updates", "cooldown_updates")
+        for name in integer_fields:
+            value = getattr(self, name)
+            if isinstance(value, (bool, np.bool_)) or not isinstance(value, Integral):
+                raise ValueError(f"{name} must be an integer.")
+        if self.window_size <= 0:
             raise ValueError("window_size must be positive.")
-        if int(self.warning_count) <= 0 or int(self.detection_count) <= 0:
+        if self.warning_count <= 0 or self.detection_count <= 0:
             raise ValueError("warning_count and detection_count must be positive.")
-        if int(self.warning_count) > int(self.window_size) or int(self.detection_count) > int(self.window_size):
+        if self.warning_count > self.window_size or self.detection_count > self.window_size:
             raise ValueError("warning_count and detection_count must be <= window_size.")
-        if int(self.min_updates) <= 0:
+        if self.min_updates <= 0:
             raise ValueError("min_updates must be positive.")
-        if int(self.cooldown_updates) < 0:
+        if self.cooldown_updates < 0:
             raise ValueError("cooldown_updates must be non-negative.")
 
 
@@ -206,6 +214,8 @@ class EKFManeuverDetector:
 
 
 def chi_square_threshold(dof: int, probability: float) -> float:
+    if isinstance(dof, (bool, np.bool_)) or not isinstance(dof, Integral):
+        raise ValueError("dof must be a positive integer.")
     k = int(dof)
     if k <= 0:
         raise ValueError("dof must be positive.")

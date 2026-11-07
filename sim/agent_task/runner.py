@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
-from dataclasses import asdict
+import os
+from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
@@ -29,6 +31,9 @@ from sim.review import (
 from sim.review.plotting import ReviewPlotArtifact, save_review_plot
 from sim.security import ConfigPathPolicy
 
+if TYPE_CHECKING:
+    from sim.security.output_writes import OutputWriter
+
 DEFAULT_INSPECTION_QUERIES = ("run_metadata", "objects", "artifacts")
 DEFAULT_COMPARISON_METRICS = (
     "initial_range_km",
@@ -45,8 +50,131 @@ _AGENT_TASK_EXECUTION_SERVICE = SimulationExecutionService()
 _RUN_SIMULATION_CONFIG_FILE_ORIGINAL = run_simulation_config_file
 
 
+def _lexical_path(value: str | Path) -> Path:
+    """Return an absolute path without traversing producer-controlled symlinks.
+
+    The MCP writer owns the physical descriptor and deliberately keeps a
+    logical output path that may be renamed while a producer is running.  A
+    normal ``Path.resolve()`` here would follow a replacement symlink and
+    change the identity reported by the task packet.  ``abspath`` only
+    normalizes the lexical components; the descriptor writer performs the
+    no-follow checks when it opens or publishes bytes.
+    """
+
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    return Path(os.path.abspath(os.fspath(path)))
+
+
 class AgentTaskCancelled(RuntimeError):
     """Raised by a caller callback to stop a task at a deterministic step boundary."""
+
+
+class _OutputBinding:
+    """Bind logical producer paths to a descriptor-backed physical writer."""
+
+    def __init__(self, writer: Any, logical_root: str | Path) -> None:
+        self.writer = writer
+        self.logical_root = _lexical_path(logical_root)
+        self.writer_logical_root = _lexical_path(writer.logical_root)
+        self.physical_root = _lexical_path(writer.path)
+        try:
+            self.logical_root.relative_to(self.writer_logical_root)
+        except ValueError as exc:
+            raise ValueError(
+                "Agent-task output logical root must be within the bound writer logical root."
+            ) from exc
+
+    def _relative(self, logical_path: str | Path) -> Path:
+        path = _lexical_path(logical_path)
+        try:
+            return path.relative_to(self.writer_logical_root)
+        except ValueError as exc:
+            raise ValueError(
+                f"Agent-task output path is outside the bound writer logical root: {path}"
+            ) from exc
+
+    def physical(self, logical_path: str | Path) -> Path:
+        return self.physical_root / self._relative(logical_path)
+
+    def ensure_directory(self, logical_path: str | Path) -> Path:
+        path = _lexical_path(logical_path)
+        if path == self.logical_root and path == self.writer_logical_root:
+            if not self.physical_root.is_dir():
+                raise ValueError("The bound agent-task output writer root is not a directory.")
+            return self.physical_root
+        from sim.security.output_writes import bind_output_writer, mkdir_output
+
+        with bind_output_writer(self.writer):
+            return mkdir_output(path)
+
+    def write_bytes(self, logical_path: str | Path, payload: bytes) -> Path:
+        from sim.security.output_writes import (
+            SecureWriteConflict,
+            bind_output_writer,
+            write_output_bytes,
+        )
+
+        path = _lexical_path(logical_path)
+        relative = self._relative(path)
+        with bind_output_writer(self.writer):
+            try:
+                write_output_bytes(path, payload)
+            except SecureWriteConflict:
+                self.writer.update_existing_bytes(relative, payload)
+        return path
+
+    def logicalize(self, value: Any) -> Any:
+        from sim.security.output_writes import rewrite_staged_paths
+
+        return rewrite_staged_paths(value, self.physical_root, self.writer_logical_root)
+
+
+def _bind_output_writer(
+    writer: OutputWriter | None, logical_root: str | Path
+) -> _OutputBinding | None:
+    if writer is None:
+        return None
+    return _OutputBinding(writer, logical_root)
+
+
+@contextlib.contextmanager
+def _bound_output_writer(writer: OutputWriter | None):
+    if writer is None:
+        yield
+        return
+    from sim.security.output_writes import bind_output_writer
+
+    with bind_output_writer(writer):
+        yield
+
+
+def _artifact_status(
+    artifacts: list[dict[str, Any]],
+    *,
+    output_dir: str | Path,
+    binding: _OutputBinding | None,
+) -> list[dict[str, Any]]:
+    logical_root = _lexical_path(output_dir)
+    physical_root = binding.physical(logical_root) if binding is not None else logical_root
+    physical_artifacts: list[dict[str, Any]] = []
+    for item in artifacts:
+        row = dict(item)
+        raw_path = str(row.get("path") or "")
+        if raw_path:
+            candidate = Path(raw_path).expanduser()
+            if not candidate.is_absolute():
+                candidate = logical_root / candidate
+            if binding is not None:
+                try:
+                    candidate.relative_to(binding.physical_root)
+                except ValueError:
+                    candidate = binding.physical(candidate)
+            row["path"] = str(candidate)
+        physical_artifacts.append(row)
+    checked = _artifacts_with_path_status(physical_artifacts, output_dir=physical_root)
+    return binding.logicalize(checked) if binding is not None else checked
 
 
 def run_recipe(
@@ -60,18 +188,39 @@ def run_recipe(
     max_rows: int = 50,
     resource_profile: str = "config",
     step_callback: Any | None = None,
+    output_writer: OutputWriter | None = None,
+    protected_review: bool | None = None,
 ) -> dict[str, Any]:
     recipe = get_recipe(recipe_id)
     if recipe is None:
         raise ValueError(f"Unknown agent task recipe: {recipe_id}")
+    if output_writer is not None and output_dir is None and output_root is None:
+        output_dir = _lexical_path(output_writer.logical_root)
     prepared = prepare_recipe_config(
         recipe,
         output_dir=output_dir,
         output_root=output_root,
         resource_profile=resource_profile,
+        output_writer=output_writer,
     )
     task_id = recipe.recipe_id
-    validation = _workspace().validate(prepared["config_path"])
+    binding = _bind_output_writer(output_writer, prepared["output_dir"])
+    execution_config_path = (
+        str(binding.physical(prepared["config_path"]))
+        if binding is not None
+        else prepared["config_path"]
+    )
+    validation_workspace = _workspace()
+    if binding is not None:
+        validation_workspace = SimulationWorkspace(
+            workspace_root=_repo_root(),
+            read_roots=(Path(prepared["source_config"]).parent,),
+            write_roots=(Path(prepared["output_dir"]),),
+            allow_config_dir_writes=False,
+        )
+    validation = validation_workspace.validate(execution_config_path)
+    if binding is not None:
+        validation = binding.logicalize(validation)
     packet = EvidencePacket(
         task_id=task_id,
         status="validated" if bool(validation.get("ok")) else "failed",
@@ -86,24 +235,28 @@ def run_recipe(
         packet.failure_hints = [
             hint.to_dict() for hint in diagnose_failure(validation=validation, output_dir=prepared["output_dir"])
         ]
-        _discard_prepared_config(prepared["config_path"])
-        return _write_packet(packet, prepared["output_dir"])
+        _discard_prepared_config(execution_config_path)
+        return _write_packet(packet, prepared["output_dir"], output_writer=output_writer)
     if dry_run:
         packet.caveats.append("Dry run requested: scenario was validated but not executed.")
-        _discard_prepared_config(prepared["config_path"])
-        return _write_packet(packet, prepared["output_dir"])
+        _discard_prepared_config(execution_config_path)
+        return _write_packet(packet, prepared["output_dir"], output_writer=output_writer)
 
     try:
-        payload = _run_prepared_config(prepared["config_path"], step_callback=step_callback)
-        packet.run = _run_summary(payload)
+        with _bound_output_writer(output_writer):
+            payload = _run_prepared_config(execution_config_path, step_callback=step_callback)
+        packet.run = binding.logicalize(_run_summary(payload)) if binding is not None else _run_summary(payload)
         packet.status = "completed"
     except AgentTaskCancelled as exc:
         packet.status = "cancelled"
         packet.run = {"cancelled": True, "error": str(exc)}
-        packet.artifacts = _partial_output_artifacts(prepared["output_dir"])
+        partial_root = binding.physical(prepared["output_dir"]) if binding is not None else prepared["output_dir"]
+        packet.artifacts = _partial_output_artifacts(partial_root)
+        if binding is not None:
+            packet.artifacts = binding.logicalize(packet.artifacts)
         packet.artifact_summary = _summarize_artifacts(packet.artifacts)
         packet.caveats.append("Execution was cancelled at a deterministic workflow boundary; artifacts are partial.")
-        return _write_packet(packet, prepared["output_dir"])
+        return _write_packet(packet, prepared["output_dir"], output_writer=output_writer)
     except Exception as exc:
         packet.status = "failed"
         packet.run = {"error": str(exc)}
@@ -111,15 +264,19 @@ def run_recipe(
             hint.to_dict()
             for hint in diagnose_failure(str(exc), validation=validation, output_dir=prepared["output_dir"])
         ]
-        return _write_packet(packet, prepared["output_dir"])
+        return _write_packet(packet, prepared["output_dir"], output_writer=output_writer)
 
+    inspect_root = binding.physical(prepared["output_dir"]) if binding is not None else prepared["output_dir"]
     inspection = inspect_output(
-        prepared["output_dir"],
+        inspect_root,
         query_names=recipe.query_names,
         max_rows=max_rows,
         semantic_metric_names=recipe.semantic_metric_names,
         write_packet=False,
+        protected=protected_review,
     )
+    if binding is not None:
+        inspection = binding.logicalize(inspection)
     packet.review = dict(inspection.get("review", {}) or {})
     packet.artifacts = list(inspection.get("artifacts", []) or [])
     packet.artifact_summary = dict(inspection.get("artifact_summary", {}) or _summarize_artifacts(packet.artifacts))
@@ -127,11 +284,25 @@ def run_recipe(
     if str(inspection.get("status") or "") != "completed":
         packet.status = "partial"
     if make_plots:
-        packet.plots = _make_plots_for_recipe(
-            prepared["output_dir"],
-            recipe.plot_recipe_ids,
-            style_name=style_name,
-        )
+        plot_workspace_dir = binding.physical(prepared["output_dir"]) if binding is not None else prepared["output_dir"]
+        with _bound_output_writer(output_writer):
+            packet.plots = _make_plots_for_recipe(
+                plot_workspace_dir,
+                recipe.plot_recipe_ids,
+                style_name=style_name,
+                logical_output_dir=prepared["output_dir"] if binding is not None else None,
+                protected=protected_review,
+            )
+        if binding is not None:
+            # Plot renderers return logical paths after their private
+            # per-file publication.  Recheck existence through the retained
+            # staging descriptor so a not-yet-published final path does not
+            # turn a successful render into a false partial result.
+            packet.plots = _artifact_status(
+                binding.logicalize(packet.plots),
+                output_dir=prepared["output_dir"],
+                binding=binding,
+            )
         packet.plot_summary = _summarize_plots(packet.plots)
         failed_plots = [
             dict(item)
@@ -156,8 +327,16 @@ def run_recipe(
                 }
             )
     if step_callback is not None:
-        step_callback(1, 1)
-    return _write_packet(packet, prepared["output_dir"])
+        try:
+            step_callback(1, 1)
+        except AgentTaskCancelled as exc:
+            packet.status = "cancelled"
+            packet.run = {"cancelled": True, "error": str(exc)}
+            packet.caveats.append(
+                "Execution was cancelled at a deterministic workflow boundary; artifacts are partial."
+            )
+            return _write_packet(packet, prepared["output_dir"], output_writer=output_writer)
+    return _write_packet(packet, prepared["output_dir"], output_writer=output_writer)
 
 
 def inspect_output(
@@ -169,8 +348,9 @@ def inspect_output(
     write_packet: bool = True,
     max_value_bytes: int | None = None,
     max_result_bytes: int | None = None,
+    protected: bool | None = None,
 ) -> dict[str, Any]:
-    outdir = Path(output_dir).expanduser().resolve()
+    outdir = _lexical_path(output_dir)
     requested_query_names = None if query_names is None else tuple(query_names)
     packet = EvidencePacket(
         task_id=f"inspect_{outdir.name}",
@@ -183,7 +363,11 @@ def inspect_output(
     )
     review: dict[str, Any] = {"output_dir": str(outdir), "queries": []}
     try:
-        workspace = ReviewWorkspace.open(outdir)
+        workspace = (
+            ReviewWorkspace.open(outdir)
+            if protected is None
+            else ReviewWorkspace.open(outdir, protected=protected)
+        )
         effective_query_names = (
             _default_inspection_queries(workspace)
             if requested_query_names is None
@@ -265,18 +449,31 @@ def create_plot(
     file_format: str = "png",
     artifact_id: str = "",
     path: str | Path | None = None,
+    record: bool = True,
+    logical_output_dir: str | Path | None = None,
+    protected: bool | None = None,
 ) -> dict[str, Any]:
     recipe = get_plot_recipe(plot_recipe_id)
     if recipe is None:
         raise ValueError(f"Unknown agent plot recipe: {plot_recipe_id}")
-    workspace = ReviewWorkspace.open(output_dir)
+    workspace = (
+        ReviewWorkspace.open(output_dir)
+        if protected is None
+        else ReviewWorkspace.open(output_dir, protected=protected)
+    )
+    if logical_output_dir is not None:
+        # Queries and generated-artifact indexes read from the private
+        # staging directory, while their persisted relative paths belong to
+        # the approved logical output root.  Keep the physical descriptors
+        # from ``open`` and replace only the public workspace identity.
+        workspace = replace(workspace, output_dir=_lexical_path(logical_output_dir))
     spec = review_plot_spec(
         recipe,
         style_name=style_name,
         file_format=file_format,
         artifact_id=artifact_id or recipe.artifact_id,
     )
-    artifact = save_review_plot(workspace, spec, path=path)
+    artifact = save_review_plot(workspace, spec, path=path, record=record)
     return _plot_artifact_dict(artifact, recipe=recipe)
 
 
@@ -288,7 +485,7 @@ def compare_configs(
     metric_names: tuple[str, ...] | list[str] | None = None,
     max_rows: int = 50,
 ) -> dict[str, Any]:
-    outdir = Path(output_dir).expanduser().resolve()
+    outdir = _lexical_path(output_dir)
     outdir.mkdir(parents=True, exist_ok=True)
     metrics = tuple(metric_names or DEFAULT_COMPARISON_METRICS)
     configs = [
@@ -380,6 +577,7 @@ def compare_outputs(
     max_rows: int = 50,
     max_value_bytes: int | None = None,
     max_result_bytes: int | None = None,
+    protected: bool | None = None,
 ) -> dict[str, Any]:
     """Compare semantic metrics from two completed runs without executing or writing."""
 
@@ -394,6 +592,7 @@ def compare_outputs(
             write_packet=False,
             max_value_bytes=max_value_bytes,
             max_result_bytes=max_result_bytes,
+            protected=protected,
         ),
         "candidate": inspect_output(
             candidate_output_dir,
@@ -403,6 +602,7 @@ def compare_outputs(
             write_packet=False,
             max_value_bytes=max_value_bytes,
             max_result_bytes=max_result_bytes,
+            protected=protected,
         ),
     }
     metric_table = {label: _extract_metric_values(data, metrics) for label, data in inspections.items()}
@@ -428,15 +628,21 @@ def prepare_recipe_config(
     output_dir: str | Path | None = None,
     output_root: str | Path | None = None,
     resource_profile: str = "config",
+    output_writer: OutputWriter | None = None,
 ) -> dict[str, Any]:
     root = _repo_root()
     config_path = (root / recipe.config_path).resolve()
+    if output_dir is None and output_root is None and output_writer is not None:
+        output_dir = Path(output_writer.logical_root)
     if output_dir is None and output_root is not None:
-        output_dir = Path(output_root).expanduser().resolve() / recipe.recipe_id
+        output_dir = _lexical_path(output_root) / recipe.recipe_id
     if output_dir is None:
         data = _load_yaml(config_path)
         output_dir = data.get("outputs", {}).get("output_dir", "")
-    return _prepare_config(config_path, output_dir, label=recipe.recipe_id, resource_profile=resource_profile)
+    return _prepare_config(
+        config_path, output_dir, label=recipe.recipe_id,
+        resource_profile=resource_profile, output_writer=output_writer
+    )
 
 
 def _prepare_config(
@@ -445,9 +651,11 @@ def _prepare_config(
     *,
     label: str,
     resource_profile: str = "config",
+    output_writer: OutputWriter | None = None,
 ) -> dict[str, Any]:
     source = Path(config_path).expanduser().resolve()
-    outdir = Path(output_dir).expanduser().resolve()
+    outdir = _lexical_path(output_dir)
+    binding = _bind_output_writer(output_writer, outdir)
     data = _load_yaml(source)
     if resource_profile != "config":
         data = apply_resource_profile_to_config_dict(data, resource_profile)
@@ -457,17 +665,30 @@ def _prepare_config(
     data["outputs"]["review"]["enabled"] = True
     data["outputs"]["review"].setdefault("detail", "standard")
     task_config = outdir / "agent_task_config.yaml"
-    outdir.mkdir(parents=True, exist_ok=True)
-    task_config.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=False), encoding="utf-8")
-    task_bytes = task_config.read_bytes()
+    serialized = yaml.safe_dump(data, sort_keys=False, allow_unicode=False).encode("utf-8")
+    physical_task_config = binding.physical(task_config) if binding is not None else task_config
+    if binding is None:
+        outdir.mkdir(parents=True, exist_ok=True)
+        task_config.write_bytes(serialized)
+    else:
+        binding.ensure_directory(outdir)
+        binding.write_bytes(task_config, serialized)
+    task_bytes = serialized
     task_digest = hashlib.sha256(task_bytes).hexdigest()
-    prepared_cfg = _AGENT_TASK_EXECUTION_SERVICE.load_config(task_config)
     normalization_policy = ConfigPathPolicy.default(
         config_path=source,
         workspace_root=_repo_root(),
-        read_roots=(source.parent,),
+        # A protected MCP task materializes its generated config beneath the
+        # private descriptor-backed staging root.  The loader must be allowed
+        # to read that exact generated file while retaining the source config
+        # root; no caller-supplied roots are added here.
+        read_roots=(source.parent, physical_task_config.parent),
         write_roots=(outdir,),
         allow_config_dir_writes=False,
+    )
+    prepared_cfg = _AGENT_TASK_EXECUTION_SERVICE.load_config(
+        physical_task_config,
+        path_policy=normalization_policy,
     )
     normalized = scenario_config_from_dict(data, source_path=source, path_policy=normalization_policy).to_dict()
     normalized_bytes = json.dumps(
@@ -479,8 +700,8 @@ def _prepare_config(
     ).encode("utf-8")
     raw_sha256 = hashlib.sha256(source.read_bytes()).hexdigest()
     normalized_sha256 = hashlib.sha256(normalized_bytes).hexdigest()
-    _PREPARED_CONFIG_CACHE[str(task_config)] = (task_digest, prepared_cfg)
-    _EXPECTED_PREPARED_CONFIG_DIGESTS[str(task_config)] = task_digest
+    _PREPARED_CONFIG_CACHE[str(physical_task_config)] = (task_digest, prepared_cfg)
+    _EXPECTED_PREPARED_CONFIG_DIGESTS[str(physical_task_config)] = task_digest
     return {
         "label": str(label),
         "source_config": str(source),
@@ -497,7 +718,7 @@ def _prepare_config(
 def _guarded_prepared_config(config_path: str | Path) -> Any | None:
     """Return a prepared config, failing closed if its exact bytes changed."""
 
-    path = Path(config_path).expanduser().resolve()
+    path = _lexical_path(config_path)
     path_text = str(path)
     expected_digest = _EXPECTED_PREPARED_CONFIG_DIGESTS.get(path_text)
     if expected_digest is None:
@@ -515,7 +736,7 @@ def _guarded_prepared_config(config_path: str | Path) -> Any | None:
 
 
 def _discard_prepared_config(config_path: str | Path) -> None:
-    path_text = str(Path(config_path).expanduser().resolve())
+    path_text = str(_lexical_path(config_path))
     _PREPARED_CONFIG_CACHE.pop(path_text, None)
     _EXPECTED_PREPARED_CONFIG_DIGESTS.pop(path_text, None)
 
@@ -527,7 +748,7 @@ def _run_prepared_config(
 ) -> dict[str, Any]:
     """Execute an exactly guarded parsed task config, falling back to the file API."""
 
-    path = Path(config_path).expanduser().resolve()
+    path = _lexical_path(config_path)
     cfg = _guarded_prepared_config(path)
     if run_simulation_config_file is not _RUN_SIMULATION_CONFIG_FILE_ORIGINAL:
         try:
@@ -659,12 +880,37 @@ def _summarize_query_rows(query_rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _make_plots_for_recipe(
-    output_dir: str | Path, plot_recipe_ids: tuple[str, ...], *, style_name: str
+    output_dir: str | Path,
+    plot_recipe_ids: tuple[str, ...],
+    *,
+    style_name: str,
+    logical_output_dir: str | Path | None = None,
+    protected: bool | None = None,
 ) -> list[dict[str, Any]]:
     plots: list[dict[str, Any]] = []
+    workspace_dir = _lexical_path(output_dir)
+    target_root = _lexical_path(logical_output_dir if logical_output_dir is not None else output_dir)
     for recipe_id in plot_recipe_ids:
         try:
-            plots.append(create_plot(output_dir, recipe_id, style_name=style_name))
+            recipe = get_plot_recipe(recipe_id)
+            # A descriptor-bound renderer needs an explicit logical target so
+            # the plotting API can stage the bytes and retain the logical path
+            # in its returned artifact record.  The old implicit target path
+            # is still used for unknown recipes so their normal diagnostic is
+            # preserved.
+            target = None
+            if recipe is not None:
+                target = target_root / "review" / "figures" / f"{recipe.artifact_id}.png"
+            plots.append(
+                create_plot(
+                    workspace_dir,
+                    recipe_id,
+                    style_name=style_name,
+                    path=target,
+                    logical_output_dir=target_root if logical_output_dir is not None else None,
+                    protected=protected,
+                )
+            )
         except Exception as exc:
             plots.append(
                 {
@@ -839,7 +1085,7 @@ def _artifacts_with_path_status(artifacts: list[dict[str, Any]], *, output_dir: 
 
 
 def _partial_output_artifacts(output_dir: str | Path, *, maximum: int = 256) -> list[dict[str, Any]]:
-    root = Path(output_dir).expanduser().resolve()
+    root = _lexical_path(output_dir)
     if not root.is_dir():
         return []
     artifacts: list[dict[str, Any]] = []
@@ -1058,14 +1304,27 @@ def _comparison_complete(comparison: dict[str, Any]) -> bool | None:
     return bool(summary.get("complete"))
 
 
-def _write_packet(packet: EvidencePacket, output_dir: str | Path) -> dict[str, Any]:
-    outdir = Path(output_dir).expanduser().resolve()
-    outdir.mkdir(parents=True, exist_ok=True)
+def _write_packet(
+    packet: EvidencePacket,
+    output_dir: str | Path,
+    *,
+    output_writer: OutputWriter | None = None,
+) -> dict[str, Any]:
+    outdir = _lexical_path(output_dir)
+    binding = _bind_output_writer(output_writer, outdir)
+    if binding is None:
+        outdir.mkdir(parents=True, exist_ok=True)
+    else:
+        binding.ensure_directory(outdir)
     packet.evidence_summary = _summarize_packet_evidence(packet)
     payload = _json_safe(packet.to_dict())
     packet_path = outdir / "agent_evidence_packet.json"
     payload["packet_path"] = str(packet_path)
-    packet_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    serialized = (json.dumps(payload, indent=2) + "\n").encode("utf-8")
+    if binding is None:
+        packet_path.write_bytes(serialized)
+    else:
+        binding.write_bytes(packet_path, serialized)
     return payload
 
 

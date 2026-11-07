@@ -12,7 +12,7 @@ try:
 except ModuleNotFoundError:
     import tomli as tomllib
 
-from sim.doctor import CORE_SPECS, SUPPORTED_PYTHON_RANGE, _platform_is_supported
+from sim.doctor import CORE_SPECS, DEV_SPECS_BASE, ML_SPECS, SUPPORTED_PYTHON_RANGE, _platform_is_supported
 from tools.compatibility_matrix import build_matrix
 from tools.run_compatibility_smoke import (
     DESKTOP_ACCEPTANCE,
@@ -476,3 +476,15 @@ def test_pillow_requirement_preserves_legacy_function_and_patched_media_baseline
         assert "security qualification (including core/media/full) is blocked" in " ".join(
             (ROOT / "docs" / "compatibility.md").read_text().split()
         )
+
+
+@pytest.mark.parametrize(("specs", "extra"), [(DEV_SPECS_BASE, "dev"), (ML_SPECS, "ml")])
+def test_doctor_optional_dependency_ranges_match_package_metadata(specs, extra):
+    from packaging.requirements import Requirement
+
+    declared = {requirement.name: requirement.specifier
+                for item in _pyproject()["project"]["optional-dependencies"][extra]
+                for requirement in [Requirement(item)]
+                if requirement.marker is None or requirement.marker.evaluate()}
+    for spec in specs:
+        assert Requirement(spec.distribution + spec.requirement).specifier == declared[spec.distribution]

@@ -27,6 +27,35 @@ from sim.resource_limits import ResourceEstimate
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_heartbeat_start_failure_preserves_original_error_and_exited_owner(monkeypatch):
+    from types import SimpleNamespace
+
+    from sim.execution.run_lifecycle import runner
+
+    statuses = []
+    store = SimpleNamespace(
+        create_owner=lambda *args, **kwargs: None,
+        heartbeat_owner=lambda *args, **kwargs: statuses.append(kwargs["status"]),
+    )
+
+    class UnstartableThread:
+        def __init__(self, **kwargs):
+            pass
+
+        def start(self):
+            raise RuntimeError("no thread slot")
+
+        def join(self, **kwargs):
+            raise AssertionError("must not join a thread that never started")
+
+    monkeypatch.setattr(runner.threading, "Thread", UnstartableThread)
+    heartbeat = runner._OwnerHeartbeat(store, "test-run")
+    with pytest.raises(RuntimeError, match="no thread slot"):
+        heartbeat.start()
+    heartbeat.stop()
+    assert statuses == ["exited"]
+
+
 def _store(tmp_path: Path) -> LifecycleStore:
     return LifecycleStore(
         state_root=tmp_path / "state",
@@ -253,6 +282,27 @@ def test_lost_owner_wakes_read_only_await_then_reconciles_interrupted(tmp_path: 
     assert repeated.run_state_changed is False
 
 
+def test_malformed_owner_nonfinite_heartbeat_is_reported_without_raw_json_error(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    run_id, output = _create(store)
+    store.create_owner(
+        run_id,
+        owner_token="malformed-owner",
+        pid=os.getpid(),
+        host_sha256=local_host_sha256(),
+        heartbeat_interval_s=1.0,
+        stale_after_s=15.0,
+    )
+    owner_path = output / "lifecycle" / "execution_owner.json"
+    owner = json.loads(owner_path.read_text(encoding="utf-8"))
+    owner["heartbeat_interval_s"] = float("nan")
+    owner_path.write_text(json.dumps(owner), encoding="utf-8")
+
+    result = await_run(store, run_id, timeout_s=0.0)
+
+    assert result.outcome == "malformed_state"
+
+
 def test_reconcile_preserves_state_while_owner_is_alive(tmp_path: Path) -> None:
     store = _store(tmp_path)
     run_id, _ = _create(store)
@@ -359,6 +409,56 @@ def test_tampered_manifest_is_reported_as_malformed(tmp_path: Path) -> None:
     value["state"] = "completed"
     path.write_text(json.dumps(value), encoding="utf-8")
     result = inspect_run(store, run_id)
+    assert result.outcome == "malformed_state"
+    assert result.state is None
+
+
+def test_manifest_nonfinite_value_is_reported_as_malformed(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    run_id, output = _create(store)
+    path = output / "lifecycle" / "run_manifest.json"
+    value = json.loads(path.read_text(encoding="utf-8"))
+    value["execution"]["nonfinite"] = float("nan")
+    path.write_text(json.dumps(value), encoding="utf-8")
+
+    result = inspect_run(store, run_id)
+
+    assert result.outcome == "malformed_state"
+    assert result.state is None
+
+
+def test_manifest_invalid_utf8_is_reported_as_malformed(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    run_id, output = _create(store)
+    (output / "lifecycle" / "run_manifest.json").write_bytes(b"\xff\xfe")
+
+    result = inspect_run(store, run_id)
+
+    assert result.outcome == "malformed_state"
+    assert result.state is None
+
+
+def test_event_log_invalid_utf8_is_reported_as_malformed(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    run_id, output = _create(store)
+    (output / "lifecycle" / "run_events.jsonl").write_bytes(b"\xff\xfe")
+
+    result = await_run(store, run_id, timeout_s=0.0, wake_condition="any_event")
+
+    assert result.outcome == "malformed_state"
+    assert result.state is None
+
+
+def test_locator_nonfinite_value_is_reported_as_malformed(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    run_id, _ = _create(store)
+    path = store.locator_root / f"{run_id}.json"
+    value = json.loads(path.read_text(encoding="utf-8"))
+    value["updated_at"] = float("nan")
+    path.write_text(json.dumps(value), encoding="utf-8")
+
+    result = inspect_run(store, run_id)
+
     assert result.outcome == "malformed_state"
     assert result.state is None
 

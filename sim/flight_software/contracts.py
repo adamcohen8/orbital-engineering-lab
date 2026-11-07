@@ -18,6 +18,7 @@ INPUT_BATCH_SCHEMA = "oel.flight_software.input_batch.v1"
 OUTPUT_SCHEMA = "oel.flight_software.output.v1"
 ACTUATOR_COMMAND_SCHEMA = "oel.flight_software.actuator_command.v1"
 SNAPSHOT_SCHEMA = "oel.flight_software.snapshot.v1"
+NATIVE_SNAPSHOT_SCHEMA = "oel.flight_software.native_snapshot.v1"
 PILOT_INPUT_SCHEMA = "oel.flight_software.pilot_input.v1"
 GROUND_COMMAND_SCHEMA = "oel.flight_software.ground_command.v1"
 
@@ -862,11 +863,71 @@ class FlightSoftwareSnapshot:
             raise ValueError("active load ID and revision must either both be present or both be absent")
         if self.active_load_id is not None:
             _require_nonempty("active_load_id", self.active_load_id)
-            _require_int("active_load_revision", int(self.active_load_revision))
+            _require_int("active_load_revision", self.active_load_revision)
         if len(self.state_hash_sha256) != 64 or any(ch not in "0123456789abcdef" for ch in self.state_hash_sha256):
             raise ValueError("state_hash_sha256 must be a 64-character lowercase SHA-256 digest")
         if sha256(self.state_bytes).hexdigest() != self.state_hash_sha256:
             raise ValueError("state_hash_sha256 does not match state_bytes")
+
+
+@dataclass(frozen=True, slots=True)
+class NativeFlightSoftwareSnapshot:
+    """Host-bound envelope for a checkpoint returned by a native endpoint.
+
+    The endpoint still speaks the public ``FlightSoftwareSnapshot`` v1 record.
+    The host wraps that record after decoding it and binds the resulting
+    checkpoint to a verified native implementation.  Keeping this as a
+    separate record preserves the Python stack snapshot wire contract.
+    """
+
+    stack_id: str
+    stack_version: str
+    boot_id: str
+    invocation_id: int
+    active_load_id: str | None
+    active_load_revision: int | None
+    state_bytes: bytes
+    state_hash_sha256: str
+    host_implementation_hash: str
+    schema: Literal["oel.flight_software.native_snapshot.v1"] = NATIVE_SNAPSHOT_SCHEMA
+
+    def __post_init__(self) -> None:
+        if self.schema != NATIVE_SNAPSHOT_SCHEMA:
+            raise ValueError(f"schema must equal {NATIVE_SNAPSHOT_SCHEMA!r}")
+        _require_nonempty("stack_id", self.stack_id)
+        _require_nonempty("stack_version", self.stack_version)
+        _require_nonempty("boot_id", self.boot_id)
+        _require_int("invocation_id", self.invocation_id)
+        if (self.active_load_id is None) != (self.active_load_revision is None):
+            raise ValueError("active load ID and revision must either both be present or both be absent")
+        if self.active_load_id is not None:
+            _require_nonempty("active_load_id", self.active_load_id)
+            _require_int("active_load_revision", self.active_load_revision)
+        if len(self.state_hash_sha256) != 64 or any(ch not in "0123456789abcdef" for ch in self.state_hash_sha256):
+            raise ValueError("state_hash_sha256 must be a 64-character lowercase SHA-256 digest")
+        if sha256(self.state_bytes).hexdigest() != self.state_hash_sha256:
+            raise ValueError("state_hash_sha256 does not match state_bytes")
+        if len(self.host_implementation_hash) != 64 or any(
+            ch not in "0123456789abcdef" for ch in self.host_implementation_hash
+        ):
+            raise ValueError("host_implementation_hash must be a 64-character lowercase SHA-256 digest")
+
+    def as_flight_software_snapshot(self) -> FlightSoftwareSnapshot:
+        """Return the endpoint-compatible v1 payload without host metadata."""
+
+        return FlightSoftwareSnapshot(
+            stack_id=self.stack_id,
+            stack_version=self.stack_version,
+            boot_id=self.boot_id,
+            invocation_id=self.invocation_id,
+            active_load_id=self.active_load_id,
+            active_load_revision=self.active_load_revision,
+            state_bytes=self.state_bytes,
+            state_hash_sha256=self.state_hash_sha256,
+        )
+
+
+FlightSoftwareCheckpoint = FlightSoftwareSnapshot | NativeFlightSoftwareSnapshot
 
 
 @dataclass(frozen=True, slots=True)
@@ -900,9 +961,9 @@ class SatelliteFlightSoftware(Protocol):
 
     def step(self, batch: FlightSoftwareInputBatch) -> FlightSoftwareOutput: ...
 
-    def snapshot(self) -> FlightSoftwareSnapshot: ...
+    def snapshot(self) -> FlightSoftwareCheckpoint: ...
 
-    def restore(self, snapshot: FlightSoftwareSnapshot) -> None: ...
+    def restore(self, snapshot: FlightSoftwareCheckpoint) -> None: ...
 
     def shutdown(self, event: ShutdownEvent) -> None: ...
 
@@ -947,6 +1008,7 @@ BOUNDARY_RECORD_TYPES = (
     StackIdentity,
     FlightSoftwareOutput,
     FlightSoftwareSnapshot,
+    NativeFlightSoftwareSnapshot,
     BootEvent,
     ShutdownEvent,
 )
