@@ -17,19 +17,11 @@ from sim.dynamics.orbit.environment import MOON_MU_KM3_S2, SUN_MU_KM3_S2
 from sim.dynamics.orbit.epoch import resolve_sun_moon_positions
 from sim.dynamics.orbit.frames import FrameContext, eci_to_ecef_rotation_context
 from sim.pro_perturbations.earth_radiation import REFERENCE_JD_UTC, EarthRadiationPressure, _quadrature
+from sim.pro_perturbations.ecom import ECOM2Radiation
 from sim.pro_perturbations.empirical import EmpiricalRICAcceleration
 from sim.pro_perturbations.ocean_tides import OceanTides
 from sim.pro_perturbations.schwarzschild import SchwarzschildAcceleration
 from sim.pro_perturbations.solid_earth_tides import SolidEarthTides
-
-# The public export omits this private owner. Do not hide a missing dependency
-# or any other import failure inside an installed Pro implementation.
-try:
-    from sim.pro_perturbations.ecom import ECOM2Radiation
-except ModuleNotFoundError as exc:
-    if exc.name != "sim.pro_perturbations.ecom":
-        raise
-    ECOM2Radiation = None
 
 _CLASSES = {
     EarthRadiationPressure: 9,
@@ -37,9 +29,8 @@ _CLASSES = {
     SolidEarthTides: 11,
     OceanTides: 12,
     EmpiricalRICAcceleration: 13,
+    ECOM2Radiation: 14,
 }
-if ECOM2Radiation is not None:
-    _CLASSES[ECOM2Radiation] = 14
 _TIME_OWNERS = (FrameContext.at, eci_to_ecef_rotation_context, resolve_sun_moon_positions)
 
 

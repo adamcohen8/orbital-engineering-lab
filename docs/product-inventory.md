@@ -1,20 +1,20 @@
 # Product Inventory
 
 This inventory summarizes the major workflow, controller, and mission surfaces
-across the public core and Pro workspace. It answers both "what exists?" and
+across the public local edition and private development/services workspace. It answers both "what exists?" and
 "what is actually packaged here?" before a user starts reading Python modules
 or reverse-engineering scenario YAML.
 
 Use this page with:
 
 - [Scenario YAML](scenario-yaml.md) for pointer syntax.
-- the private Controller Bench guide for comparative evaluation workflows;
+- the private qualification guides for comparative evaluation workflows;
 - [Controller Naming Conventions](project/controller_naming_conventions.md) for
   naming rules when adding or renaming controllers.
 - [Built-In Reference GNC Library](reference-gnc.md) for maintained controller
   and command-module behavior and support posture.
-- [Public Core And Pro Boundary](public-vs-pro.md) for public/pro packaging
-  posture.
+- [Public Local Edition And Private Services](public-vs-pro.md) for packaging
+  and service-boundary posture.
 
 Inventory labels:
 
@@ -26,33 +26,32 @@ Inventory labels:
 - **Compatibility**: retained for older configs or migration paths.
 
 Packaging and maturity are separate. **Public** means the implementation and
-documented workflow ship in the open-core export. **Pro** means the capability
-exists in the private product workspace even when a related public primitive is
-available.
+documented workflow ship in the open-core export. **Private/gated** means the
+source may exist in the development workspace but the public export does not
+provide the workflow or its restricted inputs.
 
 A working implementation remains **Experimental** until it has a documented
 interface, deterministic tests, a maintained workflow, bounded claims, and an
 explicit packaging decision.
 
 Packaging and technical maturity do not establish commercial availability.
-Recommendation-only Pro metadata is labeled coming soon until a separate
-release makes purchase, entitlement, and execution available; it must not be
-used to imply a launch date, price, or operational qualification.
+Hosted descriptors and private development metadata do not imply a launch
+date, price, entitlement, or operational qualification.
 
 ## Capability Status
 
 | Capability | Packaging | Status | Evidence entry point | Primary limit |
 | --- | --- | --- | --- | --- |
-| Scenario YAML, CLI, and Python API | Public | Flagship | [Quickstart](quickstart.md), engine and scenario contracts | Deterministic serial object stepping for public single-scenario execution; pre-1.0 non-contract fields may still evolve. |
+| Scenario YAML, CLI, and Python API | Public | Flagship | [Quickstart](quickstart.md), engine and scenario contracts | Deterministic serial object stepping for public single-scenario execution; legacy pre-1.0 compatibility fields may evolve only with migration notes. |
 | ONP numerical propagation | Public | Reference | [Physics Model Reference](physics-models.md), public scenarios | Fidelity depends on the configured force models and validation envelope. |
 | Earth precision forces | Public | Experimental | [Optional Earth precision forces](orbit-precision-forces.md), public synthetic demonstration and model-specific regression checks | Albedo/IR, Schwarzschild, solid Earth tides and ocean tidal gravity; explicit data/frame requirements, optional Rust kernels, no operational qualification claim. |
 | OGP-SGP4/SDP4 passive propagation | Public | Reference | TLE examples, OGP reference suites, frame provenance | Passive catalog-style propagation; not an operational catalog service. |
 | CCSDS and canonical frame/time interchange | Public | Experimental | [OEM](ccsds-oem.md), [OPM/OMM](ccsds-odm.md), [canonical frame/time](frame-time.md), public fixtures | Bounded KVN profiles and explicit named transforms only; not complete CCSDS coverage, covariance calibration, or operational interchange qualification. |
-| Modular external data IO | Public foundation; Pro review fitting | Experimental | [Data IO](data-io.md), `oel io formats`, format owners and review post-processors | Bounded local format profiles, shared object composition, and exports from completed read-only evidence. Format conversion and materialization do not execute simulations or fit orbits; review-to-OGP/TLE fitting remains Pro. No complete-standards or operational-accuracy claim. |
+| Modular external data IO | Public foundation; catalog fitting outside the public export | Experimental | [Data IO](data-io.md), `oel io formats`, format owners and review post-processors | Bounded local format profiles, shared object composition, and exports from completed read-only evidence. Format conversion and materialization do not execute simulations or fit orbits; review-to-OGP/TLE fitting remains outside this public workflow. No complete-standards or operational-accuracy claim. |
 | Coverage and directed-link analysis | Public | Experimental | [Scenario workflow](coverage-link-scenario-analysis.md), public example, contracts, and [programmatic acceptance](validation-coverage-link-programmatic.md) | Deterministic sampled engineering analysis; independent external validation, calibrated hardware/environment models, and operational assurance remain outside the claim. |
 | Optical collection-opportunity analysis | Public | Experimental | [Collection workflow](collection-opportunity-analysis.md), public example and regression suite | One WGS84 target and one hard-FOV payload with transparent first-order screening; no calibrated payload, weather, terrain, or operational collection claim. |
 | Conjunction assessment | Public | Experimental | [Conjunction workflow](conjunction-assessment.md), CDM and synthetic assessment fixtures | Bounded two-object geometry, one educational 2D Pc, and small explicit rescreens; no catalog monitoring, calibrated covariance, or maneuver authority. |
-| Covariance-aware conjunction and avoidance trades | Pro | Experimental, development integration | Private epoch-covariance contract, nonlinear ONP Monte Carlo, bounded local optimization and Scale snapshot ledger | Propagated uncertainty, explicit 2D usage diagnostics and complete declared-inventory rescreens; no empirical covariance calibration, efficient rare-event guarantee, correlated errors, global optimality or operational authority. |
+| Covariance-aware conjunction and avoidance trades | Public local | Experimental | Epoch-covariance contract, nonlinear ONP Monte Carlo, bounded local optimization and Scale snapshot ledger | Propagated uncertainty, explicit 2D usage diagnostics and complete declared-inventory rescreens; no empirical covariance calibration, efficient rare-event guarantee, correlated errors, global optimality or operational authority. |
 | Reduced-geometric CCSDS TDM tracking OD | Public | Experimental | [Tracking-OD workflow](tracking-od.md), synthetic fit/holdout example | One analyst-declared reduced-geometric AZEL/range dataset and one batch fit; no raw radiometric reduction, calibrated predicted accuracy, association, custody, or operational OD. |
 | Bounded multi-asset mission scheduling | Public | Workbench | [Mission-scheduling workflow](mission-scheduling.md), exact and source-aware replay fixtures | Exact subset search over at most 18 supplied opportunities; no opportunity generation, battery/thermal state, routing, rolling-horizon replanning, or operational-scale optimization. |
 | Bounded constellation and ground-network design | Public | Workbench | [Constellation-design workflow](constellation-design.md), Walker/network example and authoritative replay | Exact evaluation of at most eight explicit circular Walker/shell candidates with ideal-nadir coverage and same-epoch free-space ground links; no automatic search, capacity/contention, crosslinks, uncertainty, calibrated availability, or operational qualification. |
@@ -61,26 +60,28 @@ used to imply a launch date, price, or operational qualification.
 | Headless ground segment | Public | Experimental | [Ground segment](models/ground-segment.md), delayed tracking/telemetry demo and review tables | Geometric availability, explicit outages, delayed packets, ideal resource telemetry, and two-body estimation from a supplied prior; no RF assurance, command execution, out-of-sequence smoothing, or operational qualification. |
 | Deterministic orbit-lifetime analysis | Public | Experimental | [Orbit-lifetime workflow](orbit-lifetime.md), frozen-atmosphere comparison example | One bounded ONP drag-decay case with frozen inputs; not calibrated lifetime, compliance, surviving-debris risk, custody, or operational authority. |
 | Integrated study lifecycle | Public | Workbench | [Study lifecycle](study-lifecycle.md), six-domain registry and canonical studies | Local content-bound records, claims, inspection, replay, and comparison over completed evidence; no managed execution, domain-physics replay, team workflow, or authorization. |
-| Governed communications engineering | Pro | Experimental, unreleased private-worktree surface | Private Pro communications workflow, governed profiles, validation manifest, and content-bound evidence bundle | Enforced by the `pro_communications` feature at direct workflow entry points. Source must be tracked and included in a future Pro package candidate before distribution; included terminals/sites are illustrative, and measured RF, current weather/interference, packet assurance, and operational availability are not claimed. |
+| Governed communications engineering | Public local; restricted inputs private | Experimental | Governed communications workflow, profiles, validation manifest, and content-bound evidence bundle | Restricted RF data and governed service infrastructure remain outside the public export. Included terminals/sites are illustrative, and measured RF, current weather/interference, packet assurance, and operational availability are not claimed. |
 | GNC v2 complete-stack runtime and profiles | Public | Mixed | [flight-software profiles](flight-software-profiles.md) | All 18 exact profiles declare Supported within bounded simulation envelopes; effective maturity requires current qualification evidence (see profile discovery); underlying stacks and arbitrary custom compositions remain Experimental. |
 | Public FSW Authoring Kit | Public | Workbench | [Public FSW Authoring](fsw-authoring.md), content-bound validation/test/smoke receipts | ADCS/RPO Python-stack authoring and one deterministic serial smoke only; no comparison, tuning, qualification, external process, or cFS/SIL workflow. |
 | Lambert orbit-transfer planning | Public | Workbench | `configs/orbit_transfer_planner_demo.yaml`, review-store candidate tables | Bounded two-body grid search, not operational or globally optimal planning. |
 | Event-driven trajectory targeting | Public | Workbench | [Trajectory-targeting workflow](trajectory-targeting.md), Hohmann and open-reference fixtures | Local single-shooting equality correction with authoritative ONP repropagation; no bounds, inequalities, finite burns, multiple shooting, global search, or maneuver authority. |
-| General trajectory optimization | Pro | Workbench | Private Pro trajectory-optimization guide, retained three-problem workflow pack, analytic and independent-solver tests | Local constrained nonlinear optimization with mandatory ONP repropagation; no collocation, global-optimum proof, calibrated probability, maneuver authority, or flight qualification. |
-| OEL Pro Constellation Design | Pro | Workbench | Private Pro constellation-optimization guide, exhaustive example, deterministic/Pareto/resume/replay tests | Bounded discrete orbit and catalog-site search over the public evaluator with promoted-design reevaluation; no continuous siting, routing/capacity, uncertainty campaigns, calibrated cost, global-optimum proof, or operational qualification. |
+| General trajectory optimization | Public local | Workbench | Bounded trajectory-optimization workflow, retained three-problem workflow pack, analytic and independent-solver tests | Local constrained nonlinear optimization with mandatory ONP repropagation; no collocation, global-optimum proof, calibrated probability, maneuver authority, or flight qualification. |
+| Extended constellation design search | Public local | Workbench | Bounded constellation-optimization workflow, exhaustive example, deterministic/Pareto/resume/replay tests | Bounded discrete orbit and catalog-site search over the public evaluator with promoted-design reevaluation; no continuous siting, routing/capacity, uncertainty campaigns, calibrated cost, global-optimum proof, or operational qualification. |
 | Review store, queries, and plotting | Public | Reference | [Review Store](review-store.md), [Plotting](plotting.md) | Only recorded evidence can be queried or plotted. |
 | RPO Trainer | Public | Flagship | `run_game.py`, game configs and debriefs | Educational; not operational training qualification. |
 | Rocket ascent, aero, and re-entry | Public | Workbench | public configs, rocket contract, model docs | First-pass engineering models with bounded validation evidence. |
 | ML/RL wrappers | Public | Experimental | [ML/RL Policy Contracts](ml-rl-contracts.md) | Optional dependencies and limited reproducible benchmark coverage. |
-| Campaigns, sensitivity, covariance, orbital-delivery accuracy, and controller bench | Pro | Reference | Private workflow guides and contracts | Includes rocket-driven payload delivery covariance, percentile, correction-delta-v proxy, and RPO feasibility evidence; not included as public workflow automation. |
-| Governed/general ONP dynamics and ground-sensor batch orbit determination | Pro | Reference | Private OD contract, synthetic OD harness, Scale sensor-OD workflows | Broader governed datasets, systematics, campaigns, and customer workflows remain Pro; the separate bounded public TDM fit/holdout row above is not promoted into this scope. |
-| OGP-SGP4/SDP4 mean-element orbit determination | Pro | Reference | Private OD contract, Phase 6 harness, Scale SGP4 sensor-OD workflow | Regime-bounded same-family L2 OD; B*/epoch gates are case-specific and operational publication remains outside the claim. |
-| OGP two-way SLR normal-point orbit determination | Pro | Experimental | Private OD contract, Phase 4 external campaign, frozen two-day actual-ILRS campaign | The complete actual-data chain is replayable, but the two-day campaign failed its residual-whiteness qualification gates; covariance and predicted accuracy remain uncalibrated. |
-| Initial-orbit and optical angles-only determination | Pro | Experimental | Private OD contract, Phase 5 synthetic campaign | Gibbs/Herrick-Gibbs and ambiguity-aware Gauss/Lambert initialization have bounded L2 synthetic evidence; no operational optical, association, or custody claim. |
-| OEL Scale and intent-hypothesis evaluation | Pro | Experimental | Scale validation tiers, catalog/campaign and ONP-refinement queues, IHE core/observational packs, and typed handoffs | Implemented deterministic local slices with analyst review and dedicated `scale_analytics` / `intent_hypothesis` entitlement gates; no calibrated operational catalog, probability, association, custody, or subjective-intent claim. |
-| AI-assisted reports and config assistance | Pro | Workbench | Private staged estimate/create workflows | Requires explicit provider, data, cost, and human-review decisions. |
-| cFS/SIL common-boundary adapter | Pro/private | Experimental | Private cFS/SIL ICD and byte-level golden vectors | Excluded from the public export; prototype loopback transport and conformance envelope, not flight or real-time qualification. |
-| FSW Development and Verification Kit | Pro/private | Workbench | Private FSWDK contract, Controller Bench, qualification, and packaging guides | Strict workflow superset of public authoring; private evidence automation does not turn simulation results into flight qualification. |
+| Campaigns, sensitivity, covariance, orbital-delivery accuracy, and controller bench | Public local | Reference | Local workflow guides and contracts | Includes rocket-driven payload delivery covariance, percentile, correction-delta-v proxy, and RPO feasibility evidence; generated qualification evidence remains private. |
+| Governed/general ONP dynamics and ground-sensor batch orbit determination | Public local; governed inputs private | Reference | OD contract, synthetic OD harness, Scale sensor-OD workflows | Broader governed datasets, systematics, and customer workflows remain outside the public evidence claim; the separate bounded public TDM fit/holdout row above is public. |
+| OGP-SGP4/SDP4 mean-element orbit determination | Public local | Reference | OD contract, Phase 6 harness, Scale SGP4 sensor-OD workflow | Regime-bounded same-family L2 OD; B*/epoch gates are case-specific and operational publication remains outside the claim. |
+| OGP two-way SLR normal-point orbit determination | Public local; generated qualification private | Experimental | OD contract, external campaign, frozen two-day actual-ILRS campaign | The complete actual-data chain is replayable, but the two-day campaign failed its residual-whiteness qualification gates; covariance and predicted accuracy remain uncalibrated. |
+| Initial-orbit and optical angles-only determination | Public local | Experimental | OD contract, synthetic campaign | Gibbs/Herrick-Gibbs and ambiguity-aware Gauss/Lambert initialization have bounded L2 synthetic evidence; no operational optical, association, or custody claim. |
+| Relative batch and sequential orbit determination | Public | Reference | [Tracking OD](tracking-od.md#reduced-ground-and-optical-tracking), synthetic relative OD check | Linear models remain bounded by chief orbit, separation, eccentricity, arc, and covariance assumptions. |
+| Sequential EKF/UKF and RTS orbit determination | Public | Reference | `SimulationWorkspace.run_sequential_od` | Sequential estimation from a declared measurement packet, prior state, covariance, and process noise. |
+| Scale catalog and bounded analytics | Public local; IHE private | Experimental | Scale validation tiers, catalog/campaign and ONP-refinement queues, and typed handoffs | IHE, Frontier/Mendicant evaluation, and dedicated intent-hypothesis workflows remain private; no calibrated operational catalog, probability, association, custody, or subjective-intent claim. |
+| AI-assisted reports and config assistance | Private service | Workbench | Private staged estimate/create workflows | Requires explicit provider, data, cost, and human-review decisions; this is not part of the open-source local edition. |
+| cFS/SIL common-boundary adapter | Public local; qualification private | Experimental | Public cFS/SIL ICD, mock endpoints, and byte-level contract vectors | Prototype loopback transport and conformance envelope, not flight or real-time qualification. |
+| FSW Development and Verification Kit | Public local; generated qualification private | Workbench | Public FSWDK contract, authoring, component tests, native builds, and bounded smoke workflows | Qualification evidence and packaging governance do not turn simulation results into flight qualification. |
 
 ## GNC v2 complete stacks
 
@@ -104,11 +105,11 @@ deterministic dynamics. Any non-empty v1 satellite GNC field is rejected.
 | `fsw.game_pilot_reference` | Ideal wrench or modeled aerodynamic effectors, by declared input profile | Pilot translation, attitude/thrust, operator input, and aerodynamic play | Experimental |
 
 The stack catalog and component catalog are intentionally separate. Public
-custom stacks can compose component math without Pro. The Pro Controller Bench
-replaces and evaluates complete stack compositions; it is not a second runtime.
-The exported [flight-software profiles](flight-software-profiles.md) retain the
-public qualification envelope; private migration and evidence details remain in
-the full workspace.
+custom stacks can compose component math in the local edition. The local
+Controller Bench replaces and evaluates complete stack compositions; it is not
+a second runtime. The exported [flight-software profiles](flight-software-profiles.md)
+retain the public qualification envelope; private migration and evidence details
+remain in the full workspace.
 
 OEL also ships an initial catalog of 18 versioned
 [flight-software use-case profiles](flight-software-profiles.md) across
@@ -162,11 +163,14 @@ workflows remain separate ground/offline estimation products.
 | TH Relative EKF Knowledge | Public | `knowledge.estimation.type: relative_th_ekf` / `THRelativeEKFEstimator` | Reference | Live rectangular-RIC relative-state estimation for eccentric two-body-chief, small-separation RPO scenarios using numerically integrated TH linear dynamics; public validation covers full relative-state and az/el/range/range-rate measurement cases. |
 | YA STM Relative EKF Knowledge | Public | `knowledge.estimation.type: relative_ya_ekf` / `YARelativeEKFEstimator` | Reference | Live rectangular-RIC relative-state estimation for eccentric two-body-chief RPO using the closed-form Yamanaka-Ankersen anomaly-domain STM mapped into OEL's km/km/s RIC state; public validation compares it against HCW, TH-integrated, and ECI EKF rows. |
 | Full-state EKF Innovation Recovery | Public | `knowledge.estimation.ekf.innovation_recovery` / `InnovationRecoveryConfig` | Experimental | Off-by-default causal consistency or persistence recovery for HCW, SS-J2, TH, YA and absolute orbit EKFs. Full position/velocity observations only; recovery evidence is separate from maneuver identification. See [usage and limits](innovation-recovery.md). |
-| ONP Dynamics Batch Orbit Determination | Pro | `sim.estimation.orbit_determination` / `solve_dynamics_orbit_determination` | Reference | Fits initial ECI Cartesian state and identifiable drag/Cd/SRP scales with ONP in the residual loop; supports full observation covariance, explicit priors, robust/rejection policy, observability diagnostics, grouped residual audits, fit/holdout evidence, and materialized scenarios. |
-| ONP Native Ground-Sensor Orbit Determination | Pro | `sim.estimation.ground_station_od` / `sim.scale fit-ground-sensor-od` | Reference | Fits initial ECI Cartesian state against individual/combined azimuth, elevation, range, and range-rate rows; optional station/shared biases and clock terms carry priors and identifiability evidence, with elevation weighting, apparent-elevation refraction, station holdout/exclusion, and queryable review tables. |
-| OGP Mean-Element Orbit Determination | Pro | `sim.estimation.ogp_od` plus legacy `sim.estimation.sgp4_od` / Scale commands | Experimental reference | Fits native TEME PV across named OGP-SGP4 and OGP-SDP4 regimes with automatic nonsingular/classical parameterization, fit/holdout evidence, and gated B*/epoch trials. Legacy fixed-epoch SGP4 PV and ground-sensor routes remain supported; Phase 6 is bounded same-family synthetic OD, not precise truth or operational TLE publication. |
-| Pro Tracking-Data Sequential OD | Pro | OEL Pro Orbit Determination / `orbit_determination.reduced_tracking`; `python -m sim.pro_tracking_od` | Experimental reference | Uses the shared v0.29 `tracking_od` entitlement for EKF/RTS over reduced ground range/range-rate or inertial optical RA/Dec rows with mandatory untouched holdout covariance prediction; no raw radiometric reduction or calibrated predicted-accuracy claim. |
-| Pro ILRS/SLR Orbit Determination | Pro | OEL Pro Orbit Determination / `orbit_determination.ilrs_slr`; `python -m sim.pro_slr_od` | Experimental reference | Uses the shared v0.29 `tracking_od` entitlement for CRD v2 OGP batch fit plus fit-only EKF/RTS and distinct validation/untouched-holdout predictions. The frozen actual-data campaign replayed but failed residual-whiteness gates; no calibrated covariance, predicted accuracy, or geodetic-quality claim. |
+| ONP Dynamics Batch Orbit Determination | Public | `sim.estimation.orbit_determination` / `solve_dynamics_orbit_determination` | Reference | Fits initial ECI Cartesian state and identifiable drag/Cd/SRP scales with ONP in the residual loop; supports full observation covariance, explicit priors, robust/rejection policy, observability diagnostics, grouped residual audits, fit/holdout evidence, and materialized scenarios. |
+| ONP Native Ground-Sensor Orbit Determination | Public local | `sim.estimation.ground_station_od` / `sim.scale fit-ground-sensor-od` | Reference | Fits initial ECI Cartesian state against individual/combined azimuth, elevation, range, and range-rate rows; optional station/shared biases and clock terms carry priors and identifiability evidence, with elevation weighting, apparent-elevation refraction, station holdout/exclusion, and queryable review tables. |
+| OGP Mean-Element Orbit Determination | Public local | `sim.estimation.ogp_od` plus legacy `sim.estimation.sgp4_od` / Scale commands | Experimental reference | Fits native TEME PV across named OGP-SGP4 and OGP-SDP4 regimes with automatic nonsingular/classical parameterization, fit/holdout evidence, and gated B*/epoch trials. Legacy fixed-epoch SGP4 PV and ground-sensor routes remain supported; Phase 6 is bounded same-family synthetic OD, not precise truth or operational TLE publication. |
+| Relative Orbit Determination | Public | `sim.estimation.relative_od` / `solve_batch_relative_od` | Reference | Batch rectangular-RIC state fit and holdout for HCW, homogeneous SS-J2, TH, and YA relative dynamics, with correlated covariance, observability diagnostics, and residual audits. |
+| Sequential Orbit Determination | Public local | `SimulationWorkspace.run_sequential_od` | Reference | Replayable EKF/UKF filtering, gating, checkpoint/restart, RTS smoothing, maneuver recovery, and review evidence; L5 is restricted to named matched ECI PV ensembles. |
+| Tracking-Data Sequential OD | Public local | `python -m sim.pro_tracking_od` | Experimental reference | EKF/RTS over reduced ground range and range-rate or optical RA/Dec rows, with mandatory untouched holdout predictions and covariance. |
+| ILRS/SLR Orbit Determination | Public local | `python -m sim.pro_slr_od` | Experimental reference | CRD v2 normal points, OGP batch fit, EKF/RTS updates on fit rows, separate validation and holdout predictions, and evidence replay. The public synthetic case tests the workflow. |
+| Integrated Relative Orbit Determination | Public | `SimulationWorkspace.run_integrated_relative_od` | Reference | Compares applicable HCW, SS-J2, TH, and YA batch and sequential estimates against nonlinear two-object ECI truth with epoch-specific effective covariance. |
 
 ## Orbital component library
 

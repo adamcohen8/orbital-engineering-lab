@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import logging
 import os
+import queue as queue_mod
 from collections.abc import Callable, Iterable, Iterator
-from concurrent.futures import FIRST_COMPLETED, wait
+from concurrent.futures import FIRST_COMPLETED, CancelledError, wait
 from time import monotonic
 from typing import Any
 
@@ -124,3 +126,48 @@ def format_parallel_fallback_reason(exc: BaseException) -> str:
     if detail:
         return f"{type(exc).__name__}: {detail}"
     return f"{type(exc).__name__}: worker process exited without an error message"
+
+
+_LOGGER = logging.getLogger(__name__)
+
+
+def _raise_if_cancellation(exc: BaseException) -> None:
+    if isinstance(exc, (CancelledError, KeyboardInterrupt, SystemExit)) or type(exc).__name__ in {
+        "MCPExecutionCancelled",
+        "ThreadCampaignCancelled",
+    }:
+        raise exc
+
+
+def _drain_parallel_progress_events(
+    progress_queue: Any,
+    *,
+    step_callback: Callable[[int, int], None] | None,
+    batch_progress_callback: Callable[[dict[str, Any]], None] | None,
+    callback_label: str,
+) -> tuple[Callable[[int, int], None] | None, Callable[[dict[str, Any]], None] | None]:
+    """Relay worker progress events to callbacks owned by the parent process."""
+    if progress_queue is None:
+        return step_callback, batch_progress_callback
+    while True:
+        try:
+            event = dict(progress_queue.get_nowait() or {})
+        except queue_mod.Empty:
+            break
+        except Exception:
+            break
+        if step_callback is not None and str(event.get("event", "")) == "step":
+            try:
+                step_callback(int(event.get("step", 0)), int(event.get("total", 0)))
+            except Exception as exc:
+                _raise_if_cancellation(exc)
+                _LOGGER.warning("Disabling %s step callback after runtime error: %s", callback_label, exc)
+                step_callback = None
+        if batch_progress_callback is not None:
+            try:
+                batch_progress_callback(event)
+            except Exception as exc:
+                _raise_if_cancellation(exc)
+                _LOGGER.warning("Disabling %s progress callback after runtime error: %s", callback_label, exc)
+                batch_progress_callback = None
+    return step_callback, batch_progress_callback

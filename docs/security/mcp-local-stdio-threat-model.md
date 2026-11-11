@@ -55,8 +55,7 @@ and accepting idempotency-history retirement.
 - Scenario plugins, referenced modules, and external paths remain untrusted
   until separately reviewed. MCP validation or discovery is not permission to
   import or execute them.
-- `public_local`, `pro_local`, `mendicant_sealed`, `mendicant_tandem`, and
-  `direct_frontier_restricted` are trusted operator configuration. A profile
+- `public_local` and `direct_frontier_restricted` are trusted operator configuration. A profile
   name is not authentication, entitlement, classification, release approval,
   or proof of the caller's identity.
 - Handling metadata is a required policy assertion supplied by an authorized
@@ -72,7 +71,7 @@ and accepting idempotency-history retirement.
 
 - public and Pro source separation;
 - local run evidence and review stores;
-- private IHE study inputs and visible manifests;
+- private study inputs and visible manifests;
 - hidden evaluation truth;
 - local filesystem layout and operator/customer path names;
 - deterministic OEL semantics and evidence status;
@@ -85,7 +84,7 @@ and accepting idempotency-history retirement.
 | Path traversal or symlink escape | Separate authorized read/write roots, lexical write checks, and the descriptor-bound writer's component-by-component `O_NOFOLLOW` traversal and exclusive publication when that writer is used | The secure writer is unavailable without the required POSIX primitives; path-facing producers must route through it, and the launching OS account still controls root contents and permissions |
 | Unsafe review SQL | One read-only `SELECT`/`WITH` statement, SQLite query-only mode, authorizer, row and VM-step limits | Authorized query results may still contain sensitive evidence and require correct handling metadata |
 | Local path disclosure | Direct-frontier results replace authorized-root paths with opaque `oel-local-ref` values; unexpected errors are generic | Public/Pro-local profiles intentionally retain inspectable local paths for authorized local users |
-| Hidden IHE truth disclosure | Public registry cannot import Pro; visible-manifest projection fixes `hidden_truth_visible=false` | Authorized scorer workflows remain outside this MCP surface |
+| Hidden evaluation truth disclosure | Public registry cannot import Pro; visible-manifest projection fixes `hidden_truth_visible=false` | Authorized scorer workflows remain outside this MCP surface |
 | Capability confusion | Closed per-profile registries and explicit effects/risk metadata | Profile selection itself is trusted configuration, not authenticated authorization |
 | Data release confusion | Required marking/release scope; direct frontier rejects `local_only` | Metadata authenticity depends on the trusted caller or future release broker |
 | Resource exhaustion | File, database, row, query-step, and response-size budgets | No multi-tenant concurrency or service-level admission control exists |
@@ -93,7 +92,7 @@ and accepting idempotency-history retirement.
 | Resource path or metadata disclosure | Seven fixed public URIs, no arbitrary resolver, public allowlists, explicit media types, and a 500,000-byte limit | Resource contents still require ordinary public-release review |
 | External exfiltration | No network transport or external-communication tool effect | The parent host may itself be external; direct-frontier use is therefore treated as disclosure |
 | Dependency compromise | Bounded optional `mcp>=2.0.0,<3`; exact wheel hashes, licenses, SBOM, offline install, and zero-finding audit recorded | Point-in-time evidence must be regenerated for later releases |
-| Model self-authorization | Write/execute calls must match operator-configured standing IDs or bounded grants; direct-frontier and Mendicant profiles do not discover M4 tools | The operator remains responsible for granting and revoking the server process's approval scope |
+| Model self-authorization | Write/execute calls must match operator-configured standing IDs or bounded grants; restricted profiles do not discover M4 tools | The operator remains responsible for granting and revoking the server process's approval scope |
 | Approval drift or grant replay | Bounded grants can require expiry, scope, tool, canonical input digest, operation ID, content identity, and resource ceilings; revocation is checked before the effect | Standing IDs remain process-level allowlists, and only handlers that pass the complete request context enforce every bounded binding |
 | Unknown effect outcome or unsafe retry | The durable operation ledger records request identity and terminal `completed`, `failed`, or `partial` envelopes; an unresolved `begun` record raises `UnknownOperationOutcome`; its retained root and descriptor-relative records prevent a live root rename from redirecting writes or erasing that record | The ledger is local and consumers must inspect evidence or reconcile explicitly; its advisory lock serializes cooperating writers only, and a hostile same-account process can still replace names; restart-time root identity authentication and arbitrary code/ptrace threats are outside this surface |
 | Validation confused with execution permission | Safe validation is always first; trusted validation returns a content-bound ID but explicitly reports `execution_authorized=false` | An authorized operator must separately review plugin/path trust and grant execution approval |
@@ -109,10 +108,6 @@ and accepting idempotency-history retirement.
 
 - `public_local` exposes only public inspection contracts to a local trusted
   host, plus M4 workflow tools when operator approvals are configured.
-- `pro_local` exposes public plus authorized Pro contracts locally.
-- `mendicant_sealed` and `mendicant_tandem` are registry/policy views for a
-  future Mendicant runtime. They do not yet implement a release broker,
-  provider call, packet approval, or distinct authenticated runtime.
 - `direct_frontier_restricted` exposes only the public registry, rejects
   local-only handling scope, and removes authorized local paths from results.
   Selecting this profile does not itself approve any data for release.

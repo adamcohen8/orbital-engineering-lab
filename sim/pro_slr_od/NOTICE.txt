@@ -1,0 +1,14 @@
+Optical media implementation: published IERS Conventions (2010), chapter 9,
+Mendes and Pavlis (2004) and Mendes et al. (2002) equations and coefficients.
+The comparison implementation and McDonald reference case are from
+Orekit 13.0 MendesPavlisModel, CIPM2007 and MendesPavlisModelTest.
+Orekit copyright 2002-2025 CS GROUP; Apache License, Version 2.0.
+The license text is retained at sim/pro_perturbations/LICENSE-Orekit.txt.
+https://www.orekit.org/site-orekit-13.0/xref/org/orekit/models/earth/troposphere/MendesPavlisModel.html
+https://iers-conventions.obspm.fr/conventions/content/tn36.pdf
+
+Solid-Earth station displacement: IERS Conventions 2010 chapter 7, equations
+7.5--7.11 and tables 7.3a/b; port of Orekit 13.1.7 TidalDisplacement and
+IERSConventions. Copyright 2002-2026 CS GROUP; Apache License Version 2.0.
+The diurnal table retains Orekit's documented IERS table corrections.
+https://www.orekit.org/site-orekit-13.1.7/xref/org/orekit/models/earth/displacement/TidalDisplacement.html

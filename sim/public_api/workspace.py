@@ -302,8 +302,21 @@ class SimulationWorkspace:
             iteration = int(item["iteration"])
             config_dict = dict(item["config_dict"])
             config_dict.setdefault("analysis", {})["enabled"] = False
-            run_cfg = scenario_config_from_dict(config_dict)
-            run_config = SimulationConfig(run_cfg)
+            # Keep the same source provenance and workspace path policy on
+            # every generated child.  Batch preparation may change an
+            # allowlisted input path; reconstructing without the parent's
+            # policy would let that child bypass the workspace read/write
+            # roots before the sealed/plugin checks below.
+            run_cfg = scenario_config_from_dict(
+                config_dict,
+                source_path=sim_config.source_path,
+                path_policy=sim_config.path_policy,
+            )
+            run_config = SimulationConfig(
+                run_cfg,
+                source_path=sim_config.source_path,
+                path_policy=sim_config.path_policy,
+            )
             # Re-apply the workspace policy to every generated child before any
             # plugin-importing validation or engine construction.  Batch
             # variation paths can change an existing plugin pointer after the
@@ -413,7 +426,12 @@ class SimulationWorkspace:
         strict_plugins = bool(cfg.simulator.plugin_validation.get("strict", True))
         generated: dict[str, Any] = {"run_count": 0, "errors": []}
         if (not plugin_errors or not strict_plugins) and study_type in {"monte_carlo", "sensitivity"}:
-            generated = validate_generated_batch_configs(cfg, import_plugins=import_plugins)
+            generated = validate_generated_batch_configs(
+                cfg,
+                import_plugins=import_plugins,
+                source_path=sim_config.source_path,
+                path_policy=sim_config.path_policy,
+            )
 
         generated_errors = list(generated.get("errors", []) or [])
         errors: list[Any] = []

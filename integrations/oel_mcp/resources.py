@@ -144,9 +144,18 @@ def build_public_resource_catalog(
     if profile not in DEPLOYMENT_PROFILES:
         raise ValueError("Unknown OEL MCP deployment profile.")
     contracts = tuple(tool_contracts)
-    public_tools = tuple(contract for contract in contracts if contract.install_profile == "mcp")
+    # The main local server marks its contracts ``mcp`` while the separate
+    # public study-planning server marks its contracts ``public``.  Both are
+    # safe public MCP surfaces; private/pro registries are passed through
+    # neither server and therefore remain excluded by the handler contract
+    # set itself.  Filtering to only ``mcp`` made the study server advertise
+    # tools through ``tools/list`` while publishing an empty tool-schema
+    # resource.
+    public_tools = tuple(contract for contract in contracts if contract.install_profile in {"mcp", "public"})
     loaders = {
-        PUBLIC_RESOURCE_URIS[0]: lambda: _json_text(_tool_schema_payload(profile, public_tools)),
+        PUBLIC_RESOURCE_URIS[0]: lambda: json.dumps(
+            _tool_schema_payload(profile, public_tools), ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+        ) + "\n",
         PUBLIC_RESOURCE_URIS[1]: lambda: _json_text(_saved_query_payload()),
         PUBLIC_RESOURCE_URIS[2]: lambda: _json_text(_agent_task_payload()),
         PUBLIC_RESOURCE_URIS[3]: _operator_guide_text,
@@ -330,26 +339,6 @@ def _animation_recipe_payload() -> dict[str, Any]:
 
 
 def _analysis_workflow_payload() -> dict[str, Any]:
-    def coming_soon_pro_escalation(
-        product_family: str,
-        capability_ids: list[str],
-        *,
-        use_when: str,
-        public_fallback: str,
-    ) -> dict[str, Any]:
-        return {
-            "product_family": product_family,
-            "capability_ids": capability_ids,
-            "availability": "coming_soon",
-            "execution_available": False,
-            "commercially_available": False,
-            "estimated_launch": None,
-            "mcp_tools": [],
-            "recommendation_only": True,
-            "use_when": use_when,
-            "public_fallback": public_fallback,
-        }
-
     workflows = [
         {
             "workflow_id": "ccsds_interchange",
@@ -374,12 +363,6 @@ def _analysis_workflow_payload() -> dict[str, Any]:
             "evidence": "oel.trajectory_targeting_evidence.v1",
             "authoritative_replay": "python -m sim.trajectory_design replay",
             "mcp_tools": [],
-            "pro_escalation": coming_soon_pro_escalation(
-                "OEL Pro Trajectory Optimization",
-                ["oel.pro.trajectory_optimization.v1"],
-                use_when="The request requires optimization beyond one bounded public targeting solve.",
-                public_fallback="Solve and inspect one bounded public trajectory-targeting problem.",
-            ),
         },
         {
             "workflow_id": "constellation_design",
@@ -388,12 +371,6 @@ def _analysis_workflow_payload() -> dict[str, Any]:
             "evidence": "oel.constellation_design_evidence.v1",
             "authoritative_replay": "python -m sim.constellation_design replay",
             "mcp_tools": [],
-            "pro_escalation": coming_soon_pro_escalation(
-                "OEL Pro Constellation Design",
-                ["constellation_design.optimization"],
-                use_when="The request requires automated constellation optimization rather than one public design solve.",
-                public_fallback="Evaluate one explicit public constellation design with bounded objectives.",
-            ),
         },
         {
             "workflow_id": "conjunction_assessment",
@@ -402,12 +379,6 @@ def _analysis_workflow_payload() -> dict[str, Any]:
             "evidence": "oel.conjunction_assessment_evidence.v1",
             "authoritative_replay": "python -m sim.conjunction replay",
             "mcp_tools": [],
-            "pro_escalation": coming_soon_pro_escalation(
-                "OEL Scale",
-                ["oel.pro.scale.screening.v1"],
-                use_when="The request requires catalog-scale screening rather than one bounded conjunction assessment.",
-                public_fallback="Assess one explicit public conjunction case and inspect its evidence.",
-            ),
         },
         {
             "workflow_id": "collection_analysis",
@@ -424,12 +395,6 @@ def _analysis_workflow_payload() -> dict[str, Any]:
             "evidence": "typed OD fit, holdout, and state-product evidence",
             "authoritative_replay": "workflow-specific replay over retained TDM and problem inputs",
             "mcp_tools": [],
-            "pro_escalation": coming_soon_pro_escalation(
-                "OEL Pro Orbit Determination",
-                ["orbit_determination.reduced_tracking", "orbit_determination.ilrs_slr"],
-                use_when="The request requires the Pro reduced-tracking or ILRS SLR workflow beyond the public OD path.",
-                public_fallback="Run the matching bounded public tracking-data OD workflow and report its limits.",
-            ),
         },
         {
             "workflow_id": "mission_scheduling",
@@ -489,27 +454,41 @@ def _analysis_workflow_payload() -> dict[str, Any]:
             "mcp_tools": [],
         },
     ]
-    cross_cutting_pro_escalations = [
-        coming_soon_pro_escalation(
-            "OEL Pro Campaign Analysis",
-            ["oel.pro.campaign.monte_carlo.v1", "oel.pro.campaign.sensitivity.v1"],
-            use_when="The request requires automated Monte Carlo or sensitivity campaigns.",
-            public_fallback="Run a small, explicit set of deterministic public cases and compare their evidence.",
-        ),
-        coming_soon_pro_escalation(
-            "OEL Pro Controller Bench",
-            ["oel.pro.controller.benchmark.v1"],
-            use_when="The request requires automated controller ranking, tuning, or benchmark campaigns.",
-            public_fallback="Run one controlled public comparison with explicit inputs and bounded claims.",
-        ),
-    ]
+    for workflow_id, interfaces, evidence, replay, tools in (
+        ("trajectory_optimization", ["python -m sim.pro_trajectory_optimization"],
+         "bounded optimization result", "python -m sim.pro_trajectory_optimization replay",
+         ["oel.validate_trajectory_optimization.v1", "oel.run_trajectory_optimization.v1",
+          "oel.replay_trajectory_optimization.v1"]),
+        ("constellation_optimization", ["python -m sim.pro_constellation_optimization"],
+         "bounded design search with ranked candidates", "python -m sim.pro_constellation_optimization replay", []),
+        ("scale_catalog", ["python -m sim.scale"],
+         "local catalog, screening, and refresh artifacts", "workflow-specific inspection of retained artifacts",
+         ["oel.inspect_scale_catalog.v1", "oel.plan_scale_recompute.v1", "oel.inspect_scale_recompute_plan.v1",
+          "oel.validate_scale_refresh.v1", "oel.run_scale_refresh_to_onp.v1", "oel.inspect_scale_refresh.v1"]),
+        ("local_tracking_and_slr", ["python -m sim.pro_tracking_od", "python -m sim.pro_slr_od"],
+         "tracking fit, holdout, and SLR evidence", "workflow-specific replay of retained observations",
+         ["oel.run_dynamics_od.v1", "oel.run_ground_sensor_od.v1", "oel.run_ogp_od.v1",
+          "oel.run_sequential_od.v1", "oel.run_relative_od.v1"]),
+        ("local_campaigns", ["oel-sim --config", "oel-sim --campaign"],
+         "Monte Carlo, sensitivity, covariance, and config queue summaries", "repeat with the same inputs and seed", []),
+        ("controller_bench", ["oel-sim --controller-bench", "python -m sim.controller_lab"],
+         "bench summary, criteria, and review evidence", "rerun the same declared cases and variants", []),
+    ):
+        workflows.append({
+            "workflow_id": workflow_id,
+            "product_boundary": "public",
+            "interfaces": interfaces,
+            "evidence": evidence,
+            "authoritative_replay": replay,
+            "mcp_tools": tools,
+        })
     return {
         "schema_version": RESOURCE_SCHEMA_VERSION,
         "resource_uri": PUBLIC_RESOURCE_URIS[7],
         "source": "docs/agent-capability-routing.md; sim.analysis",
         "workflow_count": len(workflows),
         "workflows": workflows,
-        "cross_cutting_pro_escalations": cross_cutting_pro_escalations,
+        "cross_cutting_pro_escalations": [],
         "routing": {
             "common_loop": (
                 "request -> route -> scenario YAML or typed orbital-analysis problem -> validate -> execute -> "
@@ -526,9 +505,7 @@ def _analysis_workflow_payload() -> dict[str, Any]:
             "Workflow discovery is not execution authority.",
             "An empty mcp_tools list means use the documented CLI or Python API; it does not authorize approximation.",
             "Public evidence does not establish operational qualification, maneuver authority, or global optimality.",
-            "Coming-soon Pro metadata does not promise purchase access, entitlement, price, launch date, or execution.",
             "A locally valid Hosted execution package still requires authoritative Hosted preflight and explicit approval.",
-            "Recommend Pro only when the request materially exceeds the public workflow; do not replace a sufficient public answer with an upsell.",
         ],
     }
 

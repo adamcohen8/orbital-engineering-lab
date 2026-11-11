@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib
+import subprocess
+import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -75,7 +77,14 @@ class TestApiPluginValidation(unittest.TestCase):
         }
         workspace = HostedSimulationWorkspace()
 
-        with patch("sim.config.plugin_validation.importlib.import_module", side_effect=AssertionError("imported")):
+        original_import = importlib.import_module
+
+        def reject_plugin_import(name: str, *args, **kwargs):
+            if name == "sim.flight_software.reference_stacks":
+                raise AssertionError("plugin imported during structural validation")
+            return original_import(name, *args, **kwargs)
+
+        with patch("sim.config.plugin_validation.importlib.import_module", side_effect=reject_plugin_import):
             report = workspace.validate(config)
 
         self.assertTrue(report["ok"], report["errors"])
@@ -144,9 +153,16 @@ class TestApiPluginValidation(unittest.TestCase):
             config = _sealed_batch_plugin_config(Path(tmpdir))
             workspace = HostedSimulationWorkspace()
 
+            original_import = importlib.import_module
+
+            def reject_untrusted_import(name: str, *args, **kwargs):
+                if name == "pathlib":
+                    raise AssertionError("untrusted plugin imported")
+                return original_import(name, *args, **kwargs)
+
             with patch(
                 "sim.config.plugin_validation.importlib.import_module",
-                side_effect=AssertionError("untrusted plugin imported"),
+                side_effect=reject_untrusted_import,
             ):
                 with self.assertRaisesRegex(ValueError, "sealed mode blocks plugin module"):
                     workspace.run_monte_carlo_metrics(config, metrics=[])
@@ -175,6 +191,22 @@ class TestApiPluginValidation(unittest.TestCase):
                         parameter="objects.target.flight_software.module",
                         values=["pathlib"],
                     )
+
+
+def test_hosted_plugin_boundaries_in_fresh_processes() -> None:
+    for method in (
+        "test_hosted_validation_never_imports_plugin_modules",
+        "test_hosted_monte_carlo_rechecks_sealed_policy_before_plugin_import",
+        "test_hosted_sweep_rechecks_sealed_policy_before_plugin_import",
+    ):
+        code = (
+            "from sim.tests.test_api_plugin_validation import TestApiPluginValidation; "
+            f"TestApiPluginValidation({method!r}).{method}()"
+        )
+        result = subprocess.run(
+            [sys.executable, "-B", "-c", code], capture_output=True, text=True, timeout=30,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
 
 
 if __name__ == "__main__":

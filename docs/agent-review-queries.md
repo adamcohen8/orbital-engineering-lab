@@ -416,3 +416,51 @@ FROM ground_segment_packets ORDER BY time_s, station_id, object_id
 ## Planetary trajectories
 
 For non-Earth runs query `planetary_state` and `planetary_environment`; Earth `object_state` is empty. See [Planetary ONP](planetary-onp.md) for origin/axes and diagnostic columns.
+
+## Read typed scientific evidence
+
+Use `sim.review.read_scientific_evidence(output_dir, request)` or the equivalent
+CLI for registered quantities from a settled single-run review store:
+
+```bash
+python -m sim.review --scientific-schema
+python -m sim.review outputs/my_run --scientific '{"operation":"nearest","object_id":"target","quantity_ids":["pos_x_eci_km"],"time_s":45,"tie":"earlier","max_separation_s":10}'
+```
+
+The local MCP tool `oel.review_scientific.v1` accepts the same request under
+`request`, with the existing output path and data-handling fields. Capability
+discovery exposes its versioned input contract. Each operation is read only.
+
+| Operation | Selection and result |
+|---|---|
+| `describe` | Registered quantity definitions, units, recorded column availability, run and frame provenance |
+| `exact` | One recorded time or sample index for the selected object |
+| `nearest` | Nearest recorded time, declared earlier/later tie rule and optional separation limit |
+| `bracket` | Recorded endpoints around the requested time, or one row for an exact match |
+| `extremum` | Minimum or maximum over an inclusive saved-sample interval, with explicit tie rule and coverage counts |
+| `difference` | Ordered subtraction at an exact saved time, with declared reference and output units |
+
+The initial catalog covers Cartesian position/velocity components and recorded
+radius/speed. Multiple quantities in one selection must share a source table.
+An omitted object is resolved only for a single-object inventory. Differences
+require a compatible quantity, object and UTC epoch. Frame-dependent quantities
+also require matching recorded and supplied frame labels and models. The receipt
+preserves the supplied reference and its attribution as caller-supplied evidence.
+
+The result binds the recorded rows, schema and database identities, configuration
+digest, operation parameters, and a content digest. `status: unavailable` carries
+a blocker code, observed facts, and a possible next action. An unsaved exact
+epoch can report neighbors without producing an interpolated value. Exact
+no-match facts identify the checked object and time or sample index. A nearest
+receipt reports both absolute separation and `sample_minus_requested_s`. A sampled
+extremum describes the recorded interval, including its sample count. Query
+resource limits and retrieval failures remain distinct from scientific absence.
+
+The existing raw SQL and handoff interfaces retain their contracts. Typed
+metadata applies to the registered quantities. Arbitrary SQL aliases do not
+establish scientific meaning. Review provenance and reference attribution remain
+separate from independent accuracy validation.
+
+Use `sim.review.validate_review_sql(statement)` for the read-only statement
+envelope before selecting a review store. The workspace still checks SQLite
+syntax, table availability, and operation authorization during retrieval.

@@ -86,13 +86,14 @@ and 18-candidate envelope. It is not a claim about opportunity correctness,
 attitude feasibility beyond the direct slew bound, operational readiness, or
 large-scale scheduling performance.
 
-## Public And Pro Boundary
+## Local Edition And Private-Service Boundary
 
 Public includes the typed problem, bounded exact solver, shared-station
 contention, per-asset resource checks, observation-to-downlink accounting,
 content-bound evidence, authoritative replay, tests, and a synthetic example.
 
-Pro remains the home for large mixed-integer or heuristic optimization,
-rolling-horizon replanning, disruptions and recovery, batteries and thermal
-state, crosslinks and routing, uncertainty, customer networks and demand,
-operational data governance, dashboards, and review-ready service evidence.
+The bounded local workflow does not provide large mixed-integer or heuristic
+optimization, rolling-horizon replanning, disruptions and recovery, batteries
+and thermal state, crosslinks and routing, uncertainty, customer networks and
+demand, operational data governance, dashboards, or review-ready service
+evidence. Hosted service infrastructure and the Manifold remain private.

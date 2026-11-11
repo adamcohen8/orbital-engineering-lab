@@ -1,12 +1,11 @@
 # Validation Claims
 
-This page states public validation claims only where the evidence names a
-bounded use and retained source/config identity. At this documentation
-snapshot, `v0.30.1` is the latest published public release and `v0.31.0` remains
-in development. Development changes do not inherit these claims until the
-release-specific evidence supports them and the release is published. This
-page is intentionally conservative: the public core should be useful and
-credible without implying decision-grade mission assurance.
+This page states v1.0.0 local-release validation claims only where the evidence
+names a bounded use and retained source/config identity. A local branch or
+unsigned release candidate is not proof that a public GitHub release has been
+published. This page is intentionally conservative: the open-source edition
+should be useful and credible without implying decision-grade mission
+assurance.
 
 ## Current Public Claims
 
@@ -27,18 +26,17 @@ The public repository supports these claims:
   the assumptions written in `configs/ric_pd_10km_experiment.yaml`.
 - The focused RIC_PD 10 km validation posture documents the flagship scenario's
   intended gates and limitations. The public export can rerun the scenario and
-  companion analysis script; the automated validation harness and evidence
-  manifests live in the Pro/private workspace.
+  companion analysis script. Generated release evidence and private
+  qualification packets remain outside the source export.
 - The public payload and artifact surfaces are documented in the engine,
   scenario YAML, and payload contracts.
-- Selected external-reference validation evidence should be public when the
-  reference material, commands, tolerances, and artifacts are redistributable.
-  Primary saved Orekit comparisons, precise-orbit/public-data cases, optional
-  Basilisk comparisons, and historical HPOP/MATLAB references support only the
-  exact tested cases and do not establish general mission assurance.
+- The public [offline validation suite](tracking-od.md#offline-release-validation)
+  runs synthetic force and orbit determination checks against an installed
+  runtime. Its claims are limited to the tested inputs and tolerances.
 
-For public surfaces first introduced in v0.29, the bounded claims are limited
-to the following retained evidence; they do not qualify later additions:
+For bounded analysis surfaces, claims are limited to the following retained
+evidence and their current contract versions. A later change needs its own
+focused replay before it inherits a claim:
 
 - frame/time external evidence covers the retained epoch, state, EOP inputs,
   and stated residual envelopes; routine replay recomputes retained Orekit
@@ -54,9 +52,10 @@ to the following retained evidence; they do not qualify later additions:
   capability is capped at `VC-1`; acceptance within that ceiling is not an
   independent maturity assessment.
 
-These rows are registered in `configs/validation_evidence_matrix.yaml` as
-non-release-blocking and are centrally owned by
-`configs/validation_harness_v029_foundations.yaml`. A row remains visibly
+These rows are registered in the private validation matrix as non-release-
+blocking. The public source release carries rerunnable tests, synthetic
+recipes, and redistributable inputs where licensing permits, but not generated
+validation evidence. A row remains visibly
 `MISSING_MANIFEST`, `FAIL`, `STALE`, or `INCOMPLETE` unless the exact focused
 tests and retained replay have produced current content-bound evidence.
 
@@ -93,12 +92,11 @@ Review:
 For the focused validation claim and gates, see
 [RIC_PD 10 km Validation Package](validation-ric-pd-10km.md).
 
-Some external-reference harnesses, historical HPOP comparison workflows,
-Basilisk attitude reference sweeps, and evidence manifests exist in the
-Pro/private workspace. Public-safe slices of that evidence should be promoted
-into the public trust baseline as they are redacted, reproduced, and tied to
-bounded claims. Larger automation, private release evidence, proprietary
-reference data, and customer-specific validation packages remain Pro/private.
+Selected external comparisons are published as recipes with their commands,
+prerequisites, and tolerances. Users can regenerate evidence from the approved
+inputs. The development repository retains generated release evidence and
+private qualification campaigns; those generated packets are not part of the
+public source or wheel.
 
 Model-reference pages are part of that traceability chain. They document what
 equations and assumptions a validation result exercised, but they do not replace

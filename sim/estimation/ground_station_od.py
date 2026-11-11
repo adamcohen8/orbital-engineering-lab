@@ -19,7 +19,7 @@ from sim.estimation.ground_systematics import (
     systematic_prediction,
 )
 from sim.estimation.parameters import EstimatedParameter, ParameterSet
-from sim.estimation.partitioning import partition_time_arc
+from sim.estimation.partitioning import JULIAN_DATE_BOUNDARY_TOLERANCE_S, partition_time_arc
 from sim.estimation.residual_audit import build_residual_audit
 from sim.estimation.weighting import (
     covariance_from_sigmas,
@@ -129,7 +129,7 @@ def solve_ground_station_measurement_od(
     initial_state_source: str | None = None,
     fit_duration_s: float | None = None,
     holdout_duration_s: float | None = None,
-    partition_boundary_tolerance_s: float = 1.0e-9,
+    partition_boundary_tolerance_s: float = JULIAN_DATE_BOUNDARY_TOLERANCE_S,
     dt_s: float | None = None,
     dynamics_model: str = "two_body",
     j2: bool = False,

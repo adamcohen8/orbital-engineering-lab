@@ -167,8 +167,8 @@ def capability_catalog():
             },
             "fit-review": {
                 "available": find_spec("sim.data_io.fit") is not None,
-                "edition": "Pro",
-                "entitlement": "tracking_od",
+                "edition": "public",
+                "entitlement": None,
                 "source": "completed review store",
                 "simulation_executed": False,
             },

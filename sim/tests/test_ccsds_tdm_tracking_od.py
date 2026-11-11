@@ -362,6 +362,43 @@ def test_tracking_od_refuses_to_mix_existing_output_evidence(tmp_path: Path) -> 
         )
 
 
+def test_tracking_od_refuses_symlink_output_directory(tmp_path: Path) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    link = tmp_path / "linked-output"
+    link.symlink_to(target, target_is_directory=True)
+    with pytest.raises(TrackingOdError, match="must not be a symlink"):
+        assess_tdm_orbit_determination(
+            read_tdm_kvn(TDM),
+            TrackingOdProblem.from_mapping(_problem()),
+            output_dir=link,
+        )
+    assert not any(target.iterdir())
+
+
+def test_tracking_od_preserves_symlinked_parent_aliases(tmp_path: Path) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    alias = tmp_path / "workspace-alias"
+    alias.symlink_to(target, target_is_directory=True)
+    evidence = assess_tdm_orbit_determination(
+        read_tdm_kvn(TDM),
+        TrackingOdProblem.from_mapping(_problem()),
+        output_dir=alias / "child-output",
+    )
+    assert evidence["status"] == "completed"
+    assert (target / "child-output" / "tracking_od_evidence.json").is_file()
+
+
+def test_tdm_reader_refuses_symlink_input(tmp_path: Path) -> None:
+    local_source = tmp_path / "input.tdm"
+    local_source.write_bytes(TDM.read_bytes())
+    linked = tmp_path / "linked.tdm"
+    linked.symlink_to(local_source.name)
+    with pytest.raises(CcsdsTdmError, match="symbolic links|symlink"):
+        read_tdm_kvn(linked)
+
+
 def test_ground_od_covariance_is_converted_from_parameter_to_state_units() -> None:
     converted = np.asarray(_state_covariance_eci_km_s(np.eye(6) * 1.0e6), dtype=float)
     assert np.diag(converted) == pytest.approx([1.0, 1.0, 1.0, 1.0e-6, 1.0e-6, 1.0e-6])

@@ -123,10 +123,11 @@ with a trusted rebuild. Component tests use the fixed toolchain command and
 the hash-verified build source snapshot; receipt-supplied arbitrary commands
 are refused. Test and smoke completion recheck candidate identity so an edit
 during execution cannot produce a passed receipt for the earlier inputs.
-The public kit stops at authoring, bounded
-component checks, and one deterministic serial smoke run. Controller Bench,
-tuning, qualification, baseline promotion, review packaging, and cFS/SIL remain
-separate Pro workflows.
+The public authoring kit stops at authoring, bounded component checks, and one
+deterministic serial smoke run. The local FSWDK covers Controller Bench,
+tuning, qualification, baseline promotion, review packaging, and cFS/SIL;
+restricted inputs and generated qualification/governance evidence retain their
+private boundary.
 
 ## Platform and evidence limits
 

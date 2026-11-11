@@ -12,7 +12,7 @@ from sim.config.plugin_specs import iter_nested_plugin_specs, plugin_spec_field
 
 _HOSTED_AI_PROVIDERS = {"anthropic", "claude", "gemini", "google", "openai"}
 _LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
-_TRUSTED_PLUGIN_PREFIXES = ("sim.",)
+_TRUSTED_PLUGIN_PREFIXES = ("sim.", "integrations.cfs_sil.")
 
 _DEFAULT_AI_ENDPOINTS = {
     "ollama": "http://localhost:11434",
@@ -206,7 +206,26 @@ def _default_endpoint(provider: str) -> str:
 
 
 def _validate_sil_networking(cfg: Any, policy: SealedModePolicy) -> list[str]:
-    return []
+    if policy.allow_non_loopback_sil:
+        return []
+    errors: list[str] = []
+    for object_id, agent in configured_objects(cfg).items():
+        if not getattr(agent, "enabled", False):
+            continue
+        for field_name in ("flight_software", "bridge"):
+            bridge = getattr(agent, field_name, None)
+            if bridge is None or (field_name == "bridge" and not getattr(bridge, "enabled", False)):
+                continue
+            module = str(getattr(bridge, "module", "") or "")
+            class_name = str(getattr(bridge, "class_name", "") or "")
+            if not module.startswith("integrations.cfs_sil.") and not class_name.startswith("CfsV2"):
+                continue
+            errors.append(
+                f"{object_parameter_prefix(str(object_id))}.{field_name}: sealed mode blocks all cFS/SIL "
+                "socket networking, including loopback UDP. Use an in-memory adapter or explicitly opt into "
+                "SIL networking for an isolated test environment."
+            )
+    return errors
 
 
 def _is_loopback_host(host: str) -> bool:

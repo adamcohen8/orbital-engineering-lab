@@ -11,6 +11,8 @@ PUBLIC_ORBIT_MODULES = frozenset(
         "adaptive",
         "attitude",
         "attitude_ekf",
+        "campaigns",
+        "gas_absorption",
         "cr3bp",
         "control",
         "collisions",
@@ -22,6 +24,7 @@ PUBLIC_ORBIT_MODULES = frozenset(
         "coverage",
         "estimation",
         "environment",
+        "ecom",
         "force_context",
         "stage_context",
         "analytic_bodies",
@@ -56,7 +59,11 @@ PUBLIC_ORBIT_MODULES = frozenset(
         "perturbations",
         "precision_forces",
         "precision_plan",
+        "onp_od",
+        "scale_work",
+        "screening",
         "solid_tides",
+        "slr_od",
         "ocean_tides",
         "zonal",
         "tracking",
@@ -84,27 +91,9 @@ def patch_public_native_core(destination: Path) -> None:
     header = re.sub(r"(?:#\[[^\n]*\]\n)*(?:pub )?mod (\w+);\n", declaration, header)
     if found != PUBLIC_ORBIT_MODULES:
         raise ValueError(f"Public native module inventory drift: {sorted(PUBLIC_ORBIT_MODULES - found)}")
-    # Sampled-pair screening belongs to the separate non-public workflow.
-    start = '    #[cfg(feature = "pro")]\n    #[pyfunction]\n    fn screen_sampled_pairs_bytes('
-    end = "    fn parameters("
-    if start in body:
-        if body.count(start) != 1 or end not in body.split(start, 1)[1]:
-            raise ValueError("Public native screening boundary drift")
-        first, rest = body.split(start, 1)
-        _, last = rest.split(end, 1)
-        body = first + end + last
-    elif "screen_sampled_pairs" in body:
-        raise ValueError("Public native screening boundary drift")
-    body = body.replace('    #[cfg(feature = "pro")]\n    use super::screening;\n', "")
     body = re.sub(
         r"^(?:        #\[[^\n]*\]\n)*        super::(\w+)::register(?:_py)?\(module\)\?;\n",
         lambda m: m.group(0) if m.group(1) in PUBLIC_ORBIT_MODULES else "",
-        body,
-        flags=re.MULTILINE,
-    )
-    body = re.sub(
-        r"^(?:        #\[[^\n]*\]\n)*        module.add_function\(wrap_pyfunction!\(screen_sampled_pairs(?:_bytes)?, module\)\?\)\?;\n",
-        "",
         body,
         flags=re.MULTILINE,
     )

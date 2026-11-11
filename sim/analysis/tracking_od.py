@@ -422,7 +422,15 @@ def assess_tdm_orbit_determination(
         jd_utc_start=float(dataset["first_epoch_jd_utc"]),
         source="tracking_od_problem",
     )
-    output_root = Path(output_dir).expanduser().resolve()
+    # This standalone public API is a trusted local/worker path-facing route,
+    # not the MCP descriptor-bound writer boundary.  Keep symlinked workspace
+    # aliases in parent components usable, but never treat a requested output
+    # directory that is itself a symlink as a fresh evidence root.  Managed MCP
+    # callers must wrap the producer in SecureWriteRoot/staged_output.
+    requested_output = Path(output_dir).expanduser()
+    if requested_output.is_symlink():
+        raise TrackingOdError("output_dir must not be a symlink.")
+    output_root = requested_output.resolve()
     output_existed = output_root.exists()
     if output_existed and not output_root.is_dir():
         raise TrackingOdError(f"output_dir must be a directory path: {output_root}.")

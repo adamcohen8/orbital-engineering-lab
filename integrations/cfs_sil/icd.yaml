@@ -1,0 +1,104 @@
+version: 1
+name: rpo_cfs_sil_icd
+description: |
+  Versioned UDP wire ICD for coupling OEL to the native-Linux cFS 7.0.1
+  oel_sil_bridge app. The adapter decodes this wire representation and
+  publishes separate, normally headed cFS Software Bus messages.
+
+cfs_adapter:
+  app_name: oel_sil_bridge
+  supported_cfs_release: v7.0.1
+  supported_target: native_linux
+  software_bus:
+    sensor_mid_default: 0x0900
+    actuator_mid_default: 0x1901
+    configurable_header: config/oel_sil_bridge_msgids.h
+  invariant: UDP datagrams are never cast directly to cFS Software Bus structures
+
+transport:
+  type: udp
+  byte_order: little_endian
+  framing:
+    header:
+      magic_ascii: "RPO1"
+      version_u16: 1
+      fields:
+        - {name: magic, type: "char[4]"}
+        - {name: version, type: uint16}
+        - {name: msg_id, type: uint16}
+        - {name: seq, type: uint32}
+        - {name: sim_time_ns, type: uint64}
+
+message_ids:
+  sim_sensor_state: 0x1900
+  cfs_actuator_cmd: 0x1901
+  bridge_heartbeat: 0x19FE
+  bridge_error: 0x19FF
+
+messages:
+  - id: 0x1900
+    name: sim_sensor_state
+    direction: sim_to_cfs
+    rate_hz: 10
+    fields:
+      - {name: valid_flags, type: uint8, description: "bit0=orbit, bit1=attitude, bit2=sun, bit3=density"}
+      - {name: pos_eci_km, type: "float64[3]"}
+      - {name: vel_eci_km_s, type: "float64[3]"}
+      - {name: quat_bn, type: "float64[4]"}
+      - {name: omega_body_rad_s, type: "float64[3]"}
+      - {name: mass_kg, type: float64}
+      - {name: sun_dir_eci, type: "float64[3]"}
+      - {name: density_kg_m3, type: float64}
+
+  - id: 0x1901
+    name: cfs_actuator_cmd
+    direction: cfs_to_sim
+    rate_hz: 10
+    fields:
+      - {name: mode, type: uint8, description: "0=hold, 1=closed_loop, 2=safe"}
+      - {name: thrust_eci_km_s2, type: "float64[3]"}
+      - {name: torque_body_nm, type: "float64[3]"}
+      - {name: wheel_torque_nm, type: "float64[3]"}
+      - {name: valid_timeout_ms, type: uint32}
+
+timing:
+  clock_master: simulator
+  command_validity_clock: simulation_time
+  execution_modes:
+    deterministic_step: "OEL waits for an actuator command carrying the exact sensor sim_time_ns before advancing"
+    paced: "OEL targets realtime_factor wall-clock pacing; timing is measured but not deterministic-step qualified"
+    free_running: "OEL advances without a barrier; timing is exploratory and unqualified"
+  timeout_policies: [error, zero, hold_last, safe_mode]
+  rules:
+    - cfs_sil scenarios use one shared bridge/control cadence for orbit and attitude commands
+    - simulator.dynamics.orbit.orbit_substep_s must equal simulator.dynamics.attitude.attitude_substep_s when the cFS bridge is enabled
+    - command age and valid_timeout_ms are evaluated against simulator time
+    - deterministic_step requires an actuator command with sim_time_ns exactly matching the sensor packet
+    - timeout behavior is explicit and mission-configurable as error, zero, hold_last, or safe_mode
+    - transport latency and jitter fault models are not implemented in protocol version 1
+
+sequence_and_replay:
+  use_sequence_counter: true
+  drop_detection: "receiver checks seq monotonicity"
+  deterministic_replay:
+    required: true
+    packet_log_semantics: "log actual packet arrivals; held/stale command state is summarized separately"
+    fields_to_log:
+      - seq
+      - sim_time_ns
+      - packet_hex
+      - decoded_fields
+      - command_age_ms
+      - stale_command_state
+      - execution_mode
+      - timeout_policy
+      - step_wait_ms
+      - step_timeout_count
+
+fault_injection:
+  future_extension: true
+  planned_controls:
+    - packet_drop_probability
+    - latency_ms
+    - measurement_bias_scale
+    - actuator_scale

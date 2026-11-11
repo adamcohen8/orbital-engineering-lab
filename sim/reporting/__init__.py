@@ -1,4 +1,4 @@
-"""Public-safe reporting helpers."""
+"""Reporting helpers for simulation campaigns."""
 
 from __future__ import annotations
 

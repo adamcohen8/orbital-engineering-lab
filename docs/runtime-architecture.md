@@ -15,7 +15,8 @@ New code should locate implementation ownership through
 - `mission_runtime.py`: deployment, mission modules, strategy, and execution
 - `commands.py`: command serialization and decision-state views
 
-`sim.single_run._SingleRunEngine` remains the stable lifecycle coordinator.
+`sim.single_run._SingleRunEngine` remains the internal lifecycle coordinator;
+its behavior is covered by the engine contract, not a public extension API.
 Its focused collaborators are:
 
 - `sim.execution.runtime_profile`: runtime timing and profile payloads
@@ -33,21 +34,21 @@ Its focused collaborators are:
 - `sim.execution.single_run_history`: history growth, retention, and compaction
 - `sim.execution.passive_history`: bounded native RK4 two-body/J2 histories for
   eligible attitude-disabled passive objects; ordinary sample, event, knowledge,
-  and termination processing still consumes each row in order. Explicit Pro
+  and termination processing still consumes each row in order. Explicit local
   `thread_pool` execution prepares independent two-body/J2 histories in bounded
   groups without moving Python runtime callbacks or cache mutation to threads
 - `sim.reporting.run_payload_assembly`: reporting views, payload construction, and artifact dispatch
 
-Public-core single-scenario execution uses deterministic owner-side object
-stepping, with optional public native OGP history preparation through
-`sim.execution.ogp_history`. This batches passive OGP rows across bounded native
-threads without running multiple scenarios. ONP process/thread object stepping
-is a Pro-entitled feature. `auto` may
+Local single-scenario execution retains deterministic owner-side coordination
+and ordered result application. Native OGP preparation through
+`sim.execution.ogp_history` batches passive rows across bounded native threads
+without running multiple scenarios. ONP process/thread object stepping is also
+available in the v1 local edition without license activation. `auto` may
 select a compatible available backend or fall back to serial under resource or
 compatibility constraints; explicitly forcing an unavailable parallel backend
 fails the applicable feature/validation check.
 
-Explicit Pro `thread_pool` selection can also execute complete supported ONP
+Explicit local `thread_pool` selection can also execute complete supported ONP
 object steps. The planner's `thread_scope` selects `object_step`,
 `native_history`, or `auto` within this explicitly requested backend. The
 automatic scope uses the narrow native-history optimization when every object
@@ -69,7 +70,7 @@ running code to finish or notice a cooperative cancellation request. The
 process backend remains available when dependency safety or failure isolation
 requires a process boundary.
 
-Independent Pro campaigns use `sim.execution.thread_campaign` when their
+Independent local campaigns use `sim.execution.thread_campaign` when their
 transport is explicitly set to `thread_pool`. This covers Monte Carlo,
 sensitivity, config queues, controller benchmarks and controller optimization.
 Task and result graphs are serialized, while the owner handles progress,
@@ -95,6 +96,9 @@ marker does not promise that every native entry point runs concurrently.
 External callers should continue using `sim.execution`, `sim.api`, or the
 existing compatibility modules. These implementation modules are ownership
 boundaries, not a replacement public API.
+
+The [OEL 1.x compatibility policy](compatibility-policy.md) defines the stable
+entry points and the lifecycle of their contracts.
 
 
 ## Planetary trajectories

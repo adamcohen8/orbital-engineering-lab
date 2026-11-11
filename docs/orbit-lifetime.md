@@ -1,6 +1,6 @@
 # Deterministic Orbit Lifetime Analysis
 
-OEL v0.29 can propagate one low-orbit spacecraft with ONP drag, retain the
+OEL v1.0 can propagate one low-orbit spacecraft with ONP drag, retain the
 declared atmosphere and spacecraft assumptions, refine warning, disposal, and
 reentry-altitude crossings, and write replayable JSON/CSV evidence. It can also
 compare atmosphere models while holding every non-atmosphere input fixed.
@@ -85,16 +85,15 @@ For `stop_at_reentry: false`, propagation never continues outside the selected
 atmosphere model or Earth-surface domain. It terminates with the corresponding
 explicit domain outcome.
 
-## Public and Pro boundary
+## Local Edition And Private-Service Boundary
 
 The strict contracts, deterministic local ONP single cases, frozen atmosphere
 inputs, identical-input comparisons, JSON/CSV evidence, authoritative replay,
-schema, validation fixtures, and small examples are public. Pro or future work
-includes managed current/historical weather ingestion, density and ballistic-
-coefficient calibration, uncertainty and Monte Carlo, long or large campaigns,
-constellation trades, customer models/data, dashboards, operational-scale
-performance, compliance packages, and qualification evidence. Neither edition
-turns this v1 result into operational authority.
+schema, validation fixtures, and small examples are public. The bounded local
+workflow does not include managed current/historical weather ingestion, density
+and ballistic-coefficient calibration, customer data governance, compliance
+packages, or operational qualification evidence. Hosted service infrastructure
+and the Manifold remain private. This v1 result is not operational authority.
 
 ## Optional Rust propagation
 

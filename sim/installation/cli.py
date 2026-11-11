@@ -368,16 +368,12 @@ def _build_parser() -> argparse.ArgumentParser:
     install.add_argument("--edition", choices=installation_editions, default="public")
     install.add_argument("--channel", choices=("stable", "preview"), default="stable")
     install.add_argument("--developer-unsigned", action="store_true")
-    install.add_argument("--license", type=Path)
-    install.add_argument("--license-public-keys", type=Path)
     install.add_argument("--no-runtime", action="store_true", help=argparse.SUPPRESS)
     bundle = update_sub.add_parser("install-bundle")
     bundle.add_argument("bundle", type=Path)
     bundle.add_argument("--public-keys", type=Path)
     bundle.add_argument("--profile", default="core")
     bundle.add_argument("--developer-unsigned", action="store_true")
-    bundle.add_argument("--license", type=Path)
-    bundle.add_argument("--license-public-keys", type=Path)
     bundle.add_argument("--no-runtime", action="store_true", help=argparse.SUPPRESS)
     activate_parser = update_sub.add_parser("activate")
     activate_parser.add_argument("version")
@@ -395,7 +391,7 @@ def _build_parser() -> argparse.ArgumentParser:
     rotate.add_argument("--current-keys", type=Path)
     configure = update_sub.add_parser("configure-channel")
     configure.add_argument("channel_url")
-    configure.add_argument("--edition", choices=("public", "pro"), default="public")
+    configure.add_argument("--edition", choices=("public",), default="public")
     configure.add_argument("--channel", choices=("stable", "preview"), default="stable")
 
     workspace = sub.add_parser("workspace")
@@ -508,11 +504,6 @@ def main(argv: list[str] | None = None) -> int:
                     record = paths.version_root(str(current)) / "installation-record.json"
                     args.profile = load_json_object(record).get("profile", "core") if current and record.is_file() else "core"
                 unsigned = bool(args.developer_unsigned)
-                license_keys = None
-                if args.license_public_keys:
-                    from sim.licensing.offline import load_public_keys as load_license_public_keys
-
-                    license_keys = load_license_public_keys(args.license_public_keys)
                 release_keys = None if unsigned else keys_from_path(args.public_keys, paths=paths)
                 if args.manifest == "latest":
                     if unsigned:
@@ -525,8 +516,6 @@ def main(argv: list[str] | None = None) -> int:
                         channel=args.channel,
                         profile=args.profile,
                         create_runtime=not args.no_runtime,
-                        license_path=args.license,
-                        license_public_keys=license_keys,
                     )
                 else:
                     payload = install_release(
@@ -536,16 +525,9 @@ def main(argv: list[str] | None = None) -> int:
                         require_signature=not unsigned,
                         profile=args.profile,
                         create_runtime=not args.no_runtime,
-                        license_path=args.license,
-                        license_public_keys=license_keys,
                     )
             elif command == "install-bundle":
                 unsigned = bool(args.developer_unsigned)
-                license_keys = None
-                if args.license_public_keys:
-                    from sim.licensing.offline import load_public_keys as load_license_public_keys
-
-                    license_keys = load_license_public_keys(args.license_public_keys)
                 payload = install_bundle(
                     args.bundle,
                     paths=paths,
@@ -553,8 +535,6 @@ def main(argv: list[str] | None = None) -> int:
                     require_signature=not unsigned,
                     profile=args.profile,
                     create_runtime=not args.no_runtime,
-                    license_path=args.license,
-                    license_public_keys=license_keys,
                 )
             elif command == "activate":
                 payload = activate(args.version, paths=paths)

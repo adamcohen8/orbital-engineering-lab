@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "oel.fswdk.execution_plan.v1",
+  "type": "object",
+  "required": ["schema", "status", "operation", "candidate", "required_inputs", "work_order", "output_dir", "effects", "approval_required", "source_trust_required", "hosted_ai", "network", "resource_plan", "plan_id", "non_claims"],
+  "properties": {
+    "schema": {"const": "oel.fswdk.execution_plan.v1"},
+    "status": {"const": "ready"},
+    "operation": {"type": "string"},
+    "candidate": {"type": "object"},
+    "required_inputs": {"type": "array", "items": {"type": "string"}},
+    "work_order": {"type": "object"},
+    "output_dir": {"type": "string", "minLength": 1},
+    "effects": {"type": "object"},
+    "approval_required": {"type": "boolean"},
+    "source_trust_required": {"type": "boolean"},
+    "hosted_ai": {"const": false},
+    "network": {"const": false},
+    "resource_plan": {"type": "object"},
+    "plan_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "non_claims": {"type": "array", "items": {"type": "string"}}
+  },
+  "additionalProperties": false
+}

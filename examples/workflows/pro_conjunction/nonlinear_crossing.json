@@ -1,0 +1,276 @@
+{
+  "applicability": {
+    "max_covariance_fraction": 0.05,
+    "max_curvature_sigma": 0.01,
+    "max_velocity_sigma_fraction": 0.01,
+    "sigma_extent": 6
+  },
+  "burn": {
+    "delta_v_m_s": [
+      2,
+      0,
+      0
+    ],
+    "execution_covariance_m2_s2": [
+      [
+        0.04,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.04,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        0.04
+      ]
+    ],
+    "frame": "ric",
+    "time_s": 5
+  },
+  "duration_s": 60,
+  "epoch_jd_utc": 2460310.5,
+  "error_dependence": "independent_objects",
+  "force_model": "two_body",
+  "monte_carlo": {
+    "confidence": 0.95,
+    "max_interval_width": 0.05,
+    "seed": 37,
+    "trials": 1024
+  },
+  "name": "epoch_covariance_crossing",
+  "objects": [
+    {
+      "acceleration_spectral_density_km2_s3": [
+        0,
+        0,
+        0
+      ],
+      "hard_body_radius_m": 5,
+      "object_id": "P",
+      "state_eci_km_km_s": [
+        7000,
+        0,
+        0,
+        0,
+        7.5,
+        0
+      ],
+      "uncertainty": {
+        "calibration": "assumed",
+        "covariance": [
+          [
+            0.0001,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0001,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0001,
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1e-12,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1e-12,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1e-12
+          ]
+        ],
+        "epoch_jd_utc": 2460310.5,
+        "frame": "EME2000",
+        "source": "synthetic independent Gaussian initial errors",
+        "units": "km,km/s"
+      }
+    },
+    {
+      "acceleration_spectral_density_km2_s3": [
+        0,
+        0,
+        0
+      ],
+      "hard_body_radius_m": 5,
+      "object_id": "S",
+      "state_eci_km_km_s": [
+        7000.005,
+        -3,
+        0,
+        0,
+        7.6,
+        0
+      ],
+      "uncertainty": {
+        "calibration": "assumed",
+        "covariance": [
+          [
+            0.0001,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0001,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0001,
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1e-12,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1e-12,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1e-12
+          ]
+        ],
+        "epoch_jd_utc": 2460310.5,
+        "frame": "EME2000",
+        "source": "synthetic independent Gaussian initial errors",
+        "units": "km,km/s"
+      }
+    },
+    {
+      "acceleration_spectral_density_km2_s3": [
+        0,
+        0,
+        0
+      ],
+      "hard_body_radius_m": 5,
+      "object_id": "THIRD",
+      "state_eci_km_km_s": [
+        7000.205,
+        -3,
+        0,
+        0,
+        7.6,
+        0
+      ],
+      "uncertainty": {
+        "calibration": "assumed",
+        "covariance": [
+          [
+            0.0001,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0001,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0001,
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1e-12,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1e-12,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1e-12
+          ]
+        ],
+        "epoch_jd_utc": 2460310.5,
+        "frame": "EME2000",
+        "source": "synthetic independent Gaussian initial errors",
+        "units": "km,km/s"
+      }
+    }
+  ],
+  "primary_id": "P",
+  "schema_version": "oel.pro_conjunction_problem.v1",
+  "secondary_ids": [
+    "S",
+    "THIRD"
+  ],
+  "step_s": 10
+}

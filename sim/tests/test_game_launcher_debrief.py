@@ -2281,29 +2281,6 @@ def test_start_game_recorder_avoids_existing_full_attempt_path(tmp_path: Path, m
     assert starts == [tmp_path / "attempt_02.mp4"]
 
 
-def test_safe_inspection_clone_matches_level_5_mechanics() -> None:
-    config_dir = Path(__file__).resolve().parents[1] / "game" / "configs"
-    level_5 = yaml.safe_load((config_dir / "game_training_rpo_05_passive_cross_track_approach.yaml").read_text())
-    level_11b = yaml.safe_load((config_dir / "game_training_rpo_11b_safe_inspection_clone.yaml").read_text())
-
-    level_5["scenario_name"] = level_11b["scenario_name"]
-    level_5["metadata"]["notes"] = level_11b["metadata"]["notes"]
-    level_5["metadata"]["game"]["level_name"] = level_11b["metadata"]["game"]["level_name"]
-    level_5["metadata"]["game"]["training"]["scenario_id"] = level_11b["metadata"]["game"]["training"]["scenario_id"]
-    level_5["metadata"]["game"]["player_max_accel_km_s2"] = level_11b["metadata"]["game"][
-        "player_max_accel_km_s2"
-    ]
-    level_5["objects"]["target"]["initial_state"]["coes"] = level_11b["objects"]["target"]["initial_state"][
-        "coes"
-    ]
-    level_5["outputs"]["output_dir"] = level_11b["outputs"]["output_dir"]
-
-    assert level_11b == level_5
-    for mode in ("pilot", "operator"):
-        by_id = {option.scenario_id: option for option in discover_game_scenarios_for_mode(config_dir, mode=mode)}
-        assert "rpo_11b_safe_inspection_clone" not in by_id
-
-
 def test_recording_controller_capture_hold_repeats_current_frame(tmp_path: Path, monkeypatch) -> None:
     config = SimulationConfig.from_dict(_game_config(tmp_path))
     captures: list[object] = []

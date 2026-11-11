@@ -390,6 +390,7 @@ def _safe_relative_path(value: str) -> str:
     if (
         not value
         or path.is_absolute()
+        or path.as_posix() != value
         or PureWindowsPath(value).drive
         or ":" in value
         or "\x00" in value

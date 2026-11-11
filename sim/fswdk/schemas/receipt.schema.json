@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "oel.fswdk.receipt.v1",
+  "type": "object",
+  "required": ["schema", "contract_version", "generated_utc", "status", "operation", "candidate", "effects", "artifacts", "issues", "result", "non_claims"],
+  "properties": {
+    "schema": {"type": "string", "pattern": "^oel\\.fswdk\\.[a-z_]+\\.v1$"},
+    "contract_version": {"const": 1},
+    "generated_utc": {"type": "string", "minLength": 1},
+    "status": {"enum": ["ready", "clarification_required", "blocked", "invalid", "passed", "failed", "incomplete", "cancelled"]},
+    "operation": {"type": "string", "minLength": 1},
+    "candidate": {"type": "object"},
+    "effects": {"type": "object"},
+    "artifacts": {"type": "array", "items": {"type": "object"}},
+    "issues": {"type": "array", "items": {"type": "object"}},
+    "result": {"type": "object"},
+    "non_claims": {"type": "array", "items": {"type": "string"}}
+  },
+  "additionalProperties": false
+}

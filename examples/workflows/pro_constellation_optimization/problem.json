@@ -1,0 +1,84 @@
+{
+  "analysis_id": "pro_constellation_network_trade",
+  "cost_model": {
+    "cost_penalty_per_unit": 0.0005,
+    "cost_unit": "relative_cost_units",
+    "fixed_cost": 25.0,
+    "ground_site_costs": {
+      "canberra": 12.0,
+      "colorado_springs": 10.0
+    },
+    "maximum_total_cost": 90.0,
+    "satellite_unit_cost": 8.0
+  },
+  "design_space": {
+    "altitude_km_values": [550.0],
+    "ground_site_pool": ["colorado_springs", "canberra"],
+    "inclination_deg_values": [53.0],
+    "initial_phase_deg_values": [0.0],
+    "maximum_ground_sites": 1,
+    "minimum_ground_sites": 1,
+    "patterns": ["walker_delta"],
+    "phasing_values": [0, 1],
+    "plane_counts": [2],
+    "raan_start_deg_values": [0.0],
+    "satellite_counts": [4, 6],
+    "shell_raan_span_deg_values": [180.0]
+  },
+  "public_evaluation": {
+    "coverage": {
+      "half_angle_deg": 35.0,
+      "order": 5,
+      "required_multiplicity": 1
+    },
+    "duration_s": 3600.0,
+    "ground_sites": [
+      {
+        "ellipsoidal_height_km": 1.84,
+        "geodetic_latitude_deg": 38.8339,
+        "longitude_deg": -104.8214,
+        "site_id": "colorado_springs"
+      },
+      {
+        "ellipsoidal_height_km": 0.691,
+        "geodetic_latitude_deg": -35.398,
+        "longitude_deg": 148.981,
+        "site_id": "canberra"
+      }
+    ],
+    "initial_jd_utc": 2461041.5,
+    "link_budget": {
+      "carrier_frequency_hz": 2200000000.0,
+      "data_rate_bps": 1000000.0,
+      "minimum_elevation_deg": 10.0,
+      "misc_loss_db": 2.0,
+      "required_eb_n0_db": 8.0,
+      "rx_gain_dbi": 24.0,
+      "rx_line_loss_db": 1.0,
+      "system_noise_temperature_k": 290.0,
+      "tx_gain_dbi": 6.0,
+      "tx_line_loss_db": 1.0,
+      "tx_power_w": 20.0
+    },
+    "objective": {
+      "coverage_weight": 1.0,
+      "ground_site_penalty": 0.01,
+      "minimum_coverage_fraction": 0.0,
+      "minimum_network_availability_fraction": 0.0,
+      "network_weight": 0.5,
+      "satellite_penalty": 0.005
+    },
+    "propagation": {
+      "integration_step_s": 60.0,
+      "model": "onp_j2"
+    },
+    "sample_step_s": 600.0
+  },
+  "schema_version": "oel.pro_constellation_optimization_problem.v1",
+  "search": {
+    "max_evaluations": 8,
+    "max_generated_candidates": 1000,
+    "method": "exhaustive",
+    "seed": 290
+  }
+}

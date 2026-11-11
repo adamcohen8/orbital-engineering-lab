@@ -36,26 +36,15 @@ reference/validation workflows.
 
 ## Public Execution Boundary
 
-- Public single-scenario workflows support bounded native OGP history
-  preparation threads via `simulator.execution.ogp_parallelism`. See
-  `docs/ogp-parallelism.md` for the source build and example. Owner-side sample,
-  event and output handling remains deterministic. ONP object workers stay Pro.
-- Thread transports for ONP object steps, campaigns, controller studies, and
-  Scale remain Pro workflows; an available transport does not supply a missing
-  entitlement.
-- Automatic ONP object workers, hierarchical campaign/object
-  planning, Monte Carlo, sensitivity, config queues, and controller benchmarks
-  are outside the public core. Do not reproduce them with ad hoc public scripts.
-- The public `sim.analysis.coverage_sensitivity` helper compares explicit,
-  already-produced deterministic coverage products. It is not the automatic
-  sensitivity-campaign executor described above.
-- When such a workflow is unavailable, use the closest deterministic public
-  alternative: one validated run, explicit paired runs, or a small manually
-  enumerated set whose assumptions and evidence remain inspectable.
-- When the user explicitly intends Hosted OEL Pro execution, public OEL may
+- Use the local campaign, object worker, Controller Bench, and Scale entry
+  points in `docs/v1-local-workflows.md`. Preserve the declared resource
+  profile, worker policy, and deterministic output order.
+- Inspect active MCP capabilities before selecting a tool. Use the documented
+  local CLI or Python entry point when a tool is unavailable.
+- When the user explicitly intends Hosted OEL execution, public OEL may
   prepare and validate the public package contract in
-  `docs/hosted-pro-package.md`. This plans a published Pro capability and binds
-  selected bytes; it does not reproduce the Pro executor locally.
+  `docs/hosted-pro-package.md`. This plans a Hosted-only capability and binds
+  selected bytes; it does not reproduce the Hosted executor locally.
 - Treat `CLIENT_VALID` as permission to request authoritative Hosted preflight
   only. It is not proof of availability, entitlement, price, payment approval,
   scientific qualification, or execution authority.
@@ -80,7 +69,7 @@ reference/validation workflows.
 For an open-ended question that needs a reviewable operation graph before any
 execution, use the non-executing `oel study` workflow in
 `docs/study-planning.md`. `PLAN_VALID` means only that deterministic preflight
-accepted the proposal. It does not approve execution or payment, entitle a Pro
+accepted the proposal. It does not approve execution or payment, entitle a Hosted
 capability, or let the agent approve its own plan. Stop at plan review unless a
 separate documented execution surface and explicit user authorization exist.
 
@@ -90,7 +79,7 @@ the public package format in `docs/hosted-pro-package.md` and run
 `CLIENT_VALID` as local package-integrity and planning evidence only. It does
 not establish remote availability or entitlement, upload files, create a quote,
 authorize payment, or execute anything. A public-only package may run locally
-for free or receive an optional Hosted quote; a Pro package cannot run in the
+for free or receive an optional Hosted quote; a Hosted-only package cannot run in the
 public installation. Hosted OEL must revalidate the exact sealed bytes before
 offering execution terms.
 
@@ -110,7 +99,7 @@ seed, while native checkpoints/snapshots retain their separate continuation
 contracts. Compose into a new scenario/output location and validate it before
 execution. Export a predicted trajectory only after a separate prediction run.
 Public conversion and export do not fit review trajectories to OGP/TLE products;
-that fitting remains a separate Pro workflow.
+use the separate documented review fit workflow.
 
 For a study that needs full-state EKF anomaly recovery, consult
 `docs/innovation-recovery.md`. The shared absolute and HCW/SS-J2/TH/YA relative
@@ -144,8 +133,11 @@ For custom complete-stack flight software, use the bounded Public FSW
 Authoring Kit in `docs/fsw-authoring.md`. Inspect unfamiliar candidate material
 without importing it, obtain explicit source trust before lifecycle validation,
 and use only the declared component suite plus one deterministic serial smoke.
-Do not recreate private Controller Bench, tuning, qualification, packaging,
-or cFS/SIL workflows in public scripts. Generic C/C++/Rust stdio candidates use the documented public native authoring path.
+Do not recreate private hosted orchestration, qualification, packaging, or
+cFS/SIL workflows in public scripts. Generic C/C++/Rust stdio candidates use
+the documented public native authoring path. The bounded local Controller
+Bench and FSWDK routes, when present in the active release, remain ordinary
+local workflows with their stated evidence limits.
 
 The preferred agent evidence loop is:
 
@@ -164,12 +156,12 @@ handoff, study, CCSDS/frame-time, CR3BP-rendering, and public FSW-authoring
 adapters. Use the documented CLI or Python API for public workflows without a
 dedicated MCP contract, such as trajectory targeting and modular data IO.
 
-That resource may also name a recommendation-only Pro escalation when the
+That resource may also name a recommendation-only Hosted escalation when the
 user's request materially exceeds a public workflow. Describe it as
 **coming soon and not currently available for purchase or execution**, and
 offer the listed public fallback. Do not treat the metadata as entitlement or
 execution authority, invent a launch date or price, expose private interfaces,
-or upsell Pro when the public workflow is sufficient.
+or upsell a Hosted service when the public workflow is sufficient.
 
 For a small explicit Walker/shell and ground-site trade, use
 `docs/constellation-design.md` and `python -m sim.constellation_design`. Keep

@@ -426,7 +426,6 @@ def _open_directory_chain(path: Path, *, create: bool) -> int:
     current_fd = os.open(os.path.sep, _directory_flags())
     try:
         for part in path.parts[1:]:
-            created = False
             try:
                 next_fd = os.open(part, _directory_flags(), dir_fd=current_fd)
             except FileNotFoundError:
@@ -434,12 +433,11 @@ def _open_directory_chain(path: Path, *, create: bool) -> int:
                     raise
                 try:
                     os.mkdir(part, mode=0o700, dir_fd=current_fd)
-                    created = True
                 except FileExistsError:
                     pass
+                else:
+                    _fsync_directory(current_fd)
                 next_fd = os.open(part, _directory_flags(), dir_fd=current_fd)
-            if created:
-                _fsync_directory(current_fd)
             os.close(current_fd)
             current_fd = next_fd
         return current_fd
@@ -452,7 +450,6 @@ def _open_relative_directory(base_fd: int, parts: Sequence[str], *, create: bool
     current_fd = os.dup(base_fd)
     try:
         for part in parts:
-            created = False
             try:
                 next_fd = os.open(part, _directory_flags(), dir_fd=current_fd)
             except FileNotFoundError:
@@ -460,12 +457,11 @@ def _open_relative_directory(base_fd: int, parts: Sequence[str], *, create: bool
                     raise
                 try:
                     os.mkdir(part, mode=0o700, dir_fd=current_fd)
-                    created = True
                 except FileExistsError:
                     pass
+                else:
+                    _fsync_directory(current_fd)
                 next_fd = os.open(part, _directory_flags(), dir_fd=current_fd)
-            if created:
-                _fsync_directory(current_fd)
             os.close(current_fd)
             current_fd = next_fd
         return current_fd

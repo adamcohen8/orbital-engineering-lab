@@ -668,10 +668,29 @@ def _validate_numeric_sequence(value: Any, path: str, *, length: int) -> list[st
 
 
 def _is_cfs_sil_bridge(pointer: Any) -> bool:
-    return False
+    module = str(getattr(pointer, "module", "") or "")
+    class_name = str(getattr(pointer, "class_name", "") or "")
+    return module.startswith("integrations.cfs_sil.") or class_name.startswith("CfsSil")
 
 
 def _validate_cfs_sil_timing(cfg: Any, path: str) -> list[str]:
+    dynamics = dict(getattr(getattr(cfg, "simulator", None), "dynamics", {}) or {})
+    orbit = dict(dynamics.get("orbit", {}) or {})
+    attitude = dict(dynamics.get("attitude", {}) or {})
+    if not bool(attitude.get("enabled", True)):
+        return []
+
+    dt_s = float(getattr(getattr(cfg, "simulator", None), "dt_s", 0.0) or 0.0)
+    orbit_substep_s = float(orbit.get("orbit_substep_s", dt_s) or dt_s)
+    attitude_substep_s = float(attitude.get("attitude_substep_s", dt_s) or dt_s)
+    if not math.isclose(orbit_substep_s, attitude_substep_s, rel_tol=0.0, abs_tol=1e-12):
+        return [
+            (
+                f"{path}: cFS SIL bridge scenarios must use a single control cadence; "
+                "simulator.dynamics.orbit.orbit_substep_s must equal "
+                "simulator.dynamics.attitude.attitude_substep_s."
+            )
+        ]
     return []
 
 

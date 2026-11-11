@@ -191,6 +191,10 @@ class ReviewStoreNotFoundError(FileNotFoundError):
 class ReviewQueryError(ValueError):
     """Raised when a review query is unsafe or cannot be executed."""
 
+    def __init__(self, message: str, *, code: str = "query_failed"):
+        super().__init__(message)
+        self.code = code
+
 
 @dataclass(frozen=True)
 class ReviewQueryResult:
@@ -798,16 +802,24 @@ class ReviewWorkspace:
                         value = row[column_index]
                         value_bytes = _value_size_bytes(value)
                         if max_value_bytes is not None and value_bytes > int(max_value_bytes):
-                            raise ReviewQueryError("Review query value exceeds the per-value byte budget.")
+                            raise ReviewQueryError("Review query value exceeds the per-value byte budget.", code="retrieval_incomplete")
                         result_bytes += len(column.encode("utf-8")) + value_bytes
                         if max_result_bytes is not None and result_bytes > int(max_result_bytes):
-                            raise ReviewQueryError("Review query result exceeds the response-size budget (aggregate bytes).")
+                            raise ReviewQueryError("Review query result exceeds the response-size budget (aggregate bytes).",
+                                                   code="retrieval_incomplete")
                         converted[column] = value
                     rows.append(converted)
                 conn.set_progress_handler(None, 0)
         except sqlite3.Error as exc:
             message = _bounded_sqlite_error_message(exc, value_budget_enabled=max_value_bytes is not None)
-            raise ReviewQueryError(message) from exc
+            error_name = getattr(exc, "sqlite_errorname", None)
+            if error_name is None:
+                # Python 3.10 reports SQLite errors without structured metadata.
+                budget_exceeded = message != str(exc)
+            else:
+                budget_exceeded = error_name in {"SQLITE_INTERRUPT", "SQLITE_TOOBIG"}
+            code = "retrieval_incomplete" if budget_exceeded else "query_failed"
+            raise ReviewQueryError(message, code=code) from exc
         return ReviewQueryResult(
             columns=columns,
             rows=rows,
@@ -986,7 +998,7 @@ def execute_bounded_review_query(
             for value in row:
                 value_bytes = _value_size_bytes(value)
                 if value_bytes > value_budget:
-                    raise ReviewQueryError("Review query value exceeds the per-value byte budget.")
+                    raise ReviewQueryError("Review query value exceeds the per-value byte budget.", code="retrieval_incomplete")
                 result_bytes += value_bytes
                 if result_bytes > result_budget:
                     raise ReviewQueryError("Review query result exceeds the aggregate byte budget.")
@@ -1009,6 +1021,15 @@ def _validate_select_sql(sql: str) -> str:
     if first_token not in {"select", "with"}:
         raise ReviewQueryError("Review queries are read-only and must start with SELECT or WITH.")
     return statement
+
+
+def validate_review_sql(sql: str) -> str:
+    """Check the read-only statement envelope without opening a review store.
+
+    The review workspace still checks SQLite syntax, tables, and authorized
+    operations when preparing the statement against the selected store.
+    """
+    return _validate_select_sql(sql)
 
 
 def _strip_single_trailing_semicolon(statement: str) -> str:

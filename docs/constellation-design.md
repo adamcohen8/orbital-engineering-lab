@@ -119,19 +119,20 @@ python -m pytest \
   sim/tests/test_global_coverage_phase3.py
 ```
 
-## Public and Pro boundary
+## Local Edition And Private-Service Boundary
 
 Public contains the inspectable scientific primitive: deterministic
 Walker/shell generation, explicit small candidate evaluation, ONP propagation,
 ideal-nadir coverage, same-epoch free-space ground links, transparent scoring,
 bounded evidence, and authoritative replay.
 
-Pro should provide the workflow acceleration and scale: automatic design-space
-generation, large or mixed-integer/nonlinear optimization, multi-start and
-robust searches, ground-site placement, crosslinks and routed flow, station
-capacity/contention, demand/cost/equipment models, outages and uncertainty,
-managed campaigns, and design dashboards. Public evidence does not imply any
-of those capabilities or operational service qualification.
+The local v1 edition also exposes the bounded optimization/search modules under
+legacy `pro_*` names. They do not provide global optimality, automatic
+deployment or site placement, crosslinks and routed flow, station
+capacity/contention, calibrated demand/cost/equipment models, operational
+outage/uncertainty assurance, or design authority. Hosted service
+infrastructure and the Manifold remain private. Public evidence does not imply
+operational service qualification.
 
 ## Claim limits
 

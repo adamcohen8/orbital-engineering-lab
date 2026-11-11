@@ -28,9 +28,9 @@ Use the deterministic OEL engine; never substitute agent-written physics.
   evidence. If a route is unavailable, explain the limit before offering an
   alternative that changes the study.
 
-Public scenarios use deterministic serial object stepping. Scale, campaigns,
-controller studies, and their opt-in thread/process transports remain Pro; do
-not recreate those workflows in agent scripts or infer entitlement from code.
+Use the campaign, Scale, parallel execution, and Controller Bench entry
+points in `docs/v1-local-workflows.md`. Keep the scenario's resource limits
+and worker policy explicit.
 
 ## Construct and check the study
 
@@ -79,7 +79,7 @@ Native checkpoints/snapshots retain their separate continuation contracts.
 Export with `oel io object export`, `oel io export-review`, or
 `oel io export-table` from completed, identity-verified evidence. IO never executes a
 simulation, reruns OD, or replaces source inputs. Review-to-OGP/TLE fitting is
-a separate Pro action.
+a separate local action.
 
 ## Validate, execute, inspect
 

@@ -25,7 +25,7 @@ OEL supports Python 3.10 through 3.14. Python 3.14 is recommended. Official
 public releases provide signed managed installers that keep immutable OEL
 engines separate from user-owned projects and workspaces.
 
-The **v0.36.0 managed bundle targets macOS arm64 with CPython 3.11**.
+The **v1.0.0 managed bundle targets macOS arm64 with CPython 3.11**.
 Linux, Windows, and Intel Mac users should follow
 [Source Installation For Contributors](#source-installation-for-contributors).
 The broader engine Python range does not qualify this bundle for other hosts.
@@ -337,25 +337,15 @@ boundaries, and incident response, start with:
 - [Data Handling And Boundary Statement](docs/security/data-handling.md)
 - [Security Incident Process](docs/security/incident-response.md)
 
-## Public Core And Pro Layer
+## Local OEL and Hosted OEL
 
-The public core is useful on its own: deterministic single-run simulation,
-public controllers and mission primitives, review artifacts, Python/YAML
-interfaces, examples, docs, the bounded two-body Lambert orbit-transfer
-planner, the transparent event-driven single-shooting targeter with
-authoritative ONP repropagation, deterministic coverage and directed-link
-analysis, the Public FSW Authoring Kit, and the RPO trainer.
+OEL v1.0 ships one open-source local edition. It includes single scenarios,
+campaigns, orbit determination, conjunction and avoidance analysis, optimization,
+RF analysis, flight software development, and RPO Trainer. See the
+[local workflow guide](docs/v1-local-workflows.md) for entry points and examples.
 
-The Pro layer adds workflow acceleration for teams that need repeatable
-analysis at scale: controller benchmarks, general optimization and gain tuning,
-Monte Carlo and sensitivity campaigns, curated validation packs, AI-assisted
-reports, custom GNC workbench scaffolding, and program-specific integrations.
-The private FSWDK adds Controller Bench, tuning, qualification, baseline
-promotion, packaged evidence, mission-specific external integrations, and cFS/SIL.
-
-See [Public Core And Pro Boundary](docs/public-vs-pro.md) for the product and
-repository boundary. Public examples do not require hosted AI accounts or API
-keys.
+The [Hosted OEL client](docs/hosted-oel-client.md) uses a separate service account
+and approval workflow. Check service availability before submitting work.
 
 ## Documentation
 

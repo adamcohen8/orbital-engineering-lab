@@ -45,7 +45,11 @@ def run_mc_iteration_from_dict(task: dict[str, Any]) -> dict[str, Any]:
     emit_every = max(1, emit_every)
     collect_relative_range_series = bool(task.get("collect_relative_range_series", False))
     collect_payload = bool(task.get("collect_payload", False))
-    ci = scenario_config_from_dict(cdict)
+    ci = scenario_config_from_dict(
+        cdict,
+        source_path=task.get("source_path"),
+        path_policy=task.get("path_policy"),
+    )
     if strict_plugins:
         errs = validate_scenario_plugins(ci)
         if errs:

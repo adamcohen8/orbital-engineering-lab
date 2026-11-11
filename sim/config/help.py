@@ -10,7 +10,7 @@ from typing import Any, Callable
 
 from sim.config.profiles import profile_choices
 
-DEFAULT_HELP_SCOPE = "public"
+DEFAULT_HELP_SCOPE = "all"
 
 
 @dataclass(frozen=True)
@@ -536,6 +536,38 @@ CONFIG_HELP_ENTRIES: tuple[ConfigHelpEntry, ...] = (
             _option("strict", "Raise if review-store writing fails instead of preserving normal artifacts."),
         ),
         example='outputs:\n  review:\n    enabled: true\n    detail: "standard"',
+    ),
+    ConfigHelpEntry(
+        path="controller_bench",
+        title="Controller Bench Workflow",
+        description=(
+            "Defines repeatable controller benchmark suites run through the simulator's "
+            "`--controller-bench <suite.yaml>` workflow. Use validate-only before executing "
+            "a suite, especially when editing cases, controllers, or optimization settings."
+        ),
+        aliases=(
+            "controller bench",
+            "controller benchmark",
+            "controller benchmarks",
+            "bench suite",
+            "benchmark suite",
+            "controller-bench",
+        ),
+        options=(
+            _option("suite_id", "Stable suite identifier reported in validation and outputs."),
+            _option("description", "Human-readable summary of what the suite exercises."),
+            _option("output_dir", "Workspace-relative directory for benchmark outputs."),
+            _option("cases", "Benchmark cases, each referencing a scenario config and optional case settings."),
+            _option("controllers", "Controller variants or plugin specs compared across cases."),
+            _option("optimization", "Optional optimizer configuration, such as PSO tuning settings."),
+        ),
+        example=(
+            "# Validate a maintained suite before running it:\n"
+            ".venv/bin/python run_simulation.py --controller-bench "
+            "configs/controller_bench_rendezvous.yaml --validate-only"
+        ),
+        notes=("See docs/controller-bench.md for the complete suite schema and workflow.",),
+        visibility="pro",
     ),
     ConfigHelpEntry(
         path="ground_stations",

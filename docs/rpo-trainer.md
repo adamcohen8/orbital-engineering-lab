@@ -25,7 +25,7 @@ return to the selector.
 
 ## 3D View (Downloadable Trainer)
 
-All levels except Cislunar Rendezvous and Drag Racing offer the 3D view.
+The 3D view is available in every public level except Cislunar Rendezvous.
 Levels start with the two RIC plane views. Click **3D** at the top right of
 those panels to open an orthographic 3D view; click **2D** to return. Switching
 preserves the simulation and remembers the 3D camera within the session.

@@ -1,22 +1,25 @@
 # Scenario YAML Contract
 
-This document defines the 0.4 compatibility contract for scenario YAML files.
+This document defines the OEL 1.x compatibility contract for scenario YAML files.
 It complements the user-facing guide in `docs/scenario-yaml.md` by stating what
 scenario authors, examples, tests, agents, and migration tools may rely on.
 
-The contract applies to public-core single-run scenarios and to Pro/private
-analysis scenarios unless a Pro-only field is explicitly called out.
+The contract applies to public local single-run and bounded analysis/campaign
+scenarios. Hosted orchestration, provider-driven AI, restricted validation
+inputs, and other private-service fields are called out explicitly.
 
 
 ## Stability Level
 
-This is a pre-1.0 contract. The schema may still evolve, but changes that alter
-existing behavior should include:
+The [OEL 1.x compatibility policy](../compatibility-policy.md) governs this
+contract. Minor releases may add compatible optional fields. Breaking changes
+require a versioned successor while preserving the supported 1.x path.
+Contract changes and documented correctness fixes require:
 
 - a release-note entry,
 - an update to this contract,
 - a focused regression test,
-- and, when practical, a migration note or compatibility shim.
+- migration guidance and a compatibility shim when introducing a successor.
 
 Stable enough to rely on:
 
@@ -26,7 +29,8 @@ Stable enough to rely on:
 - plugin pointer shape,
 - timing-grid validation,
 - output section shape,
-- public rejection of Pro-only batch-analysis workflows.
+- acceptance of documented local analysis/campaign workflows without license
+  activation, and rejection of unavailable private-service fields.
 
 Still maturing:
 
@@ -79,10 +83,14 @@ Ground station sections:
 
 Analysis sections:
 
-- Public core accepts deterministic single-run scenarios.
-- Pro/private workspaces support `analysis` workflows.
-- Generated public entrypoints should reject enabled Monte Carlo, sensitivity,
-  covariance, or other Pro analysis with a clear Pro-boundary message.
+- Public local OEL accepts deterministic single-run scenarios and the bounded
+  campaign/analysis entry points documented in `docs/v1-local-workflows.md`.
+- Private development and Hosted workspaces may add orchestration, provider,
+  or governance layers around those local workflows.
+- Generated public entrypoints should reject unsupported private orchestration,
+  provider-driven AI, or operational-authority requests with a clear boundary
+  message; they should not reject the documented local campaign/analysis
+  routes merely because their legacy module names contain `pro`.
 
 
 ## Strict Types
@@ -179,7 +187,7 @@ forms include:
 - `source: default_circular_earth` for the explicit default/trajectory-only path.
 
 Specialized relative, cislunar/CR3BP, launch, OGP-mean-element, and deployment
-forms retain their documented object-kind and public/Pro/experimental
+forms retain their documented object-kind and public/local/private-service
 boundaries. Cartesian position requires Cartesian velocity; auxiliary epoch,
 attitude, and deployment metadata do not create a second orbital form.
 
@@ -380,7 +388,7 @@ Review store contract:
   recorded as non-fatal review status while preserving normal artifacts.
 
 
-## Public And Pro Fields
+## Public Local And Private-Service Fields
 
 Public-core scenarios should use:
 
@@ -390,19 +398,21 @@ Public-core scenarios should use:
 - public output settings,
 - curated examples under `examples/configs`.
 
-Pro/private scenarios may additionally use:
+Public local analysis scenarios may additionally use:
 
 - `analysis.enabled: true`,
 - `analysis.study_type: monte_carlo`,
 - `analysis.study_type: covariance`,
 - controller-benchmark configs,
-- AI report settings,
-- validation harness configs,
-- HPOP/MATLAB validation configs,
+- bounded local campaign and Controller Bench settings,
+- local validation recipes and synthetic fixtures,
+- restricted HPOP/MATLAB validation inputs only in authorized development
+  workflows,
 - integration/SIL bridge workflows.
 
 The generated public export may contain stub modules or boundary errors for
-Pro-only features. Public configs should not require those features to run.
+private-service features. Public configs should not require those features to
+run.
 
 
 ## Migration Rules
@@ -425,5 +435,6 @@ controller behavior, or output semantics without tests and release notes.
   legacy identifier; omission is classified as legacy and unknown versions
   fail closed. A generated full machine-readable schema remains incomplete.
 - Not every supported field has a generated machine-readable schema.
-- Public/Pro field boundaries are enforced mostly through export stubs, docs,
-  config curation, and runtime checks rather than a standalone schema compiler.
+- Public/private-service field boundaries are enforced mostly through export
+  stubs, docs, config curation, and runtime checks rather than a standalone
+  schema compiler.

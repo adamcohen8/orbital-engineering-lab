@@ -50,7 +50,10 @@ def test_snapshot_compatibility_backend_preserves_empty_and_invalid_database_sem
 
 
 def test_read_root_can_create_missing_descendants_below_approved_root(tmp_path: Path) -> None:
-    root_path = tmp_path / "records" / "nested"
+    existing = tmp_path / "existing"
+    existing.mkdir()
+    existing.chmod(0o750)
+    root_path = existing / "records" / "nested"
     with SecureReadRoot.open(
         root_path,
         approved_roots=(tmp_path,),
@@ -60,6 +63,8 @@ def test_read_root_can_create_missing_descendants_below_approved_root(tmp_path: 
         assert root.path == root_path
         assert root_path.is_dir()
         assert (root_path.stat().st_mode & 0o777) == 0o700
+        assert (root_path.parent.stat().st_mode & 0o777) == 0o700
+        assert (existing.stat().st_mode & 0o777) == 0o750
 
 
 def test_read_root_stays_anchored_after_visible_root_rename(tmp_path: Path) -> None:

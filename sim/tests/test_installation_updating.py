@@ -481,6 +481,39 @@ def test_state_lock_is_exclusive_and_atomic(tmp_path: Path) -> None:
     assert not lock.exists()
 
 
+def test_empty_platform_data_environment_uses_home_defaults(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+
+    posix = InstallationPaths.default(
+        home=home,
+        environ={"XDG_DATA_HOME": "", "XDG_CONFIG_HOME": ""},
+        system="Linux",
+    )
+    assert posix.data_root == home / ".local" / "share" / "oel"
+    assert posix.config_root == home / ".config" / "oel"
+
+    windows = InstallationPaths.default(
+        home=home,
+        environ={"LOCALAPPDATA": "", "APPDATA": ""},
+        system="Windows",
+    )
+    assert windows.data_root == home / "AppData" / "Local" / "OEL"
+    assert windows.config_root == home / "AppData" / "Roaming" / "OEL"
+
+    explicit_windows = InstallationPaths.default(
+        home=home,
+        environ={
+            "OEL_DATA_HOME": str(tmp_path / "managed-data"),
+            "OEL_CONFIG_HOME": str(tmp_path / "managed-config"),
+            "LOCALAPPDATA": str(tmp_path / "local-app-data"),
+            "APPDATA": str(tmp_path / "app-data"),
+        },
+        system="Windows",
+    )
+    assert explicit_windows.data_root == tmp_path / "managed-data"
+    assert explicit_windows.config_root == tmp_path / "managed-config"
+
+
 def test_workspace_audit_preserves_user_source_and_does_not_import_candidates(tmp_path: Path) -> None:
     workspace_root = tmp_path / "user workspace"
     init_workspace(workspace_root, engine_version="0.25.0")

@@ -49,8 +49,8 @@ def test_python_range_classifiers_and_os_classifiers_match_phase2_contract() -> 
 
     assert project["requires-python"] == ">=3.10,<3.15"
     assert SUPPORTED_PYTHON_RANGE == project["requires-python"]
-    assert project["license"] == "Apache-2.0"
-    assert project["license-files"] == ["LICENSE.txt"]
+    assert project["license"] == "Apache-2.0 AND BSD-3-Clause"
+    assert project["license-files"] == ["LICENSE.txt", "sim/dynamics/orbit/data/LICENSE-HPOP-Harris-Priester.txt"]
     classifiers = set(project["classifiers"])
     assert not any(item.startswith("License ::") for item in classifiers)
     for minor in SUPPORTED_MINORS:

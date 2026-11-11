@@ -6,6 +6,66 @@ import sys
 from pathlib import Path
 
 
+def test_scenario_parsing_does_not_import_ground_runtime() -> None:
+    code = """
+import sys
+from sim.config import scenario_config_from_dict
+from sim.ground_segment.config import normalize_config
+
+assert normalize_config(None) == {}
+scenario_config_from_dict({
+    "schema_version": "oel.scenario.v1",
+    "scenario_name": "cold_config",
+    "objects": {"sat": {
+        "kind": "satellite",
+        "runtime_profile": "trajectory_only",
+        "specs": {"mass_kg": 100.0},
+        "initial_state": {
+            "position_eci_km": [7000.0, 0.0, 0.0],
+            "velocity_eci_km_s": [0.0, 7.5, 0.0],
+        },
+    }},
+    "simulator": {
+        "duration_s": 1.0,
+        "dt_s": 1.0,
+        "dynamics": {"attitude": {"enabled": False}},
+    },
+})
+blocked = [
+    "sim.ground_segment.runtime", "sim.ground_segment.estimation",
+    "sim.estimation.ground_station_od", "scipy", "sim.review",
+]
+assert not any(name in sys.modules for name in blocked), [
+    name for name in blocked if name in sys.modules
+]
+"""
+    subprocess.run(
+        [sys.executable, "-B", "-c", code], text=True, capture_output=True, check=True, timeout=30,
+    )
+
+
+def test_ground_segment_lazy_exports_preserve_identity() -> None:
+    code = """
+import sim.ground_segment as ground
+assert set(ground.__all__) <= set(dir(ground))
+try:
+    ground.not_a_ground_export
+except AttributeError:
+    pass
+else:
+    raise AssertionError("unknown export accepted")
+from sim.ground_segment import GroundSegment, SimulatedGroundSegment
+from sim.ground_segment.runtime import GroundSegment as RuntimeGround
+from sim.ground_segment.runtime import SimulatedGroundSegment as RuntimeSimulated
+assert GroundSegment is RuntimeGround is ground.GroundSegment
+assert SimulatedGroundSegment is RuntimeSimulated is ground.SimulatedGroundSegment
+assert GroundSegment.__module__ == "sim.ground_segment.runtime"
+"""
+    subprocess.run(
+        [sys.executable, "-B", "-c", code], text=True, capture_output=True, check=True, timeout=30,
+    )
+
+
 def test_import_sim_keeps_heavy_feature_modules_lazy() -> None:
     code = """
 import json

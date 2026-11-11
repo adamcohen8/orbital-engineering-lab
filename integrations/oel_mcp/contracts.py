@@ -21,8 +21,6 @@ DEPLOYMENT_PROFILES = frozenset(
     {
         "public_local",
         "pro_local",
-        "mendicant_sealed",
-        "mendicant_tandem",
         "direct_frontier_restricted",
     }
 )
@@ -349,3 +347,12 @@ def _tool_limits(tool_id: str) -> dict[str, Any]:
             }
         )
     return limits
+
+
+def legacy_local_tool_id(tool_id: str) -> str:
+    """Resolve the legacy dispatch key for an approved public tool alias."""
+    if tool_id.startswith("oel.pro."):
+        return tool_id
+    if tool_id.startswith("oel.fswdk."):
+        return tool_id.replace("oel.fswdk.", "oel.pro.fsw.", 1)
+    return "oel.pro." + tool_id.removeprefix("oel.")

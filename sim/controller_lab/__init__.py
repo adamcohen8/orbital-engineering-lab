@@ -1,16 +1,18 @@
-"""Orbital Engineering Lab Pro controller-bench tools are not included in the public core."""
+from sim.controller_lab.agent import inspect_controller_bench_output, scaffold_controller_bench_suite
+from sim.controller_lab.bench import (
+    load_controller_bench_config,
+    run_controller_bench,
+    validate_controller_bench_config,
+)
+from sim.controller_lab.catalog import get_catalog_entry, list_catalog_entries, plan_controller_bench
 
-
-def _unavailable(*args, **kwargs):
-    raise ImportError(
-        "Controller-benchmark suites are part of Orbital Engineering Lab Pro. "
-        "The public core supports single-run simulation, controllers, estimators, "
-        "scenario YAML, and API workflows."
-    )
-
-
-load_controller_bench_config = _unavailable
-run_controller_bench = _unavailable
-validate_controller_bench_config = _unavailable
-
-__all__ = ["load_controller_bench_config", "run_controller_bench", "validate_controller_bench_config"]
+__all__ = [
+    "get_catalog_entry",
+    "inspect_controller_bench_output",
+    "list_catalog_entries",
+    "load_controller_bench_config",
+    "plan_controller_bench",
+    "run_controller_bench",
+    "scaffold_controller_bench_suite",
+    "validate_controller_bench_config",
+]

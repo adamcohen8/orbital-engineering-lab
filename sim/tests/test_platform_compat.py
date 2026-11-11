@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pickle
+import sys
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -16,6 +17,7 @@ from sim.execution.object_workers import (
 from sim.platform_compat import (
     max_rss_bytes,
     open_folder,
+    process_context,
     process_cpu_time_seconds,
 )
 
@@ -133,6 +135,29 @@ def test_object_worker_payload_is_spawn_serializable() -> None:
     assert _persistent_object_worker_loop.__module__ == "sim.execution.object_workers"
 
 
+def test_object_worker_bootstraps_with_spawn_context(monkeypatch) -> None:
+    # The suite also exercises installed source dispatchers with temporary
+    # source trees. The worker must load this checkout, just as the parent did.
+    monkeypatch.setattr(sys, "path", [str(Path(__file__).resolve().parents[2]), *sys.path])
+    context = process_context(start_method="spawn")
+    parent_connection, worker_connection = context.Pipe(duplex=True)
+    process = context.Process(
+        target=_persistent_object_worker_loop,
+        args=(worker_connection, {}),
+        name="oel-spawn-compatibility-smoke",
+    )
+    process.start()
+    worker_connection.close()
+    try:
+        parent_connection.send(None)
+        process.join(timeout=15.0)
+        assert not process.is_alive()
+        assert process.exitcode == 0
+    finally:
+        parent_connection.close()
+        if process.is_alive():
+            process.terminate()
+            process.join(timeout=5.0)
 
 
 def test_pygame_dummy_display_trainer_smoke(

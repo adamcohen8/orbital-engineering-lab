@@ -22,9 +22,9 @@ completed review store -> selection -> serializer -> external file + receipt
 completed review store -> explicit OGP fit -> fit/holdout evidence -> TLE/OMM
 ```
 
-The last operation requires the Pro implementation and `tracking_od`
-entitlement. Public format conversion, review exports and OGP scenario
-materialization do not reproduce that private estimator.
+The last operation is an explicit local fit with its own acceptance limits
+and holdout evidence. Format conversion, review exports, and OGP scenario
+materialization are separate operations.
 
 ## Profiles
 
@@ -256,7 +256,10 @@ because the bounded assessment problem does not carry one. Historical
 maneuver export reads actual ideal impulsive-command review rows. It does not
 convert them into an approved future flight plan.
 
-## Review-store mean-element fit (Pro)
+## Review-store mean-element fit
+
+TLE output requires the optional `sgp4` formatter. Install the validation
+profile or select OMM or GP output when using the base install.
 
 ```bash
 oel io fit-review outputs/onp derived/catalog-fit --object-id SAT \

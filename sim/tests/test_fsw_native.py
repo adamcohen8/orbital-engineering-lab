@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -160,12 +161,14 @@ def test_build_requires_explicit_source_trust(tmp_path):
 
 
 def _endpoint(tmp_path, program):
-    # Executable Python fixture starts without shell parsing. This also
-    # exercises paths with spaces and cleanup of a child that closes stdout.
     launcher = tmp_path / "endpoint"
     if os.name == "nt":
         pytest.skip("POSIX executable fixture; native lifecycle acceptance is portable.")
-    launcher.write_text(f"#!{Path(sys.executable).resolve()}\n" + program)
+    source = tmp_path / "endpoint.py"
+    source.write_text(program)
+    # Use exec so signals reach the Python process, and quote the interpreter
+    # and fixture paths because POSIX shebangs cannot encode spaces in paths.
+    launcher.write_text(f"#!/bin/sh\nexec {shlex.quote(sys.executable)} {shlex.quote(str(source))} \"$@\"\n")
     launcher.chmod(0o700)
     return launcher
 
@@ -302,5 +305,7 @@ def test_build_refuses_a_symlink_inserted_during_source_snapshot(tmp_path, monke
         return original(*args, **kwargs)
 
     monkeypatch.setattr(native.shutil, "copytree", racing_copy)
+    # Source snapshot rejection happens before any compiler invocation.
+    monkeypatch.setattr(native, "toolchains", lambda: {"cmake": "cmake"})
     with pytest.raises(PermissionError, match="symlink"):
         build_candidate(manifest, workspace_root=tmp_path, trusted_build=True)

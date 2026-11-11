@@ -35,6 +35,36 @@ The command prints `tracking_od_evidence.json`. That packet binds the problem,
 source TDM, normalized dataset, estimator result, holdout prediction ledger,
 and generated artifacts by digest.
 
+## Precision Cartesian OD with ECOM2
+
+The experimental precision Cartesian OD workflow uses the Python API in
+`sim.tracking_od` to fit Earth-centered observations with ONP. Build the native orbit extension from
+[this source tree](native-source-build.md) so the extension advertises
+`ONP_ECOM2_VERSION = 1`.
+
+Construct a `PrecisionOrbitModel` with `radiation_model="ecom2"`, an
+absolute UTC Julian date, a trusted normalized gravity table in HPOP-style
+GGM03 row format, and a trusted EOP file covering the arc. Pass forward sample
+times in seconds and EME2000 positions in km to `fit_precision_orbit`. It
+also accepts EME2000 velocities in km/s. The fit estimates the initial state
+and seven solar radiation pressure coefficients from those observations.
+Use `predict_precision_orbit` to forecast from the fitted state and fixed
+coefficients. For direct prediction with known coefficients, pass them to
+`PrecisionOrbitPredictor.predict` as `ecom_coefficients_km_s2` and set the
+cannonball SRP parameter to zero. Supply the coefficients in the order
+`D0, Y0, B0, D2c, D2s, B1c, B1s`, in km/s² at one astronomical unit.
+
+Reproduce the force parity and synthetic fit checks from a source checkout:
+
+```bash
+python -m pytest sim/tests/test_ecom.py sim/tests/test_precision_od.py
+```
+
+The synthetic tests check force arithmetic, recovery, and fixed-coefficient
+prediction. Empirical accuracy for a given spacecraft depends on its tracking
+data, fitted arc, and force inputs. See the [published ECOM2 model
+description](https://doi.org/10.1007/s00190-020-01342-2).
+
 ## Supported Public Profile
 
 The `oel.ccsds-tdm-kvn.v0.1` parser accepts a deliberately narrow subset of
@@ -138,14 +168,72 @@ integration, evidence provenance, and exported installation. They do not
 validate raw radiometric reduction, operational calibration, or general TDM
 coverage.
 
-## Public And Pro Boundary
+## Reduced ground and optical tracking
 
-Public includes the strict single-dataset KVN parser, normalized reduced-
-geometric AZEL/range dataset, bounded batch estimator, explicit fit/holdout
-prediction, evidence packet, tests, and synthetic example.
+The experimental local tracking workflow takes reduced ground azimuth, elevation,
+range and range-rate or optical right ascension and declination observations.
+Declare the measurement units, epoch, frame, prior state and covariance, and
+the fit and holdout windows. The EKF and RTS smoother use the fit observations.
+The workflow predicts the held-out observations and records residuals, innovation
+statistics, covariance, and source receipts.
 
-Pro remains the home for bulk or live ingestion, customer and operational data
-governance, raw radiometric reduction, calibrated biases and media/light-time
-models, broader observables, association and custody, multi-dataset campaigns,
-covariance calibration, predicted-accuracy qualification, scheduling trades,
-and review-ready customer packaging.
+```bash
+python -m sim.pro_tracking_od validate examples/tracking_od/synthetic_optical_holdout.json
+python -m sim.pro_tracking_od run examples/tracking_od/synthetic_optical_holdout.json --output-dir outputs/synthetic_optical_od
+python -m sim.pro_tracking_od replay outputs/synthetic_optical_od
+```
+
+The same command exposes `validate-continuous`, `batch-continuous`,
+`run-continuous`, and `replay-continuous`. This experimental workflow uses
+the `oel.tracking_od_continuous.v1` problem contract and one trusted passive
+ONP scenario. It supports declared augmented parameters, frozen holdout
+evaluation, and appending new closed epochs with the same model and retained
+history. Use `--help` for the command arguments. For relative state
+measurements, the Python entry point is
+`SimulationWorkspace.run_integrated_relative_od`.
+
+The precision OD Python package exposes formal covariance forecasts and
+precision SLR measurement models. These workflows require the caller's
+source-bound observations, station data, and model inputs. Use the synthetic
+cases below to check the published numerical and replay contracts.
+
+## Satellite laser ranging
+
+The experimental laser ranging workflow reads a single ILRS CRD v2 normal
+point stream and a problem file with station coordinates, a template TLE,
+and explicit fit, validation, and holdout windows. It fits OGP mean elements
+on the fit window and runs a sequential estimator with the supplied covariance
+and process noise. Validation and holdout residuals are scored separately.
+
+From the public source release, use the installed OEL environment and the
+supplied synthetic example. Use a new directory for each run.
+
+```bash
+python -m sim.pro_slr_od validate examples/tracking_od/synthetic_problem.json
+python -m sim.pro_slr_od run examples/tracking_od/synthetic_problem.json --output-dir outputs/synthetic_slr_od
+python -m sim.pro_slr_od replay outputs/synthetic_slr_od
+```
+
+Validation should report eight fit, three validation, and three holdout
+observations. Inspect the solver disposition and the separate residual metrics
+in `pro_slr_od_summary.json`. Replay verifies the artifact inventory and reruns
+the same problem. The synthetic normal points exercise the measurement,
+estimation, and replay workflow. Real tracking accuracy requires independent
+observations and a reviewed measurement and force model.
+
+The module name and evidence schema retain their original identifiers for
+compatibility. The local workflow runs without offline license activation.
+
+## Offline release validation
+
+From the public source release, use a clean wheel install with pytest and
+the matching native orbit wheel. The full managed profile already includes
+pytest. The suite exercises the precision force demo, Python and Rust force
+parity, the attributed Harris–Priester table, synthetic tracking and relative
+OD, ECOM2 fit and forecast, and laser ranging with withheld observations.
+The referenced tests declare the scenario inputs, frames, units, and pass
+criteria. They generate outputs locally from the supplied synthetic inputs.
+
+```bash
+python -I tools/verify_offline_validation.py --junitxml offline-validation.xml
+```

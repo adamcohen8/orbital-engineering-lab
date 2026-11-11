@@ -157,18 +157,19 @@ The validation establishes deterministic equation and workflow correctness
 inside this contract. Calibrated sensor-performance claims require measured or
 otherwise independently governed evidence for a named payload and environment.
 
-## Public And Pro Boundary
+## Local Edition And Private-Service Boundary
 
 Public core owns the deterministic single-target geometry, transparent optical
 screening, refined opportunities, bounded resource checks, evidence packet,
 and small validation fixtures.
 
-Pro remains the home for weather/cloud/terrain services, calibrated payload
-libraries, exact or controlled-accuracy swept coverage, managed, rolling-
-horizon, or campaign-scale multi-asset and multi-target scheduling, campaign-
-scale storage/downlink timelines, advanced radar and radiometry, proprietary
-data connections, and review-ready customer trade studies. The separate public
-exact scheduler remains available for at most 18 supplied opportunities.
+The local v1 workflow does not include weather/cloud/terrain services,
+calibrated payload libraries, exact or controlled-accuracy swept coverage,
+managed or rolling-horizon multi-asset scheduling, campaign-scale
+storage/downlink timelines, advanced radar/radiometry, or proprietary data
+connections. The separate local exact scheduler remains available for at most
+18 supplied opportunities. Hosted service infrastructure and the Manifold
+remain private.
 
 ## Numeric backend
 

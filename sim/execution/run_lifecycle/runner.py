@@ -10,10 +10,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
-import yaml
-
 from sim.config import SimulationScenarioConfig
-from sim.config.scenario.loader import scenario_config_from_dict
+from sim.config.scenario.loader import _parse_yaml_mapping, scenario_config_from_dict
 from sim.execution.service import SimulationExecutionService
 from sim.installation.provenance import execution_provenance
 from sim.platform_compat import canonicalize_platform_compatibility_root
@@ -145,12 +143,14 @@ def _load_yaml_mapping(path: Path) -> tuple[bytes, dict[str, Any]]:
     if len(content) > MAX_CONFIG_BYTES:
         raise RunPolicyError("Lifecycle scenario configuration exceeds the 2 MiB limit.")
     try:
-        root = yaml.safe_load(content) or {}
-    except yaml.YAMLError as exc:
-        raise RunPolicyError("Lifecycle scenario configuration is not valid YAML.") from exc
-    if not isinstance(root, dict):
-        raise RunPolicyError("Lifecycle scenario configuration must contain a mapping.")
-    return content, dict(root)
+        # Keep lifecycle parsing on the canonical scenario loader path.  In
+        # particular, this preserves duplicate-key rejection and YAML merge
+        # semantics instead of allowing ``safe_load`` to silently select the
+        # last duplicate value before normalization.
+        root = _parse_yaml_mapping(content, path)
+    except (TypeError, ValueError) as exc:
+        raise RunPolicyError(f"Lifecycle scenario configuration is invalid: {exc}") from exc
+    return content, root
 
 
 def _force_lifecycle_outputs(root: dict[str, Any], output_dir: Path) -> dict[str, Any]:

@@ -3,6 +3,9 @@
 Use the Python API when you want to load scenarios, run simulations, inspect
 payloads, or build analysis scripts without shelling out to the CLI.
 
+The [OEL 1.x compatibility policy](compatibility-policy.md) defines the supported
+imports, additive changes, deprecation window, and experimental API boundary.
+
 The API follows the same scenario YAML contract as the CLI. Only run scenario
 YAML from sources you trust; plugin pointers can import Python modules.
 
@@ -59,10 +62,10 @@ result = workspace.run("configs/quickstart_5min.yaml")
 print(result.summary["scenario_name"])
 ```
 
-The private Pro distribution adds controller-bench, campaign, and saved-output
-report workflows on top of this facade. Public core also provides bounded,
-versioned standalone analysis APIs; those remain separate from the scenario
-workspace façade and keep their own contracts and evidence.
+The v1 local edition also provides bounded Controller Bench, campaign, and
+saved-output report workflows. Those standalone routes remain separate from
+the scenario workspace façade and keep their own contracts and evidence;
+Hosted service orchestration and provider-driven reports remain private.
 
 ## Bounded constellation-design API
 
@@ -88,8 +91,8 @@ verified = verify_constellation_design_artifacts(artifacts.output_dir)
 ```
 
 See [Constellation And Ground-Network Design](constellation-design.md) for the
-resource envelope, evidence semantics, validation plan, and Public/Pro
-boundary.
+resource envelope, evidence semantics, validation plan, and local/private-
+service boundary.
 
 ## Scenario Artifacts
 

@@ -1,0 +1,22 @@
+{
+  "schema_version": "oel.trajectory_optimization_problem.v1",
+  "name": "constrained_impulse_validation",
+  "initial_state_eci_km_km_s": [7000.0, 0.0, 0.0, 0.0, 7.5, 0.0],
+  "spacecraft": {"wet_mass_kg": 500.0, "dry_mass_kg": 300.0, "impulsive_isp_s": 300.0},
+  "propagation": {"step_s": 10.0, "integrator": "rk4", "force_model": []},
+  "segments": [
+    {"name": "target_burn", "type": "impulsive_burn", "frame": "eci", "delta_v_m_s": [0.0, 0.0, 0.0]}
+  ],
+  "variables": [
+    {"name": "dv_y", "segment": "target_burn", "field": "delta_v_y_m_s", "initial": 80.0, "lower": 0.0, "upper": 150.0, "scale": 100.0}
+  ],
+  "objectives": [
+    {"name": "minimum_delta_v", "scope": "resource", "quantity": "total_delta_v_m_s", "weight": 1.0, "scale": 100.0, "goal": "minimize"}
+  ],
+  "constraints": [
+    {"name": "target_speed", "scope": "terminal", "quantity": "speed_km_s", "equal": 7.6, "tolerance": 1e-8, "scale": 1.0},
+    {"name": "delta_v_cap", "scope": "resource", "quantity": "total_delta_v_m_s", "upper": 120.0, "tolerance": 1e-6, "scale": 100.0}
+  ],
+  "solver": {"method": "slsqp", "max_iterations": 50, "ftol": 1e-10, "finite_difference_rel_step": 1e-6, "evaluation_budget": 1000, "multi_start_count": 4, "seed": 29},
+  "robustness": {"sample_count": 16, "seed": 29, "position_sigma_km": 0.01, "velocity_sigma_km_s": 1e-5, "thrust_scale_sigma": 0.0}
+}

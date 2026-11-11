@@ -543,6 +543,27 @@ def _prepared(tmp_path: Path, name: str) -> tuple[LifecycleStore, object]:
     return store, prepared
 
 
+def test_lifecycle_rejects_duplicate_yaml_mapping_keys(tmp_path: Path) -> None:
+    config_path = tmp_path / "duplicate.yaml"
+    config_path.write_text(
+        "scenario_name: first\n"
+        "scenario_name: second\n"
+        "simulator:\n"
+        "  duration_s: 1.0\n"
+        "  dt_s: 1.0\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RunPolicyError, match="Duplicate YAML mapping key 'scenario_name'"):
+        prepare_foreground_run(
+            config_path=config_path,
+            output_dir="duplicate",
+            output_root=tmp_path / "outputs",
+            workspace_root=tmp_path,
+            resource_estimator=_safe_estimate,
+        )
+
+
 def test_foreground_runner_commits_handle_artifacts_and_review(tmp_path: Path) -> None:
     store, prepared = _prepared(tmp_path, "success")
     handles = []

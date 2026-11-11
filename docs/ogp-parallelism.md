@@ -3,13 +3,12 @@
 Public OEL supports bounded Rust OGP-SGP4/SDP4 propagation threads inside one
 deterministic simulation. The owner still visits every sample, applies results
 in object order, and handles callbacks, events, termination, review and outputs.
-Only passive OGP history preparation uses native object-row threads. ONP object
-workers and multi-simulation orchestration remain OEL Pro capabilities.
-
-This is an API and distribution boundary. An open-source installation does not
-prevent a user from starting independent OEL processes in separate terminals.
-It does not include OEL's campaign, Monte Carlo, config-queue or hierarchical
-scheduling services.
+This optional backend uses native object-row threads for passive OGP history
+preparation. ONP object workers and hierarchical local campaign budgets use
+separate execution controls in [Scenario YAML](scenario-yaml.md). See
+[OEL v1 local workflows](v1-local-workflows.md) for campaign, Monte Carlo,
+sensitivity, and config-queue entry points. Hosted and Manifold orchestration
+have separate service contracts.
 
 ## Build The Optional Public Backend
 
@@ -50,10 +49,10 @@ simulator:
 
 `workers: 0` chooses a bounded automatic allocation (at most four workers,
 reserving one logical CPU). Explicit counts are capped by available CPUs,
-the resource profile and any enclosing Pro campaign budget. `policy: serial`
+the resource profile and any enclosing campaign budget. `policy: serial`
 and the `laptop-safe` profile use one worker. Use `standard` for the bounded
 two-worker example. General `object_parallelism` and `policy: auto/parallel`
-remain separate Pro controls and cannot be combined with this option.
+remain separate object-worker controls and cannot be combined with this option.
 
 The synthetic 16-object mixed LEO/GEO example explicitly selects Python for
 other numerical subsystems, so it needs only the OGP extension even when the

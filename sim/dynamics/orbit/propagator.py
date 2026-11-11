@@ -1611,7 +1611,7 @@ class OrbitPropagator:
             float(ctx.mu_km3_s2),
             float(env.get("spherical_harmonics_reference_radius_km", EARTH_RADIUS_KM)),
             float(ctx.mass_kg),
-            float(ctx.cd),
+            float(env.get("drag_coefficient", ctx.cd)),
             float(env.get("drag_area_m2", ctx.area_m2)),
             float(
                 EARTH_ROT_RATE_RAD_S
@@ -1956,7 +1956,7 @@ class OrbitPropagator:
             float(ctx.mu_km3_s2),
             float(stage_env.get("spherical_harmonics_reference_radius_km", EARTH_RADIUS_KM)),
             float(ctx.mass_kg),
-            float(ctx.cd),
+            float(stage_env.get("drag_coefficient", ctx.cd)),
             float(stage_env.get("drag_area_m2", ctx.area_m2)),
             float(EARTH_ROT_RATE_RAD_S if omega_raw is None else omega_raw),
             float(stage_env.get("srp_area_m2", ctx.area_m2)),

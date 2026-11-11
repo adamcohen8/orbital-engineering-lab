@@ -37,7 +37,7 @@ Bundled recipes carry a machine-readable maturity label:
 | `prototype` | A useful repeatable workflow or smoke check whose outputs need analyst interpretation before being treated as product evidence. |
 | `experimental` | A discoverable recipe for exploration only; do not present it as a supported analysis workflow. |
 
-Public-tagged bundled recipes must be `supported`. Pro/private recipes may be
+Public-tagged bundled recipes must be `supported`. Private-service recipes may be
 `supported`, `prototype`, or `experimental`, but the answer should name that
 maturity when the evidence depends on the recipe.
 

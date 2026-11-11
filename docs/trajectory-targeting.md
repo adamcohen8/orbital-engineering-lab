@@ -1,6 +1,6 @@
 # Event-Driven Trajectory Targeting
 
-OEL v0.29 adds a bounded public trajectory-design primitive for deterministic
+OEL v1.0 provides a bounded public trajectory-design primitive for deterministic
 coast/burn sequences. It can propagate to a fixed duration or a state event,
 apply ECI or RIC impulsive burns, correct declared burn or coast-time variables
 against terminal constraints, and independently repropagate every accepted
@@ -198,16 +198,17 @@ python -m pytest \
   sim/tests/test_trajectory_targeting_open_reference.py
 ```
 
-## Public And Pro Boundary
+## Local Edition And Private-Service Boundary
 
 Public OEL includes this deterministic executor, event definitions, one
 transparent single-shooting corrector, small examples, failure evidence, and
 authoritative solution repropagation.
 
-Pro remains the home for bounds and inequality/path constraints, finite-burn
-optimization, multiple shooting or collocation, multi-start/global search,
-campaign-scale robustness studies, stationkeeping or launch-window workflow
-packs, design dashboards, and customer-specific vehicle/constraint libraries.
+The local v1 edition also contains separately documented optimization modules
+under legacy `pro_*` names. Those modules remain bounded engineering tools and
+do not provide global search, operational maneuver authority, or customer-
+specific vehicle/constraint libraries. Hosted service infrastructure and the
+Manifold remain private.
 
 No public result claims global optimality, uncertainty robustness, collision
 safety, operational readiness, maneuver authorization, or flight

@@ -66,7 +66,6 @@ GAME_MODE_OPTIONS: tuple[str, ...] = ("pilot", "operator")
 DOWNLOADABLE_GAME_EXCLUDED_SCENARIO_IDS: frozenset[str] = frozenset(
     {
         "rpo_arcade_pursuit",
-        "rpo_11b_safe_inspection_clone",
     }
 )
 OPERATOR_MODE_EXCLUDED_SCENARIO_IDS: frozenset[str] = frozenset(

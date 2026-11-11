@@ -101,10 +101,11 @@ source product, infer freshness beyond its content identity and declared
 epoch/horizon, or make the resulting schedule operational. No paid service is
 required.
 
-## Public And Pro Boundary
+## Local Edition And Private-Service Boundary
 
-Public includes this bounded adapter, self-contained source retention, exact
-problem construction, deterministic example, tests, and replay. Pro remains
-the home for bulk/live product ingestion, customer data governance, rolling
-replanning, crosslinks and routing, uncertainty, disruptions, operational
-stores, large optimization, and review-ready service workflows.
+The local edition includes this bounded adapter, self-contained source
+retention, exact problem construction, deterministic example, tests, and
+replay. It does not include bulk/live product ingestion, customer data
+governance, rolling replanning, crosslinks and routing, uncertainty,
+disruptions, operational stores, large optimization, or review-ready service
+workflows. Hosted service infrastructure and the Manifold remain private.

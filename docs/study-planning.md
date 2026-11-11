@@ -1,7 +1,7 @@
 # Local BYO Study Planning (Prototype)
 
 OEL's Phase 3A study-planning prototype lets a user-funded frontier agent ask
-what public and Pro operations exist, propose a typed study, and receive one of
+what public-local and Hosted-only operations exist, propose a typed study, and receive one of
 three deterministic dispositions:
 
 - `CLARIFICATION_REQUIRED` while material user choices remain unresolved;
@@ -11,13 +11,14 @@ three deterministic dispositions:
 
 This local prototype does **not** execute a study, accept payment, authorize a
 quote, approve a plan, submit feedback, connect to a hosted worker, or receive
-the user's model-provider credentials. Pro capability descriptors are public
-contracts; they do not expose or distribute the Pro implementation.
+the user's model-provider credentials. Hosted-only capability descriptors are
+public contracts; they do not expose or distribute hosted implementation.
 
 For a package intended for Hosted execution, use the opt-in local package
 validator documented in `docs/hosted-pro-package.md`. It accepts public-only
 plans while recommending the free local venue, and it can plan a known
-public-safe Pro contract even though no Pro executor is installed locally.
+public-safe Hosted-only contract even though no hosted executor is installed
+locally.
 This does not change ordinary `oel study preflight`, which remains fail-closed
 when a capability has no authoritative executor binding in the selected
 catalog.
@@ -64,21 +65,20 @@ approval, payment authorization, scientific qualification, or permission to
 execute. The result always contains `payment_authorized: false`,
 `execution_authorized: false`, and `agent_may_authorize: false`.
 
-## Public-Free And Hosted-Pro Routing
+## Public-Free And Hosted Routing
 
 **Hosted availability:** access is not publicly available. These local tools
 classify plans but do not establish service availability or grant alpha access.
 Any private alpha access requires separate operator provisioning and current
 service instructions. See [`docs/hosted-oel-client.md`](hosted-oel-client.md).
 
-Public OEL publishes public-safe descriptors for both public and Pro
+Public OEL publishes public-safe descriptors for local and Hosted-only
 capabilities. Availability is derived from an explicit executor binding, never
-from the presence of a descriptor or importable source. The current public
-capabilities identify their concrete executor contracts. Pro descriptors remain
-discoverable, but are marked unavailable until a hosted adapter is implemented
-and bound. The descriptors reveal typed inputs, outputs, bounds, maturity, and
-limitations; they do not expose private implementation source or a local
-execution surface.
+from the presence of a descriptor or importable source. Hosted-only descriptors
+remain discoverable, but are marked unavailable until a Hosted adapter is
+implemented and bound. The descriptors reveal typed inputs, outputs, bounds,
+maturity, and limitations; they do not expose private implementation source or
+a local execution surface.
 
 OEL deterministically classifies the exact operation graph from those declared
 capability editions. It returns structured facts for the frontier agent to
@@ -90,8 +90,8 @@ explain in its own words; OEL does not map questions to canned product messages:
   Hosted-preflight intent, but local planning cannot return a Hosted offer or
   quote.
 - `HOSTED_PRO_REQUIRED` identifies a locally valid Hosted package plan whose
-  required Pro operations use published public-safe contracts. The package
-  result identifies public and Pro capability IDs separately, returns no local
+  required Hosted-only operations use published public-safe contracts. The
+  package result identifies local and Hosted-only capability IDs separately, returns no local
   quote, and would require an operating Hosted service to confirm authoritative
   executor availability and repeat private semantic preflight before it could
   offer execution terms. This route does not establish current availability or
@@ -100,9 +100,9 @@ explain in its own words; OEL does not map questions to canned product messages:
   policy. No payment or execution route is offered.
 
 The BYO model provider may charge for agent usage in every route. Public-free
-routing means no OEL execution fee. A Pro-required route does not establish a
+routing means no OEL execution fee. A Hosted-only route does not establish a
 price or hosted entitlement. Local preflight never executes, charges, exposes
-a Pro execution tool, or authorizes the agent to approve anything.
+a Hosted execution tool, or authorizes the agent to approve anything.
 
 ## Compatible Frontier-Agent Hosts
 

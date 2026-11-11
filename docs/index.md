@@ -26,13 +26,14 @@ public simulation core.
 ## Evaluator Or Buyer
 
 Start here if you are deciding whether OEL is credible for research,
-education, engineering prototyping, or Pro workflow evaluation.
+education, engineering prototyping, or evaluation of OEL's bounded local
+workflows.
 
 1. [Product Inventory](product-inventory.md)
 2. [Flagship RIC_PD 10 km Scenario And Validation](validation-ric-pd-10km.md)
 3. [Physics Model Reference](physics-models.md)
 4. [Validation Claims](validation-claims.md)
-5. [Public Core And Pro Boundary](public-vs-pro.md)
+5. [Public Local Edition And Private Services](public-vs-pro.md)
 6. [Security And Procurement](security/supply-chain.md)
 7. [Compatibility And Install Profiles](compatibility.md)
 
@@ -105,33 +106,22 @@ Start here when you already know the kind of work you want to run.
 | Propagate one deterministic drag-decay case or compare frozen atmosphere assumptions | [Deterministic Orbit Lifetime Analysis](orbit-lifetime.md) |
 | Bind completed analyses into one evidence-cited, content-bound study | [Integrated Study Lifecycle](study-lifecycle.md) |
 
-## Pro Workspace User
+## Private Services And Development Workspace
 
-These docs are available in the full private/Pro workspace and are omitted from
-the public export when they describe private workflow acceleration or operating
-processes.
-
-1. Pro User Guide
-2. Pro Python API
-3. Campaign Analysis
-4. Controller Bench
-5. Pro Covariance Analysis
-6. Pro AI Reports
-7. Pro AI Config Assistant
-8. Pro GNC Workbench
-9. Validation Operations
-10. Pro Communications Analysis Contract
-11. Pro Capability Routing (including communications workflows)
-
-In the Pro workspace, use the repository root README for buyer-facing Pro
-positioning and local handoff notes for project continuity.
+The v1 local edition is open source and does not require a Pro license. The
+development repository also contains private material that is intentionally
+omitted from the public export, including Hosted service infrastructure and
+the Manifold, provider-driven config/report generation, IHE and Frontier/
+Mendicant evaluation, Community, prototype Trainer levels, and generated
+release evidence. Use the public workflow docs for local execution and the
+Hosted client docs only for the public client/data contract.
 
 ## Maintainer Or Contributor
 
 Start here when changing behavior, contracts, release posture, or
 public/private packaging.
 
-1. [Engine Contract](contracts/engine-contract.md)
+1. [OEL 1.x Compatibility Policy](compatibility-policy.md) and [Engine Contract](contracts/engine-contract.md)
 2. [Scenario YAML Contract](contracts/scenario-yaml-contract.md)
 3. [Payload And Artifact Contract](contracts/payload-artifact-contract.md)
 4. [Review Store Contract](review-store.md)

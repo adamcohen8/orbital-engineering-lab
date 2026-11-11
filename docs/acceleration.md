@@ -249,10 +249,11 @@ Rich coverage's existing Rust selector batches boundary-point WGS84 geodesy.
 Ray intersections retain reference arithmetic because boundary coordinates enter
 the product hash byte-for-byte. No coverage product contract changes.
 
-The optional Pro `schedule_downlink_opportunities(..., numeric_backend="rust")`
+The optional local `schedule_downlink_opportunities(..., numeric_backend="rust")`
 forwards to the existing exact bounded native tasking search. Python retains
 source-link bindings, value-ranked candidate preselection, resource validation,
-selected data totals and schedule hashes. This remains a Pro workflow and adds
+selected data totals and schedule hashes. This remains a bounded local workflow
+and adds
 no globally optimal claim beyond the selected candidate bound.
 
 Passive ONP OD force-plan contexts also batch RKF78/adaptive and DOPRI5 arcs,

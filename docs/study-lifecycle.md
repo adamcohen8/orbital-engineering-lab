@@ -1,6 +1,6 @@
 # Integrated Study Lifecycle
 
-OEL v0.29 can retain a bounded completed analysis as one deterministic study
+OEL v1.0 can retain a bounded completed analysis as one deterministic study
 bundle. A bundle records the question, plan, completed domain evidence,
 evidence-backed claims and non-claims, and a content receipt that detects stale
 or altered material.
@@ -224,10 +224,10 @@ reviewers must assess whether the retained evidence actually supports the
 authored level. A valid receipt also does not prove global optimality,
 operational suitability, flight qualification, or authorization to act.
 
-## Public and Pro boundary
+## Local Edition And Private-Service Boundary
 
 The versioned records, strict local CLI/Python API, identity replay,
-comparison, schema, and small canonical studies are public. Managed execution,
-large campaigns, optimization, dashboards, team review/signoff, reusable
-program templates, customer data governance, and hosted collaboration remain
-Pro or future work.
+comparison, schema, and small canonical studies are public. The lifecycle does
+not provide managed execution, team review/signoff, customer data governance,
+or hosted collaboration. Local campaign workflows remain separate producers.
+Hosted service infrastructure and the Manifold remain private.

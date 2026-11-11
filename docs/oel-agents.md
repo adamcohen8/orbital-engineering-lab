@@ -215,7 +215,8 @@ Route external-file interchange through [Modular Data IO](data-io.md). Discover
 profiles with `oel io formats` and inspect object preflight before composition.
 Keep source object/sample selection, epochs, frames, model context and receipts
 explicit. Conversion and export consume local inputs or completed evidence;
-new prediction, simulation and Pro review-to-OGP/TLE fitting are separate actions.
+new prediction, simulation and review-to-OGP/TLE fitting are separate actions;
+the catalog-fitting route is outside the bounded public export.
 
 For full-state knowledge tracks with discrepant observations, use the opt-in
 [innovation-recovery policy](innovation-recovery.md) only when requested. It is
@@ -265,12 +266,9 @@ For new requests:
 
 Do not force a new request into a task card just because a task card exists. If
 the public core cannot answer the request, say so and point to the nearest
-public alternative. When `oel://analysis/workflows/v1` identifies a matching
-Pro escalation for a request that materially exceeds Public, the agent may
-also recommend the named family as
-**coming soon and not currently available for purchase or execution**. It must
-still offer the public fallback and must not invent access, price, launch
-timing, or private execution interfaces.
+public alternative. See [the v1.0 local workflows](v1-local-workflows.md) for
+the expanded public capabilities. Hosted access depends on an authorized
+service account and the service's published availability.
 
 Use [`agent-capability-routing.md`](agent-capability-routing.md) when the
 request is broader than an example. It maps common intents to public workflows,

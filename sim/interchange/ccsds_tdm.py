@@ -10,9 +10,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-from sim.data_io.common import read_bytes as read_bounded_bytes
-from sim.data_io.contracts import DataIOError
 from sim.frame_time import TimeScale, parse_epoch
+from sim.utils.io import SafeReadError, SafeReadLimitError, read_regular_file_nofollow
 
 CCSDS_TDM_PROFILE = "oel.ccsds-tdm-kvn.v0.1"
 MAX_TDM_BYTES = 16 * 1024 * 1024
@@ -436,12 +435,16 @@ def parse_tdm_kvn(text: str, *, source_sha256: str | None = None) -> TdmMessage:
 
 
 def read_tdm_kvn(path: str | Path, *, max_bytes: int = MAX_TDM_BYTES) -> TdmMessage:
-    source = Path(path).expanduser().resolve()
+    source = Path(path).expanduser().absolute()
     limit = int(max_bytes)
+    if limit < 0:
+        raise CcsdsTdmError(f"TDM KVN input exceeds the {limit}-byte limit.")
     try:
-        raw = read_bounded_bytes(source, limit=limit)
-    except DataIOError as exc:
+        raw = read_regular_file_nofollow(source, max_bytes=limit)
+    except SafeReadLimitError as exc:
         raise CcsdsTdmError(f"TDM KVN input exceeds the {limit}-byte limit.") from exc
+    except (SafeReadError, ValueError) as exc:
+        raise CcsdsTdmError(f"Could not safely read TDM KVN input {source}: {exc}") from exc
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as exc:

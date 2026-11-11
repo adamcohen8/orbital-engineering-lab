@@ -2,7 +2,7 @@
 
 Orbital Engineering Lab includes public single-run plotting for quick inspection,
 debugging, and documentation artifacts. Campaign, benchmark, optimization, and
-sensitivity plots live in the pro layer.
+sensitivity plots are part of the local v1 workflow layer.
 
 ## YAML Usage
 
@@ -206,14 +206,16 @@ they are intended to sit beside OEL-generated artifacts. That keeps footer
 metadata, theme colors, output directory creation, and save behavior consistent
 with built-in plots.
 
-## Public And Pro Boundary
+## Local Edition And Private-Service Boundary
 
-Public plotting focuses on understanding one run. Pro plotting focuses on many
-runs: Monte Carlo histograms, sensitivity plots, controller-benchmark
-comparisons, optimization convergence, campaign dashboards, baseline comparison,
-and report packs.
+Public plotting focuses on understanding one run. Local workflow plotting
+supports many-run summaries such as Monte Carlo histograms, sensitivity plots,
+controller-benchmark comparisons, optimization convergence, campaign
+dashboards, baseline comparison, and report packs. Hosted service
+infrastructure, provider-driven report generation, and the Manifold remain
+private.
 
-Pro Monte Carlo campaigns with generic metric gates also emit study-metric
+Monte Carlo campaigns with generic metric gates also emit study-metric
 histograms, CDFs, sampled-parameter versus metric scatter plots, pass/fail
 parameter maps, and metric-gate margin plots. Sensitivity studies emit
 method-specific response, scatter, or heatmap plots plus ranking bars and, when

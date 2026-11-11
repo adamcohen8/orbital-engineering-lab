@@ -16,6 +16,7 @@ from integrations.oel_mcp.contracts import (
     MAX_REVIEW_STORE_BYTES,
     MAX_REVIEW_VALUE_BYTES,
     ToolContract,
+    legacy_local_tool_id,
 )
 from integrations.oel_mcp.cr3bp_handlers import call_cr3bp_tool
 from integrations.oel_mcp.execution import (
@@ -36,6 +37,7 @@ from integrations.oel_mcp.execution import (
     write_materialized_config,
 )
 from integrations.oel_mcp.fsw_authoring_handlers import call_fsw_authoring_tool
+from integrations.oel_mcp.local_analytics import LocalAnalyticsMCPHandlers
 from integrations.oel_mcp.policy import MCPPathPolicy
 from integrations.oel_mcp.public_registry import public_contract_map
 from integrations.oel_mcp.recovery import annotate_error
@@ -108,7 +110,7 @@ from sim.security.output_writes import bind_output_writer
 from sim.study import compare_study_bundles, inspect_study_bundle, replay_study_bundle
 
 
-class PublicOELMCPHandlers(BaseOELMCPHandlers):
+class PublicOELMCPHandlers(LocalAnalyticsMCPHandlers, BaseOELMCPHandlers):
     def __init__(
         self,
         *,
@@ -255,6 +257,8 @@ class PublicOELMCPHandlers(BaseOELMCPHandlers):
             return self._inspect_run(contract, arguments)
         if contract.tool_id == "oel.query_review.v1":
             return self._query_review(contract, arguments)
+        if contract.tool_id == "oel.review_scientific.v1":
+            return self._scientific_review(contract, arguments)
         if contract.tool_id == "oel.plan_run.v1":
             return self._plan_run(contract, arguments)
         if contract.tool_id == "oel.validate_scenario.v1":
@@ -299,10 +303,25 @@ class PublicOELMCPHandlers(BaseOELMCPHandlers):
             return self._replay_study(contract, arguments)
         if contract.tool_id == "oel.compare_studies.v1":
             return self._compare_studies(contract, arguments)
+        if contract.tool_id == "oel.inspect_od_json.v1":
+            return self._inspect_od_json(contract, arguments)
         if contract.tool_id == "oel.inspect_ccsds.v1":
             return self._inspect_ccsds(contract, arguments)
         if contract.tool_id == "oel.convert_frame_time.v1":
             return self._convert_frame_time(contract, arguments)
+        if self.profile == "public_local":
+            from integrations.oel_mcp.fswdk_handlers import call_fswdk_tool
+            from integrations.oel_mcp.fswdk_registry import FSWDK_TOOL_IDS
+            from integrations.oel_mcp.od_handlers import call_od_tool
+            from integrations.oel_mcp.twin_handlers import call_twin_tool
+            from integrations.oel_mcp.twin_registry import TWIN_TOOL_IDS
+
+            if legacy_local_tool_id(contract.tool_id) in (*FSWDK_TOOL_IDS, *TWIN_TOOL_IDS):
+                self._enforce_approval_resource_ceiling(None)
+            for dispatch in (call_od_tool, call_fswdk_tool, call_twin_tool, LocalAnalyticsMCPHandlers._call_local_analytics):
+                result = dispatch(self, contract, arguments, cancel_event=cancel_event, progress=progress)
+                if result is not None:
+                    return result
         raise PermissionError("Tool is not available in this deployment profile.")
 
     def _inspect_study(self, contract: ToolContract, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -348,6 +367,15 @@ class PublicOELMCPHandlers(BaseOELMCPHandlers):
             outcome_status=lambda _result: "completed",
             evidence=lambda _result: {"complete": True, "empty": False, "truncated": False},
         )
+
+    def _inspect_od_json(self, contract: ToolContract, arguments: dict[str, Any]) -> dict[str, Any]:
+        def operation() -> dict[str, Any]:
+            _, raw = self.path_policy.read_authorized_bytes(
+                arguments["path"], maximum=arguments.get("max_file_bytes", MAX_MANIFEST_BYTES),
+            )
+            return inspect_od_json_metadata(raw)
+
+        return self._envelope(contract=contract, arguments=arguments, operation=operation)
 
     def _inspect_ccsds(self, contract: ToolContract, arguments: dict[str, Any]) -> dict[str, Any]:
         inspectors = {
@@ -606,6 +634,31 @@ class PublicOELMCPHandlers(BaseOELMCPHandlers):
                 "empty": result["empty_result"],
                 "truncated": result["truncated"],
             },
+        )
+
+    def _scientific_review(self, contract: ToolContract, arguments: dict[str, Any]) -> dict[str, Any]:
+        from sim.review import scientific_evidence
+
+        def operation() -> dict[str, Any]:
+            path = self.path_policy.resolve_read(arguments["output_dir"], kind="directory")
+            _authorize_review_inputs(self.path_policy, path, require_store=False)
+            from sim.review import ReviewStoreNotFoundError, read_scientific_evidence
+
+            try:
+                workspace = ReviewWorkspace.open(path, protected=True)
+            except ReviewStoreNotFoundError:
+                return read_scientific_evidence(path, arguments["request"], protected=True)
+            with workspace:
+                _require_review_store_budget(workspace.db_path)
+                return scientific_evidence(workspace, arguments["request"])
+
+        return self._envelope(
+            contract=contract,
+            arguments=arguments,
+            operation=operation,
+            outcome_status=lambda result: "completed" if result["status"] == "available" else "partial",
+            evidence=lambda result: {"complete": result["status"] == "available",
+                                     "empty": not result["rows"], "truncated": False},
         )
 
     def _prepared(self, arguments: dict[str, Any]) -> Any:
@@ -2183,6 +2236,125 @@ class PublicOELMCPHandlers(BaseOELMCPHandlers):
                 }
 
         return self._envelope(contract=contract, arguments=arguments, operation=operation)
+
+_TRUTH_KEY_PARTS = (
+    "truth",
+    "hiddentruth",
+    "referencestate",
+    "nonlineartruth",
+)
+
+
+def inspect_od_json_metadata(raw: bytes) -> dict[str, Any]:
+    """Project metadata from already authorized OD artifact bytes."""
+
+    try:
+        value, nonfinite_normalized = _metadata_json_loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("OD inspection requires a UTF-8 JSON file.") from exc
+    if not isinstance(value, (dict, list)):
+        raise ValueError("OD inspection requires a JSON object or array.")
+    if isinstance(value, dict):
+        top_keys = sorted(key for key in value if not is_sensitive_od_key(key))[:128]
+        kind = value.get("kind")
+        if not isinstance(kind, str):
+            kind = "json"
+        schema_version = value.get("schema_version")
+        if not isinstance(schema_version, int) or isinstance(schema_version, bool):
+            schema_version = None
+        safe_summary = _safe_summary(value)
+    else:
+        top_keys = []
+        kind = "json_array"
+        schema_version = None
+        safe_summary = {"item_count": len(value)}
+    non_claims = [
+        "Inspection reports bounded metadata only; it does not validate a solver result or execute a workflow.",
+        "Sensitive truth-like fields are omitted from the inspection summary.",
+    ]
+    if nonfinite_normalized:
+        non_claims.append(
+            "Metadata inspection normalized non-finite JSON diagnostics (NaN or Infinity) to null; "
+            "it does not certify those numeric values."
+        )
+    return {
+        "status": "completed",
+        "kind": kind[:160],
+        "schema_version": schema_version,
+        "top_level_keys": top_keys,
+        "safe_summary": safe_summary,
+        "file_bytes": len(raw),
+        "hidden_truth_visible": False,
+        "local_only": True,
+        "non_claims": non_claims,
+    }
+
+
+def _metadata_json_loads(raw: bytes) -> tuple[Any, bool]:
+    """Parse an OEL report for metadata projection, normalizing non-finite diagnostics.
+
+    Solver inputs remain separate from this metadata reader. OEL reports can
+    contain ``NaN`` or infinities in
+    diagnostics after a partial solve; inspection must not turn those derived
+    artifacts into a new execution input, so those values become JSON ``null``
+    in the metadata-only projection.
+    """
+
+    normalized = False
+
+    def normalize_constant(_token: str) -> None:
+        nonlocal normalized
+        normalized = True
+        return None
+
+    value = json.loads(raw.decode("utf-8"), parse_constant=normalize_constant)
+    return value, normalized
+
+
+def is_sensitive_od_key(key: str) -> bool:
+    normalized = "".join(character for character in str(key).lower() if character.isalnum())
+    return any(part in normalized for part in _TRUTH_KEY_PARTS)
+
+
+def _safe_summary(value: Mapping[str, Any]) -> dict[str, Any]:
+    safe_scalars = {
+        "status",
+        "method",
+        "kind",
+        "reference_frame",
+        "frame",
+        "estimator",
+        "dynamics_model",
+        "ogp_regime",
+        "measurement_model",
+        "measurement_contract",
+        "evidence_status",
+    }
+    count_keys = {
+        "observation_count",
+        "fit_sample_count",
+        "holdout_sample_count",
+        "station_count",
+        "record_count",
+        "item_count",
+    }
+    scalars: dict[str, Any] = {}
+    counts: dict[str, int] = {}
+    keys: list[str] = []
+    for raw_key, raw_value in value.items():
+        key = str(raw_key)
+        if is_sensitive_od_key(key):
+            continue
+        if len(keys) < 128:
+            keys.append(key)
+        if key in safe_scalars and isinstance(raw_value, (str, bool, int, float)):
+            scalars[key] = str(raw_value)[:160] if isinstance(raw_value, str) else raw_value
+        if key in count_keys and isinstance(raw_value, int) and not isinstance(raw_value, bool):
+            counts[key] = max(0, int(raw_value))
+        if isinstance(raw_value, list) and key in {"observations", "records", "residual_records", "artifacts"}:
+            counts.setdefault(key + "_count", len(raw_value))
+    return {"keys": sorted(keys), "scalar_fields": scalars, "counts": counts}
+
 
 def _trusted_input_metrics(path_policy: Any, paths: list[tuple[Path, int]]) -> dict[str, int]:
     """Return host-read file metrics after authorized bounded reads."""

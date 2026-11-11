@@ -1,0 +1,70 @@
+suite_name: attitude_hold_bench
+description: Compare attitude controllers across a small set of hold/recovery cases.
+output_dir: ../outputs/controller_bench_attitude
+plot_mode: save
+controller_target:
+  object_id: target
+  slot: flight_software
+save_run_payloads: true
+disable_plots: true
+disable_animations: true
+print_individual_run_summaries: false
+variants:
+- name: rw_pd_baseline
+  description: Conservative reaction-wheel PD gains
+  controller:
+    stack: fsw.attitude_reference
+    hardware_profile: hardware.ideal_wrench.v1
+    params:
+      kp: 0.12
+      kd: 0.08
+      max_torque_n_m: 0.08
+- name: rw_pd_tuned
+  description: More aggressive reaction-wheel PD gains
+  controller:
+    stack: fsw.attitude_reference
+    hardware_profile: hardware.ideal_wrench.v1
+    params:
+      kp: 0.3
+      kd: 0.16
+      max_torque_n_m: 0.15
+metrics:
+- name: final_attitude_error_deg
+  kind: final_attitude_error_deg
+  object_id: target
+  desired_quat_bn:
+  - 1.0
+  - 0.0
+  - 0.0
+  - 0.0
+- name: rms_attitude_error_deg
+  kind: rms_attitude_error_deg
+  object_id: target
+  desired_quat_bn:
+  - 1.0
+  - 0.0
+  - 0.0
+  - 0.0
+- name: final_body_rate_norm_rad_s
+  kind: final_body_rate_norm_rad_s
+  object_id: target
+- name: mean_controller_runtime_ms
+  kind: mean_controller_runtime_ms
+  object_id: target
+pass_criteria:
+- metric: final_attitude_error_deg
+  op: <=
+  value: 30.0
+- metric: final_body_rate_norm_rad_s
+  op: <=
+  value: 0.08
+cases:
+- name: nominal
+  config_path: controller_bench_attitude_case_nominal.yaml
+- name: rate_recovery
+  config_path: controller_bench_attitude_case_rate_recovery.yaml
+metadata:
+  owner: public
+  public_surface: public-example
+  support_level: experimental
+  notes: Synthetic controller benchmark.

@@ -23,7 +23,7 @@ sensitive.
 
 ## Network And AI Boundaries
 
-The public core examples run locally. Pro/private AI-assisted report workflows
+The public core examples run locally. Private AI-assisted report workflows
 can send selected run summaries, packets, prompts, or report context to a
 hosted provider only when the user explicitly configures that provider and
 creates the report. Local Ollama-style workflows can be used where available

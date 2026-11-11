@@ -2,9 +2,27 @@
 
 All notable changes to Orbital Engineering Lab will be tracked in this file.
 
-This project uses semantic versioning while it is pre-1.0: minor versions may
-still introduce API or workflow changes, and release notes should call out
-migration-sensitive behavior explicitly.
+This project follows semantic versioning. The notes below retain historical
+pre-1.0 behavior where relevant; v1.0.0 is the first stable public local
+release, and migration-sensitive behavior is called out explicitly.
+
+## 1.0.0 - 2026-11-07
+
+- Define the stable 1.x API, CLI, scenario and evidence compatibility policy,
+  including deprecation, independent schema versions and numerical corrections.
+  New review stores declare `stable_1_x_additive`; existing stores are unchanged.
+- Keep ground-segment configuration independent of runtime/OD imports and
+  verify Hosted plugin boundaries in fresh processes.
+- Ship one open-source local OEL edition with campaign, parallel execution,
+  estimation, conjunction, RF, optimization, and flight software workflows.
+- Add public local MCP tools for orbit determination, Scale, trajectory
+- Query recorded scientific evidence through Python, the review CLI, and local
+  MCP, including exact sample lookups, nearest samples with signed time offsets,
+  brackets, interval extrema, and ordered differences.
+- Add offline validation from an installed public runtime and publish the
+  synthetic recipes and fixtures in the source release.
+- Publish the Hosted OEL client and service contracts. Hosted service
+  availability follows its own launch schedule.
 
 ## 0.36.0 - 2026-11-06
 
@@ -262,8 +280,6 @@ migration-sensitive behavior explicitly.
   to each recorded host and interpreter.
 - Correct NRLMSISE-00 local solar time using Sun and state in the same
   Earth-fixed frame with the selected ephemeris, including fused preparation.
-- Preserve the frozen Mendicant v0.7 evaluator and introduce a separately
-  frozen v0.8 evaluator for exact checkpoint coverage and input identity.
 
 ### Integrated fixes and workflows
 
@@ -872,9 +888,6 @@ public/private product boundaries.
   identical-seed regression proving that a nonzero action changes propagated
   velocity relative to a zero-action baseline.
 
-- Kept private frontier-evaluation workflows behind explicit runtime and
-  public-export boundaries. The public release contains no evaluator source,
-  hidden truth, provider execution, campaign orchestration, or scoring surface.
 
 - Added a versioned animation-quality contract and agent-native review
   animation workflow. Supported RIC review movies now use content-bound
@@ -923,10 +936,6 @@ public/private product boundaries.
   pacing by default, a diagnostics overlay, and JSON frame summaries without
   changing physics, FSW, scoring, or replay authority.
 
-- Strengthened the private frontier-evaluation boundary between
-  candidate-visible observations and evaluator-only truth, and updated its
-  internal long-horizon diagnostic plumbing. These changes remain private and
-  do not alter public simulation APIs or establish an official scoring claim.
 
 - Avoid recursive dataclass deep-copying when the game records its immutable
   per-tick training score as review evidence; the emitted evidence mapping and
@@ -979,8 +988,6 @@ by the selected complete satellite stack.
   with migration guidance rather than being silently translated at runtime.
 - Removed live satellite controller replacement from the public session API.
   Custom behavior is supplied as a complete `SatelliteFlightSoftware` plugin.
-- Migrated maintained configs, workflows, game levels, Controller Bench, RL,
-  OD/IHE materializers, and review consumers to the sole v2 satellite path.
 
 ### Added
 
@@ -1044,11 +1051,6 @@ MCP surface, so connected agents can route typed products, materialize
 continuations, run bounded OD, and execute the approved Pro cross-capability
 workflows without bypassing OEL's deterministic APIs or evidence boundaries.
 
-Private/Pro scope: the release adds content-bound Scale refresh through an
-isolated operational-store snapshot and a separately multi-entitled,
-truth-free maneuver-detection-to-IHE preparation workflow. Bounded dynamics OD
-is exposed only through the Pro-local profile, matching the existing
-observation/solver product boundary. No deprecated MCP contract is removed.
 
 ### Added
 
@@ -1056,9 +1058,6 @@ observation/solver product boundary. No deprecated MCP contract is removed.
   completed-run product export, scenario overlays and patches, ONP
   materialization, semantic handoff comparison, maneuver-readiness packets,
   and bounded dynamics OD that emits a typed state-estimate product.
-- Added content-bound Pro Scale refresh validation, serial refresh-to-ONP
-  execution, completed refresh inspection, and a separately entitled,
-  truth-free maneuver-detection-to-IHE preparation workflow.
 - Added a public-safe `oel://handoff/product-kinds/v1` routing resource while
   keeping private tool metadata out of public resource discovery.
 
@@ -1069,15 +1068,10 @@ observation/solver product boundary. No deprecated MCP contract is removed.
 - Enforced declared MCP result schemas at runtime, added explicit
   multi-entitlement discovery and enforcement, and bounded dynamics OD by
   observation count, maneuver-detection count, and seven-day arc duration.
-- Added cancellation/progress checkpoints inside Scale refresh and
-  detection-to-IHE preparation, rather than only around their outer calls.
 - Bound Scale execution to an immutable SQLite snapshot created after exact
   config/store validation, relocated every generated output beneath the
   approved run directory, and rejected refresh-to-ONP validation when ONP
   handoff is disabled.
-- Expanded real SDK stdio acceptance to exercise every new public tool and the
-  complete Pro IHE, Scale-to-ONP, and detection-to-IHE paths with no provider
-  calls.
 
 ## 0.24.1 - 2026-08-02
 
@@ -1086,19 +1080,9 @@ while field-testing the v0.24 glue layer. The patch adds bounded composition and
 continuation contracts so the six golden workflows can reach their documented
 endpoints without manual YAML copying or silent evidence promotion.
 
-Private/Pro scope: `v0.24.1` adds the event-centered maneuver-detection-to-IHE
-adapter and one-command Scale refresh through ONP execution. The public release
-receives the common overlay, atomic snapshot, completed-run epoch-anchor,
-maneuver-detection, readiness-evidence, review-event, and scenario-patch fixes.
-No v0.24 compatibility aliases or deprecated MCP contracts are removed.
 
 ### Added
 
-- Added six runnable cross-capability golden workflows covering observation to
-  access, plan/execute/verify/continue, relative navigation to controlled RPO
-  with an atomic passive branch, maneuver detection to an analyst-reviewed IHE
-  bundle, one-command catalog refresh through ONP execution, and integrated
-  maneuver-readiness scoring.
 - Added bounded scenario-capability overlays for station networks, object
   control/knowledge/mission configuration, review settings, termination, and
   supported analysis fields; atomic multi-object completed-run snapshots;
@@ -1125,45 +1109,13 @@ No v0.24 compatibility aliases or deprecated MCP contracts are removed.
 - Removed hidden Pro-only dependencies from the public maneuver-event export
   and maneuver-readiness acceptance tests, keeping both public glue contracts
   runnable in the generated open-core release.
-- Corrected the maneuver-detection-to-IHE golden-matrix test owner and kept
-  Linux full-profile supply-chain audits disk-bounded by resolving Torch from
-  PyTorch's official CPU wheel index without weakening audit evidence.
 
 ## 0.24.0 - 2026-08-02
 
-Release thesis: `v0.24.0` makes OEL's major analytical capabilities behave as
-one connected system. Versioned products now move accepted state, covariance,
-relative-state, planner, controller, native OGP, Scale, IHE, and completed-run
-evidence across explicit validation and execution boundaries without manual
-transcription or silent semantic loss.
 
-Private/Pro scope: `v0.24.0` adds private producer adapters, covariance and
-relative-OD promotion, controller optimization patches, OGP-to-Scale ingest,
-Scale-to-IHE preparation, and connected analyst workflow evidence. The public
-release receives the common contracts, inspection/materialization façade,
-completed-run continuation, typed public planner patches, semantic-parity
-packets, task cards, and fail-closed validation boundaries.
 
 ### Added
 
-- Completed the OEL glue release slice as connected workflows rather than
-  isolated features. A machine-readable golden matrix now maps every supported
-  OD, covariance, planner, controller, OGP, Scale, IHE, and completed-run seam
-  to accepted and fail-closed regressions; public routing includes a completed-
-  run continuation task card; and `sim.handoff compare-handoff` writes a
-  versioned semantic-parity packet across product, scenario, manifest, and an
-  optional first consumer review row without executing the scenario.
-- Analyst-style field testing exercised accepted batch-OD and completed-run ONP
-  continuations, Scale-to-ONP refinement, IHE ambiguity/rejection, and a
-  fail-closed unverified recovery patch. It also hardened completed-run cadence
-  continuity: source orbit substeps larger than the requested consumer cadence
-  are now explicitly bounded and manifested, and parity comparison recognizes
-  only exact source-bound overrides.
-- Added interchange Phase 6 composition: accepted native OGP mean-element
-  products can materialize follow-on OGP scenarios without generated TLE text,
-  ingest into Scale with identity/age/provenance intact, and prepare bounded,
-  analyst-reviewed IHE skeletons. ONP-first Scale names are canonical while
-  existing HPOP-named interfaces remain documented compatibility aliases.
 
 - Added the OEL interchange Phase 2 golden slice: batch dynamics OD now emits a
   provenance-bound state-estimate product, and `sim.handoff materialize-onp`
@@ -1191,9 +1143,6 @@ packets, task cards, and fail-closed validation boundaries.
   6x6 covariance can cross the handoff without discarding correlations.
 ### Compatibility
 
-- Retained the deprecated Pro-local IHE v1 inspection and validation tools
-  through v0.24.0. Their earliest removal is now documented as v0.25.0 and not
-  before 2026-10-31; new integrations must continue to use the v2 contracts.
 ## 0.23.1 - 2026-08-01
 
 Release thesis: `v0.23.1` packages the cross-platform compatibility work that
@@ -1201,10 +1150,6 @@ was not included in `v0.23.0`. It makes source installation and deterministic
 OEL workflows a bounded compatibility contract for CPython 3.10 through 3.14
 across the declared Windows, Linux, and macOS targets.
 
-Private/Pro scope: this patch does not expand MCP entitlements or expose new
-remote, frontier, Scale, IHE, or hidden-truth capability. It makes the existing
-local-only MCP and deterministic OEL workflows portable across supported path
-and runtime conventions.
 
 Compatibility claims remain evidence-qualified: package metadata identifies
 the supported matrix targets, while each operating-system, architecture, and
@@ -1283,11 +1228,6 @@ Python MCP SDK v2, giving connected agents a bounded, contract-driven path to
 inspect deterministic evidence, validate and run approved public workflows,
 and use separately entitled Pro-local analytical tools.
 
-Private/Pro scope: `v0.23.0` adds local-only IHE validation, execution, and
-completed-evidence inspection plus bounded OEL Scale catalog inspection and
-targeted recompute planning. Hidden truth remains unavailable through MCP,
-write and execution effects require server-configured operator approvals, and
-remote transport or frontier collaboration is not enabled.
 
 ### Added
 
@@ -1298,9 +1238,6 @@ remote transport or frontier collaboration is not enabled.
   scenario planning and validation, explicitly approved deterministic runs,
   completed-run comparison, allowlisted evidence plotting, public task recipes,
   and provider-neutral report packet preparation and audit.
-- Added separately entitled Pro-local tools for labeled IHE and bounded OEL
-  Scale workflows, including resource, cancellation, data-handling, manifest,
-  and hidden-truth controls.
 
 ### Changed
 
@@ -1313,9 +1250,6 @@ remote transport or frontier collaboration is not enabled.
 
 ### Security
 
-- Required operator approval from every write or execution contract, including
-  deprecated Pro contracts, and bound IHE execution authorization to referenced
-  input and hypothesis-definition hashes.
 - Reauthorized resolved files derived from approved output directories so
   review stores and completed-evidence artifacts cannot escape configured read
   roots through symlinks.
@@ -1691,9 +1625,6 @@ report packets.
 - Reframed direct AI report provider calls as optional headless automation and
   direct AI config generation as a legacy compatibility adapter. Existing
   provider workflows remain available.
-- Updated the Mendicant and MCP roadmaps so agents own configuration and report
-  authorship while OEL owns deterministic validation, evidence packets, figure
-  rendering, and report audit.
 - Applied the CLI native-math thread policy to programmatic object and Scale
   workers, added duration-aware object-parallel crossover planning, bounded
   campaign submissions to twice the active worker count, and cached parsed
@@ -1802,10 +1733,6 @@ Release thesis: `v0.20.4` establishes the public-safe contract, security, and
 export groundwork for future OEL MCP interoperability without presenting the
 pre-v2 prototype as a generally supported agent-host integration.
 
-Private/Pro scope: `v0.20.4` adds a one-way composed Pro registry for bounded
-IHE inspection and validation, plus deployment profiles for local Mendicant
-and restricted frontier-agent use. These profiles do not authorize external
-transmission or expose hidden evaluation truth.
 
 ### Added
 
@@ -1814,10 +1741,6 @@ transmission or expose hidden evaluation truth.
 - Added frozen transport-independent request and response schemas, explicit
   result projections, evidence-completeness states, effect metadata, resource
   limits, and payload-free audit records for five Phase 0 tools.
-- Added separate public and Pro registries, with public, Pro-local, Mendicant
-  sealed/tandem, and direct-frontier-restricted deployment views.
-- Added Pro tools for inspecting visible IHE evaluation manifests and
-  validating IHE studies without exposing hidden truth or executing physics.
 - Added host-neutral conformance checks, adversarial path/SQL/size/handling
   tests, semantic CLI/Python parity fixtures, and golden compatibility hashes
   for discovery, success, and failure envelopes.
@@ -1843,8 +1766,6 @@ transmission or expose hidden evaluation truth.
 - The direct-frontier view rejects local-only data, and MCP discovery or
   transport is explicitly not treated as entitlement, release, or
   accreditation authority.
-- Public MCP modules do not import, probe for, advertise, or leak Pro/IHE
-  registrations or metadata.
 
 ### Migration Notes
 
@@ -1989,11 +1910,6 @@ fewer canonical guides and strengthens generated-export checks.
 
 ## 0.20.0 - 2026-07-10
 
-Release thesis: `v0.20.0` turns OEL's expanding propagation, planning, and
-evidence foundations into clearer public workflows while hardening the private
-Scale, intent-hypothesis, controller-lab, and release-governance surfaces. It
-adds a bounded public Lambert transfer planner, strengthens OGP/ONP contracts
-and provenance, and makes the public/private export boundary allowlist-first.
 
 ### Added
 
@@ -2006,9 +1922,6 @@ and provenance, and makes the public/private export boundary allowlist-first.
 - Added private OEL Scale hardening for catalog screening, propagation,
   recomputation, refinement, sensitivity, validation, operational-store
   provenance, and CLI workflows.
-- Added private intent-hypothesis evaluation contracts, observational and
-  synthetic evaluation packs, corpus generation, scoring workflows, and Scale
-  handoff support.
 - Added controller execution-policy support for deterministic deadline and
   failure behavior, plus private controller-lab catalog, agent, reporting, and
   command-line surfaces.
@@ -2042,19 +1955,12 @@ and provenance, and makes the public/private export boundary allowlist-first.
   fell between integration-grid endpoints.
 - Fixed frame, TLE, review-store, campaign, covariance, and validation paths
   that could lose provenance or accept incomplete configuration state.
-- Fixed public export drift by switching to positive manifest ownership,
-  explicitly keeping all IHE and Scale product surfaces private, and narrowing
-  high-risk analysis and evidence promotion to reviewed files.
 
 ### Migration Notes
 
 - Scenario files with unknown fields, multiple orbital-state forms, or a
   partial Cartesian position/velocity state now fail validation instead of
   being silently normalized.
-- General optimization, campaign, Scale, IHE, controller-lab, and private
-  validation workflows remain Pro surfaces. The public Lambert planner is a
-  bounded two-body trade-space tool and is not an operational maneuver plan or
-  a general optimization API.
 - The former standalone GUI requirements file has been removed; install the
   `game` or `full` optional dependency profile for the downloadable trainer.
 

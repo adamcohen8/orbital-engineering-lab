@@ -50,8 +50,8 @@ only the declared `params`.
 
 Component implementations under `sim.gnc` have a separate catalog and maturity
 record. They are composition building blocks, not runtime slots. Public users
-can compose them in a custom complete stack; Pro adds Controller Bench
-orchestration, not additional runtime authority.
+can compose them in a custom complete stack; the local Controller Bench adds
+bounded comparison orchestration, not additional runtime authority.
 
 For prebuilt application-level selections, see
 [Flight-Software Use-Case Profiles](flight-software-profiles.md). These

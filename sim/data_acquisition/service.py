@@ -8,7 +8,7 @@ from pathlib import Path
 from sim.installation.paths import InstallationPaths
 from sim.security.sealed_mode import sealed_mode_enabled
 
-from .compatibility import check, consumer_bytes
+from .compatibility import check, consumer_bytes, coverage_contains
 from .contracts import AcquisitionError, Request, canonical, digest, epoch, stamp, strict_json
 from .credentials import Connections
 from .files import headroom, publish, publish_json, read_snapshot
@@ -114,6 +114,33 @@ class AcquisitionService:
         receipts = self.store.lookup(request.key(scope))
         if not receipts and request.provider in {"gravity", "celestrak"}:
             receipts = [r for r in reversed(self.store.receipts(scope)) if r.get("product") == request.product]
+        if request.provider == "celestrak":
+            # Environment feeds are shared snapshots, so a request with a
+            # different interval can fall through to the product-level cache
+            # above.  Do not treat a recent snapshot as a hit unless its
+            # parsed, compatible coverage contains the requested interval.
+            covered = []
+            for receipt in receipts:
+                inspection = receipt.get("inspection")
+                if not isinstance(inspection, dict):
+                    value, raw = self.store.get(receipt["artifact_id"])
+                    inspection = inspect_bytes(
+                        raw,
+                        kind=value["kind"],
+                        format=value["format"],
+                        provider=value["provider"],
+                    )
+                if not inspection.get("parsed") or not inspection.get("compatible"):
+                    continue
+                if request.start is not None and not coverage_contains(
+                    str(receipt.get("kind", "")),
+                    inspection.get("coverage"),
+                    request.start,
+                    request.stop,
+                ):
+                    continue
+                covered.append(receipt)
+            receipts = covered
         lifetime = 3600 if request.product == "gp" else 86400 if request.product == "satcat" else 86400
         if request.provider == "gravity":
             return receipts[:1]
@@ -202,6 +229,15 @@ class AcquisitionService:
                     inspection = inspect_bytes(response.body, kind=kind, format=format, provider=part.provider)
                     if not inspection["parsed"]:
                         raise AcquisitionError("INVALID_DATA", "Provider response failed its declared format inspection.")
+                    if (
+                        part.provider == "celestrak"
+                        and part.start is not None
+                        and not coverage_contains(kind, inspection.get("coverage"), part.start, part.stop)
+                    ):
+                        raise AcquisitionError(
+                            "COVERAGE_MISSING",
+                            "Provider response does not cover every requested sample, including stop.",
+                        )
                     metadata = {"provider": part.provider, "product": part.product, "kind": kind, "format": format,
                                 "request": part.to_dict(), "inspection": inspection, "source_url": response.url,
                                 "etag": response.etag, "last_modified": response.last_modified,
