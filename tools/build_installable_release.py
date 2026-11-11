@@ -771,6 +771,7 @@ def _build_profile_runtime_inventories(
     wheel_files: list[Path],
     profiles: list[str],
     wheel_digests: dict[str, str] | None = None,
+    offline_validation_script: Path | None = None,
 ) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
     """Install each advertised profile in a disposable runtime and sign its exact bytes."""
 
@@ -821,6 +822,18 @@ def _build_profile_runtime_inventories(
             )
             if check.returncode != 0:
                 raise ValueError(f"Offline {profile!r} profile pip check failed: {check.stdout}\n{check.stderr}".strip())
+            if profile == "full" and offline_validation_script is not None:
+                validation = subprocess.run(
+                    [str(python), "-I", "-B", str(offline_validation_script)],
+                    cwd=base,
+                    env=_provisioning_environment(offline=True),
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if validation.returncode != 0:
+                    detail = (validation.stdout + "\n" + validation.stderr).strip()
+                    raise ValueError(f"Installed public offline validation failed:\n{detail}")
             try:
                 # Match the manager's post-install surface exactly: pip and
                 # setuptools are removed only when they are venv-seeded and
@@ -883,6 +896,8 @@ def _build_profile_runtime_inventories(
                         "platform": platform.system(),
                         "architecture": platform.machine(),
                     }
+                    if offline_validation_script is not None:
+                        qualification["public_offline_validation"] = "passed"
             finally:
                 # One profile at a time keeps the release smoke footprint
                 # bounded on constrained disks; only the signed inventory is
@@ -993,6 +1008,12 @@ def build_release(
     if not developer_unsigned:
         if not wheel_files:
             raise ValueError("Signed release builds require a wheelhouse for each profile runtime inventory.")
+        validation_options = {}
+        if edition == "public" and int(version.split(".", 1)[0]) >= 1:
+            validation_script = root / "tools/verify_offline_validation.py"
+            if not validation_script.is_file():
+                raise ValueError("Signed public releases require the offline validation runner.")
+            validation_options["offline_validation_script"] = validation_script
         profile_runtime_inventories, offline_runtime_qualification = _build_profile_runtime_inventories(
             archive=archive,
             wheelhouse=output / "wheelhouse",
@@ -1000,6 +1021,7 @@ def build_release(
             wheel_files=wheel_files,
             profiles=release_profiles,
             wheel_digests={str(row["name"]): str(row["sha256"]) for row in wheel_artifacts},
+            **validation_options,
         )
     # Bind the exact archive source inventory and every copied wheel member to
     # the release signature.  The installation record later remains a mutable

@@ -233,6 +233,6 @@ def describe_export(source, *, object_id=None, source_kind="auto"):
             "orbital_formats": "orbital evidence with supported physical fields; not a complete runtime checkpoint",
             "satellite-checkpoint": "final complete GNC runtime continuation",
             "snapshot": "atomic state/context selection for multiple objects",
-            "mean_elements": "fit-review is a separate Pro estimation action",
+            "mean_elements": "fit-review is a separate estimation action",
         },
     }

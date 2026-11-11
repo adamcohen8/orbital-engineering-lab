@@ -88,7 +88,7 @@ unmet-load onset. Illumination events retain the source sample bracket in
 in `bracket_start_s` / `bracket_end_s`. Cite a result only after `replay`
 returns `status: verified`.
 
-## Public and Pro boundary
+## Local Edition And Private-Service Boundary
 
 The strict contracts, deterministic local analysis, review-history and
 schedule adapters, complete evidence, replay, schema, and small examples are

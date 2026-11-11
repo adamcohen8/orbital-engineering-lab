@@ -192,7 +192,7 @@ A confirmed review event can be promoted to a versioned detection product:
 The `oel.maneuver_detection` payload binds the event/sample, observer, target,
 detector settings, summary evidence, source hashes, and non-claims. The Pro
 Scale adapter can export measured event-centered observations, run dynamics
-OD, and prepare a truth-free IHE input bundle and authoring skeleton. Weak fit
+OD, and prepare a truth-free analyst handoff and authoring skeleton. Weak fit
 or holdout evidence remains `review_required`; no intent or hypothesis is
 selected automatically.
 

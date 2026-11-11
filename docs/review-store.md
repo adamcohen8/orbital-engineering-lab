@@ -862,28 +862,33 @@ Compatibility rules:
   be preserved unless strict review output is explicitly requested.
 - Legacy folders without a review store open in limited mode.
 - `review/schema.json` includes a `compatibility` block. The current policy is
-  `pre_1_0_additive`: stable core tables should remain queryable, new tables or
-  nullable columns may be added, and compatibility-sensitive table/semantic
-  changes require a schema-version bump.
-- Stable core tables are `run_metadata`, `objects`, `time_samples`,
-  `object_state`, `relative_state`, `thrust`, `metrics`, and `artifacts`.
+  `stable_1_x_additive`: existing stable table/column names, units, and meanings
+  remain supported throughout OEL 1.x. New tables or nullable columns may be
+  added. Breaking successors require an independent schema version and must
+  preserve the supported 1.x read contract. See the
+  [compatibility policy](compatibility-policy.md).
+- Schema `0.13` is independent of the OEL release number. Historical stores
+  retain their `pre_1_0_additive` metadata and remain readable through the
+  documented compatibility path; completed evidence is never rewritten.
+- The authoritative stable-table inventory is `compatibility.stable_tables`
+  in `schema.json`. It includes `run_metadata`, `objects`, `time_samples`,
+  `object_state`, `relative_state`, `thrust`, `metrics`, `artifacts`, and
+  the listed maneuver, covariance, command, mission, and flight-software tables.
 - Legacy FSW query rewriting is narrow and is applied only by profile
   qualification/maturation readers for selected diagnostic/receipt forms.
   General CLI and `ReviewWorkspace.query()` calls do not rewrite SQL; author
   them against normalized current tables and the run's `schema.json`.
 
-## Public And Pro Boundary
+## Local Edition And Private-Service Boundary
 
-The public core should support single-run review stores and local output-folder
-inspection.
+The v1 local edition supports single-run review stores, bounded campaign and
+controller-benchmark review, and local output-folder inspection.
 
-Likely Pro extensions:
+Private-service extensions include:
 
-- campaign-level review databases,
-- cross-run comparison stores,
-- controller-benchmark stores,
-- sensitivity-study stores,
-- report assembly from saved views,
+- Hosted/Manifold orchestration and retention,
+- provider-driven report assembly,
+- customer or governed data stores,
 - richer agent-assisted insight recipes,
 - large-run storage controls and compression.
 

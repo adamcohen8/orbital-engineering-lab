@@ -187,11 +187,12 @@ def test_public_agent_docs_define_boundaries_and_commands() -> None:
         "docs/agent-feedback-loop.md": feedback_loop,
         "docs/agent-task-cards.md": task_cards,
     }
-    assert "coming soon and not currently available for purchase or execution" in root_agents
-    assert "coming soon and not currently available for purchase or execution" in public_agents
-    assert "coming soon and not currently available for purchase or execution" in docs
+    assert "v1-local-workflows.md" in root_agents
+    assert "v1-local-workflows.md" in public_agents
+    assert "v1-local-workflows.md" in docs
     assert "does not upsell Pro" in rubric
-    assert "large Monte Carlo controller" in eval_packet
+    assert "campaign-scale controller ranking" in eval_packet
+    assert "private Hosted/qualification" in eval_packet
     for path, text in public_agent_docs.items():
         assert "agents/pro" not in text, path
         assert "sim.pro_" not in text, path

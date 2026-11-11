@@ -14,7 +14,7 @@ from typing import Any
 
 from integrations.oel_mcp.acceptance import run_public_workflow_acceptance
 from integrations.oel_mcp.conformance import SDKStdioConformanceClient, run_conformance
-from integrations.oel_mcp.public_registry import PUBLIC_TOOL_CONTRACTS
+from integrations.oel_mcp.public_registry import public_contracts_for_profile
 from integrations.oel_mcp.resources import PUBLIC_RESOURCE_URIS
 from integrations.oel_mcp.sdk_protocol import MCP_SDK_PROTOCOL_VERSION, MCP_SDK_REVIEWED_VERSION
 
@@ -26,7 +26,7 @@ CAPABILITY_TOOL_ID = "oel.describe_capabilities.v1"
 CLAUDE_CAPABILITY_TOOL_ID = "mcp__oel__oel_describe_capabilities_v1"
 PLOT_SELECTION_TOOL_ID = "oel.plot_evidence.v1"
 CLAUDE_PLOT_SELECTION_TOOL_ID = "mcp__oel__oel_plot_evidence_v1"
-PUBLIC_TOOL_IDS = tuple(contract.tool_id for contract in PUBLIC_TOOL_CONTRACTS)
+PUBLIC_TOOL_IDS = tuple(contract.tool_id for contract in public_contracts_for_profile("public_local"))
 HOST_PROMPT = (
     "Call the OEL MCP capability tool exactly once with an empty object. "
     "Do not use shell, web, files, or any other action tool. Then return only a compact JSON object "

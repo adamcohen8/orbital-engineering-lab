@@ -1,0 +1,40 @@
+{
+  "schema_version": "oel.trajectory_optimization_problem.v1",
+  "name": "multiple_shooting_validation",
+  "initial_state_eci_km_km_s": [7000.0, 0.0, 0.0, 0.0, 7.5, 0.0],
+  "spacecraft": {"wet_mass_kg": 500.0, "dry_mass_kg": 300.0, "impulsive_isp_s": 300.0},
+  "propagation": {"step_s": 5.0, "integrator": "rk4", "force_model": []},
+  "segments": [
+    {"name": "arc_1", "type": "coast", "duration_s": 30.0},
+    {"name": "arc_2", "type": "coast", "duration_s": 30.0}
+  ],
+  "variables": [],
+  "shooting_nodes": [
+    {
+      "name": "midpoint",
+      "before_segment": "arc_2",
+      "state_eci_km_km_s": [6996.339691095573, 224.96078093591572, 0.0, -0.2440001011551334, 7.496078215505156, 0.0],
+      "mass_kg": 500.0,
+      "position_bound_km": 2.0,
+      "velocity_bound_km_s": 0.01,
+      "mass_bound_kg": 1.0,
+      "position_scale_km": 1.0,
+      "velocity_scale_km_s": 0.001,
+      "mass_scale_kg": 1.0,
+      "position_tolerance_km": 1e-6,
+      "velocity_tolerance_km_s": 1e-9,
+      "mass_tolerance_kg": 1e-8
+    }
+  ],
+  "objectives": [
+    {"name": "minimum_time", "scope": "resource", "quantity": "elapsed_time_s", "weight": 1.0, "scale": 60.0, "goal": "minimize"}
+  ],
+  "constraints": [
+    {"name": "target_x", "scope": "terminal", "quantity": "position_x_km", "equal": 6985.362452741555, "tolerance": 1e-5, "scale": 1.0},
+    {"name": "target_y", "scope": "terminal", "quantity": "position_y_km", "equal": 449.6862913282241, "tolerance": 1e-5, "scale": 1.0},
+    {"name": "target_vx", "scope": "terminal", "quantity": "velocity_x_km_s", "equal": -0.4877543275919326, "tolerance": 1e-8, "scale": 1.0},
+    {"name": "target_vy", "scope": "terminal", "quantity": "velocity_y_km_s", "equal": 7.4843165145749895, "tolerance": 1e-8, "scale": 1.0}
+  ],
+  "solver": {"method": "trust-constr", "max_iterations": 100, "ftol": 1e-10, "finite_difference_rel_step": 1e-6, "evaluation_budget": 3000, "multi_start_count": 1, "seed": 29},
+  "robustness": {"sample_count": 0, "seed": 29, "position_sigma_km": 0.0, "velocity_sigma_km_s": 0.0, "thrust_scale_sigma": 0.0}
+}

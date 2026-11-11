@@ -1,0 +1,209 @@
+"""Compatibility façade for the OEL Scale SQLite store."""
+
+from __future__ import annotations
+
+import hashlib as hashlib
+import json as json
+import sqlite3 as sqlite3
+import uuid as uuid
+from dataclasses import dataclass as dataclass
+from dataclasses import field as field
+from datetime import datetime as datetime
+from datetime import timezone as timezone
+from pathlib import Path as Path
+from typing import Any as Any
+
+from sim.dynamics.orbit.tle import with_tle_checksum as with_tle_checksum
+from sim.plotting.style import get_oel_version as get_oel_version
+from sim.scale.store_campaigns import _insert_campaign_trial_result as _insert_campaign_trial_result
+from sim.scale.store_campaigns import _insert_sensitivity_campaign as _insert_sensitivity_campaign
+from sim.scale.store_campaigns import _insert_sensitivity_trial as _insert_sensitivity_trial
+from sim.scale.store_campaigns import load_campaign_trial_results as load_campaign_trial_results
+from sim.scale.store_campaigns import load_sensitivity_trials as load_sensitivity_trials
+from sim.scale.store_campaigns import write_campaign_trial_results as write_campaign_trial_results
+from sim.scale.store_campaigns import write_sensitivity_campaign as write_sensitivity_campaign
+from sim.scale.store_catalog import _aliases as _aliases
+from sim.scale.store_catalog import _ensure_catalog_object as _ensure_catalog_object
+from sim.scale.store_catalog import _insert_latest_tle_od_solution as _insert_latest_tle_od_solution
+from sim.scale.store_catalog import _insert_od_solution_record as _insert_od_solution_record
+from sim.scale.store_catalog import _insert_or_update_catalog_object as _insert_or_update_catalog_object
+from sim.scale.store_catalog import _insert_tle_invalidations as _insert_tle_invalidations
+from sim.scale.store_catalog import _insert_tle_record as _insert_tle_record
+from sim.scale.store_catalog import _latest_od_solution_for_object as _latest_od_solution_for_object
+from sim.scale.store_catalog import _tle_line2_from_mean_elements as _tle_line2_from_mean_elements
+from sim.scale.store_catalog import _upsert_current_object_state as _upsert_current_object_state
+from sim.scale.store_catalog import _upsert_current_od_solution as _upsert_current_od_solution
+from sim.scale.store_catalog import current_ogp_elements as current_ogp_elements
+from sim.scale.store_catalog import ingest_tle_records as ingest_tle_records
+from sim.scale.store_catalog import load_current_tle_states as load_current_tle_states
+from sim.scale.store_catalog import load_latest_tle_states as load_latest_tle_states
+from sim.scale.store_connection import _float_or_none as _float_or_none
+from sim.scale.store_connection import _json as _json
+from sim.scale.store_connection import _loads as _loads
+from sim.scale.store_connection import _quote_identifier as _quote_identifier
+from sim.scale.store_connection import _table_count as _table_count
+from sim.scale.store_connection import _utc_stamp as _utc_stamp
+from sim.scale.store_connection import summarize_store as summarize_store
+from sim.scale.store_measurements import (
+    _complete_observation_invalidations_for_object as _complete_observation_invalidations_for_object,
+)
+from sim.scale.store_measurements import _ground_station_measurement_digest as _ground_station_measurement_digest
+from sim.scale.store_measurements import (
+    _insert_ground_station_measurement_quality_record as _insert_ground_station_measurement_quality_record,
+)
+from sim.scale.store_measurements import (
+    _insert_ground_station_measurement_record as _insert_ground_station_measurement_record,
+)
+from sim.scale.store_measurements import (
+    _insert_ground_station_measurement_station as _insert_ground_station_measurement_station,
+)
+from sim.scale.store_measurements import _insert_observation_invalidation as _insert_observation_invalidation
+from sim.scale.store_measurements import (
+    _insert_od_solution_changed_invalidation as _insert_od_solution_changed_invalidation,
+)
+from sim.scale.store_measurements import _insert_track_observation_record as _insert_track_observation_record
+from sim.scale.store_measurements import _track_observation_digest as _track_observation_digest
+from sim.scale.store_measurements import (
+    ingest_ground_station_measurement_records as ingest_ground_station_measurement_records,
+)
+from sim.scale.store_measurements import ingest_track_observation_records as ingest_track_observation_records
+from sim.scale.store_measurements import (
+    load_ground_station_measurement_quality_rows as load_ground_station_measurement_quality_rows,
+)
+from sim.scale.store_measurements import load_ground_station_measurement_rows as load_ground_station_measurement_rows
+from sim.scale.store_measurements import load_track_observation_rows as load_track_observation_rows
+from sim.scale.store_measurements import (
+    write_ground_station_measurement_quality_records as write_ground_station_measurement_quality_records,
+)
+from sim.scale.store_models import CORE_TABLES as CORE_TABLES
+from sim.scale.store_models import SCALE_STORE_MIGRATABLE_SCHEMA_VERSIONS as SCALE_STORE_MIGRATABLE_SCHEMA_VERSIONS
+from sim.scale.store_models import SCALE_STORE_SCHEMA_VERSION as SCALE_STORE_SCHEMA_VERSION
+from sim.scale.store_models import CampaignTrialResultRecord as CampaignTrialResultRecord
+from sim.scale.store_models import CandidateForRefinement as CandidateForRefinement
+from sim.scale.store_models import CandidateRefinementRecord as CandidateRefinementRecord
+from sim.scale.store_models import ConjunctionCandidateRecord as ConjunctionCandidateRecord
+from sim.scale.store_models import CurrentOGPState as CurrentOGPState
+from sim.scale.store_models import CurrentTLEState as CurrentTLEState
+from sim.scale.store_models import GroundStationMeasurementIngestResult as GroundStationMeasurementIngestResult
+from sim.scale.store_models import GroundStationMeasurementQualityRecord as GroundStationMeasurementQualityRecord
+from sim.scale.store_models import GroundStationMeasurementRecord as GroundStationMeasurementRecord
+from sim.scale.store_models import HpopHandoffCase as HpopHandoffCase
+from sim.scale.store_models import HpopHandoffPacketRecord as HpopHandoffPacketRecord
+from sim.scale.store_models import ManeuverFlagRecord as ManeuverFlagRecord
+from sim.scale.store_models import OdSolutionRecord as OdSolutionRecord
+from sim.scale.store_models import OdSolutionSummary as OdSolutionSummary
+from sim.scale.store_models import OnpHandoffCase as OnpHandoffCase
+from sim.scale.store_models import OnpHandoffPacketRecord as OnpHandoffPacketRecord
+from sim.scale.store_models import OnpRefinementCaseRecord as OnpRefinementCaseRecord
+from sim.scale.store_models import OnpRefinementRunRecord as OnpRefinementRunRecord
+from sim.scale.store_models import PropagationProductRecord as PropagationProductRecord
+from sim.scale.store_models import PropagationProductSummary as PropagationProductSummary
+from sim.scale.store_models import PropagationSampleRecord as PropagationSampleRecord
+from sim.scale.store_models import ScreeningWindowRecord as ScreeningWindowRecord
+from sim.scale.store_models import SensitivityCampaignRecord as SensitivityCampaignRecord
+from sim.scale.store_models import SensitivityTrialRecord as SensitivityTrialRecord
+from sim.scale.store_models import StoreSummary as StoreSummary
+from sim.scale.store_models import TLEIngestRecord as TLEIngestRecord
+from sim.scale.store_models import TLEIngestResult as TLEIngestResult
+from sim.scale.store_models import TrackObservationIngestResult as TrackObservationIngestResult
+from sim.scale.store_models import TrackObservationRecord as TrackObservationRecord
+from sim.scale.store_od import _insert_maneuver_flag as _insert_maneuver_flag
+from sim.scale.store_od import _insert_maneuver_invalidation as _insert_maneuver_invalidation
+from sim.scale.store_od import load_exact_od_assessment_inputs as load_exact_od_assessment_inputs
+from sim.scale.store_od import load_recent_od_solutions as load_recent_od_solutions
+from sim.scale.store_od import write_maneuver_flags as write_maneuver_flags
+from sim.scale.store_od import write_od_solution_records as write_od_solution_records
+from sim.scale.store_propagation import _complete_propagation_invalidations as _complete_propagation_invalidations
+from sim.scale.store_propagation import _insert_propagation_product as _insert_propagation_product
+from sim.scale.store_propagation import _insert_propagation_samples as _insert_propagation_samples
+from sim.scale.store_propagation import _latest_propagation_product_for_object as _latest_propagation_product_for_object
+from sim.scale.store_propagation import complete_propagation_invalidations as complete_propagation_invalidations
+from sim.scale.store_propagation import (
+    count_matching_current_propagation_products as count_matching_current_propagation_products,
+)
+from sim.scale.store_propagation import (
+    count_screening_windows_for_current_products as count_screening_windows_for_current_products,
+)
+from sim.scale.store_propagation import estimate_matching_pair_window_count as estimate_matching_pair_window_count
+from sim.scale.store_propagation import estimate_pair_window_count as estimate_pair_window_count
+from sim.scale.store_propagation import load_completed_propagation_products as load_completed_propagation_products
+from sim.scale.store_propagation import (
+    load_matching_current_propagation_products as load_matching_current_propagation_products,
+)
+from sim.scale.store_propagation import load_product_samples as load_product_samples
+from sim.scale.store_propagation import load_product_samples_by_id as load_product_samples_by_id
+from sim.scale.store_propagation import write_propagation_products as write_propagation_products
+from sim.scale.store_refinement import _insert_candidate_refinement as _insert_candidate_refinement
+from sim.scale.store_refinement import _insert_hpop_handoff_packet as _insert_hpop_handoff_packet
+from sim.scale.store_refinement import _update_candidate_with_refinement as _update_candidate_with_refinement
+from sim.scale.store_refinement import _upsert_onp_refinement_case as _upsert_onp_refinement_case
+from sim.scale.store_refinement import claim_onp_refinement_runs as claim_onp_refinement_runs
+from sim.scale.store_refinement import finish_onp_refinement_run as finish_onp_refinement_run
+from sim.scale.store_refinement import load_hpop_handoff_packets as load_hpop_handoff_packets
+from sim.scale.store_refinement import load_onp_handoff_packets as load_onp_handoff_packets
+from sim.scale.store_refinement import load_onp_refinement_cases as load_onp_refinement_cases
+from sim.scale.store_refinement import load_onp_refinement_runs as load_onp_refinement_runs
+from sim.scale.store_refinement import load_pending_candidates_for_refinement as load_pending_candidates_for_refinement
+from sim.scale.store_refinement import load_pending_hpop_handoff_cases as load_pending_hpop_handoff_cases
+from sim.scale.store_refinement import load_pending_onp_handoff_cases as load_pending_onp_handoff_cases
+from sim.scale.store_refinement import load_pending_onp_refinement_packets as load_pending_onp_refinement_packets
+from sim.scale.store_refinement import mark_onp_refinement_run_running as mark_onp_refinement_run_running
+from sim.scale.store_refinement import pending_candidate_refinement_count as pending_candidate_refinement_count
+from sim.scale.store_refinement import pending_hpop_handoff_count as pending_hpop_handoff_count
+from sim.scale.store_refinement import pending_onp_handoff_count as pending_onp_handoff_count
+from sim.scale.store_refinement import (
+    pending_onp_refinement_materialization_count as pending_onp_refinement_materialization_count,
+)
+from sim.scale.store_refinement import recover_incomplete_onp_refinement_runs as recover_incomplete_onp_refinement_runs
+from sim.scale.store_refinement import (
+    summarize_onp_refinement_execution_queue as summarize_onp_refinement_execution_queue,
+)
+from sim.scale.store_refinement import write_candidate_refinements as write_candidate_refinements
+from sim.scale.store_refinement import write_hpop_handoff_packets as write_hpop_handoff_packets
+from sim.scale.store_refinement import write_onp_handoff_packets as write_onp_handoff_packets
+from sim.scale.store_refinement import write_onp_refinement_cases as write_onp_refinement_cases
+from sim.scale.store_schema import _create_schema as _create_schema
+from sim.scale.store_schema import _ensure_columns as _ensure_columns
+from sim.scale.store_schema import _existing_schema_version as _existing_schema_version
+from sim.scale.store_schema import _migrate_schema as _migrate_schema
+from sim.scale.store_schema import _upsert_metadata as _upsert_metadata
+from sim.scale.store_schema import initialize_store as initialize_store
+from sim.scale.store_screening import _current_candidate_for_pair_window as _current_candidate_for_pair_window
+from sim.scale.store_screening import _insert_conjunction_candidate as _insert_conjunction_candidate
+from sim.scale.store_screening import _insert_screening_window as _insert_screening_window
+from sim.scale.store_screening import _mark_candidate_superseded as _mark_candidate_superseded
+from sim.scale.store_screening import _mark_hpop_packets_stale_for_candidate as _mark_hpop_packets_stale_for_candidate
+from sim.scale.store_screening import count_current_conjunction_candidates as count_current_conjunction_candidates
+from sim.scale.store_screening import count_stale_hpop_handoff_packets as count_stale_hpop_handoff_packets
+from sim.scale.store_screening import write_screening_results as write_screening_results
+
+# Preserve historical repr, pickle, and import identity.
+StoreSummary.__module__ = __name__
+TLEIngestRecord.__module__ = __name__
+TLEIngestResult.__module__ = __name__
+TrackObservationRecord.__module__ = __name__
+TrackObservationIngestResult.__module__ = __name__
+GroundStationMeasurementRecord.__module__ = __name__
+GroundStationMeasurementIngestResult.__module__ = __name__
+GroundStationMeasurementQualityRecord.__module__ = __name__
+CurrentTLEState.__module__ = __name__
+CurrentOGPState.__module__ = __name__
+PropagationProductRecord.__module__ = __name__
+PropagationProductSummary.__module__ = __name__
+PropagationSampleRecord.__module__ = __name__
+ScreeningWindowRecord.__module__ = __name__
+ConjunctionCandidateRecord.__module__ = __name__
+CandidateForRefinement.__module__ = __name__
+CandidateRefinementRecord.__module__ = __name__
+HpopHandoffCase.__module__ = __name__
+HpopHandoffPacketRecord.__module__ = __name__
+OnpHandoffCase.__module__ = __name__
+OnpHandoffPacketRecord.__module__ = __name__
+OnpRefinementCaseRecord.__module__ = __name__
+OnpRefinementRunRecord.__module__ = __name__
+SensitivityCampaignRecord.__module__ = __name__
+SensitivityTrialRecord.__module__ = __name__
+CampaignTrialResultRecord.__module__ = __name__
+OdSolutionSummary.__module__ = __name__
+OdSolutionRecord.__module__ = __name__
+ManeuverFlagRecord.__module__ = __name__

@@ -139,6 +139,34 @@ def test_fused_nrlmsise_uses_common_frame_and_current_solar_inputs(solar_input):
             state = expected
 
 
+def test_fused_nrlmsise_honors_environment_drag_coefficient_override() -> None:
+    _require_compiled_acceleration()
+    state, env, context = _case()
+    env["drag_frame_model"] = "simple"
+    env["drag_coefficient"] = 0.7
+    fused = OrbitPropagator(plugins=[drag_plugin], acceleration_mode="auto")
+    reference = OrbitPropagator(plugins=[drag_plugin], acceleration_mode="off")
+    with acceleration_context("auto", allow_env_override=False):
+        expected = reference._propagate_builtin_rk4(
+            x_eci=state,
+            dt_s=10.0,
+            t_s=0.0,
+            command_accel_eci_km_s2=np.zeros(3),
+            env=env,
+            ctx=context,
+        )
+        actual = fused._try_propagate_compiled_builtin_rk4(
+            x_eci=state,
+            dt_s=10.0,
+            t_s=0.0,
+            command_accel_eci_km_s2=np.zeros(3),
+            env=env,
+            ctx=context,
+        )
+    assert actual is not None
+    np.testing.assert_allclose(actual, expected, rtol=0.0, atol=2e-11)
+
+
 def test_fused_solar_endpoint_reloads_rewritten_eop_and_rejects_deleted_file(tmp_path):
     _require_compiled_acceleration()
     state, env, context = _case()
@@ -372,6 +400,7 @@ def test_staged_compiled_path_is_exact_for_remaining_forces_and_custom_plugin() 
         ],
         env_updates={
             "density_kg_m3": 1.2e-12,
+            "drag_coefficient": 0.73,
             "lift_coefficient": 0.3,
             "lift_direction_eci": [0.2, 0.8, -0.1],
             "third_body_planets": ["venus"] * 10 + ["mars"],

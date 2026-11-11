@@ -35,6 +35,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Query an OEL output review store.")
     parser.add_argument("output_dir", nargs="?", help="Output directory or review/run.sqlite path.")
     query_group = parser.add_mutually_exclusive_group()
+    query_group.add_argument("--scientific", help="One scientific evidence request as JSON.")
+    query_group.add_argument("--scientific-schema", action="store_true", help="Print the scientific request schema.")
     query_group.add_argument("--query", "-q", help="Read-only SELECT query to run.")
     query_group.add_argument("--saved-query", help="Named built-in review query to run.")
     query_group.add_argument("--manifest", action="store_true", help="Print workflow review manifest summary.")
@@ -49,6 +51,22 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
     args = parser.parse_args(argv)
 
+    if args.scientific_schema:
+        from sim.review.scientific import operation_schema
+
+        print(json.dumps(operation_schema(), sort_keys=True))
+        return 0
+    if args.scientific is not None:
+        from sim.review import read_scientific_evidence
+
+        if not args.output_dir:
+            parser.error("output_dir is required for scientific evidence")
+        try:
+            result = read_scientific_evidence(args.output_dir, json.loads(args.scientific))
+        except ValueError as exc:
+            parser.error(str(exc))
+        print(json.dumps(result, sort_keys=True, allow_nan=False))
+        return 0
     if args.list_saved_queries:
         for item in list_saved_review_queries():
             tables = ",".join(item.source_tables)

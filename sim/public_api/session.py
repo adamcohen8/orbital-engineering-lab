@@ -433,7 +433,11 @@ class SimulationSession:
 
     @staticmethod
     def _run_batch_analysis(config: SimulationConfig) -> dict[str, Any]:
-        return run_simulation_scenario(config.to_scenario_config(), source_path=config.source_path)
+        return run_simulation_scenario(
+            config.to_scenario_config(),
+            source_path=config.source_path,
+            path_policy=config.path_policy,
+        )
 
     def _enforce_sealed_mode(self, config: SimulationConfig) -> None:
         if self._sealed_policy is None:

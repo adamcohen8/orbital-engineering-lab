@@ -118,6 +118,11 @@ def test_windows_publication_embeds_icon_before_stable_launcher_payload(tmp_path
             super().__init__(*args, **kwargs)
             self._is_nt = True
 
+        def _build_shebang(self, executable, post_interp):
+            # Windows distlib always emits a direct interpreter shebang.
+            # Only stub the platform branch; still exercise extraction of flags.
+            return b"#!" + executable + post_interp + b"\n"
+
         def _get_launcher(self, kind):
             assert kind == "w"
             return stock

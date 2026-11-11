@@ -31,9 +31,10 @@ For a single run:
 - `review/run.sqlite` and `review/schema.json`: queryable, provenance-bound
   evidence when review output was enabled.
 
-Pro adds campaign-scale Monte Carlo, sensitivity, controller-benchmark, and
-reporting artifacts. The public custom-analysis path focuses on deterministic
-single-run outputs.
+The v1 local edition also emits bounded Monte Carlo, sensitivity,
+controller-benchmark, and reporting artifacts. Keep custom analysis inside the
+declared campaign/resource limits; Hosted orchestration and provider-driven
+reports remain private.
 
 ## Save Full Single-Run Data
 

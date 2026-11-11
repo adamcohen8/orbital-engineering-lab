@@ -49,6 +49,7 @@ if __name__ == "__main__":
 
 from sim.config import load_simulation_yaml, validate_scenario_plugins
 from sim.execution import run_simulation_config_file
+from sim.execution.study import analysis_study_type
 from sim.installation.resources import quickstart_config_path
 from sim.security.sealed_mode import SealedModePolicy, validate_sealed_mode
 
@@ -62,7 +63,8 @@ def _print_preflight(config_path: str, cfg, errors: list[str], *, import_plugins
     print("=" * 72)
     print(f"Config   : {Path(config_path).resolve()}")
     print(f"Scenario : {cfg.scenario_name}")
-    print("Mode     : Single Run")
+    mode = analysis_study_type(cfg)
+    print(f"Mode     : {mode if mode in {'monte_carlo', 'sensitivity', 'covariance'} else 'Single Run'}")
     print(f"Timing   : duration={float(cfg.simulator.duration_s):.1f} s, dt={float(cfg.simulator.dt_s):.3f} s")
     if errors:
         print("Status   : INVALID")
@@ -73,14 +75,6 @@ def _print_preflight(config_path: str, cfg, errors: list[str], *, import_plugins
         if not import_plugins:
             print("Plugins  : SKIPPED (safe validation does not import plugins)")
     print("=" * 72)
-
-
-def _reject_batch_analysis(cfg) -> None:
-    if bool(cfg.analysis.enabled) or bool(cfg.monte_carlo.enabled):
-        raise SystemExit(
-            "Batch analysis is not available in the public core. "
-            "Use Orbital Engineering Lab Pro for Monte Carlo, sensitivity, controller-bench, and optimization workflows."
-        )
 
 
 def _prepare_cli_output_directory(cfg, *, overwrite: bool) -> None:
@@ -204,6 +198,8 @@ def _plain_progress_reporter():
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run a public-core Orbital Engineering Lab scenario.")
     parser.add_argument("--config", default="", help="Path to a simulation scenario YAML file.")
+    parser.add_argument("--campaign", type=Path, help="Run or validate a config queue.")
+    parser.add_argument("--controller-bench", type=Path, help="Run or validate a controller benchmark.")
     parser.add_argument("--quickstart", action="store_true", help="Run the bundled five-minute quickstart scenario.")
     parser.add_argument(
         "--doctor", action="store_true", help="Check the local Python environment and quickstart readiness."
@@ -259,12 +255,42 @@ def main() -> None:
         if not _print_doctor_report(source_root=Path(__file__).resolve().parent):
             raise SystemExit(1)
         return
+    if sum(bool(value) for value in (args.config, args.quickstart, args.campaign, args.controller_bench)) != 1:
+        parser.error("Choose one of --config, --quickstart, --campaign, or --controller-bench.")
+    validate_only = args.validate_only or args.safe_validate
+    if args.campaign or args.controller_bench:
+        # Structured workflows retain the same process-wide sealed policy as scenario runs.
+        if args.sealed_mode:
+            os.environ["OEL_SEALED_MODE"] = "1"
+        if args.campaign:
+            from sim.execution.campaigns import run_config_campaign, validate_config_campaign
+
+            if validate_only:
+                result = validate_config_campaign(args.campaign, import_plugins=not (args.safe_validate or args.sealed_mode))
+                print(json.dumps(result, indent=2, default=str))
+                if not result["valid"]:
+                    raise SystemExit(1)
+                return
+            result = run_config_campaign(campaign_path=args.campaign, import_plugins=not args.sealed_mode)
+        else:
+            from sim.controller_lab import run_controller_bench, validate_controller_bench_config
+
+            if args.safe_validate or args.sealed_mode:
+                parser.error("Use --validate-only on a trusted controller bench config.")
+            if validate_only:
+                result = validate_controller_bench_config(args.controller_bench)
+                print(json.dumps(result, indent=2, default=str))
+                if not result["passed"]:
+                    raise SystemExit(1)
+                return
+            result = run_controller_bench(config_path=args.controller_bench)
+        print(json.dumps(result, indent=2, default=str))
+        return
     config_path = str(QUICKSTART_CONFIG if args.quickstart else args.config)
     if not config_path:
         raise SystemExit("Provide --config PATH or use --quickstart.")
 
     cfg = load_simulation_yaml(config_path)
-    _reject_batch_analysis(cfg)
     import_plugins = bool(not args.safe_validate and not args.sealed_mode)
     errors = (
         list(validate_scenario_plugins(cfg, import_plugins=import_plugins))
@@ -293,6 +319,10 @@ def main() -> None:
         msg = "Plugin validation failed:\n- " + "\n- ".join(errors)
         raise SystemExit(msg)
 
+    if analysis_study_type(cfg) in {"monte_carlo", "sensitivity", "covariance"}:
+        out = run_simulation_config_file(config_path)
+        print(json.dumps(out.get("artifacts", {}), indent=2, default=str))
+        return
     _prepare_cli_output_directory(cfg, overwrite=bool(args.overwrite_output))
     out = run_simulation_config_file(config_path, step_callback=_plain_progress_reporter())
     run = dict(out.get("run", {}) or {})

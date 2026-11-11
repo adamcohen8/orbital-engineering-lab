@@ -155,6 +155,7 @@ def _open_directory_component(
 ) -> int:
     """Open one child directory, optionally creating it under ``current_fd``."""
 
+    created = False
     try:
         child_fd = os.open(part, _directory_flags(), dir_fd=current_fd)
     except FileNotFoundError:
@@ -171,8 +172,9 @@ def _open_directory_component(
             # Persist the new directory entry before handing its descriptor to
             # the caller. Hosts without directory fsync support fail closed.
             os.fsync(current_fd)
+            created = True
         child_fd = os.open(part, _directory_flags(), dir_fd=current_fd)
-    if create:
+    if created:
         try:
             os.fchmod(child_fd, mode)
             os.fsync(child_fd)

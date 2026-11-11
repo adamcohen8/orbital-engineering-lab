@@ -29,6 +29,8 @@ def test_restricted_byo_mcp_profile_exposes_planning_without_execution() -> None
     handlers = StudyPlanningMCPHandlers(read_roots=(ROOT,))
     resources = {r.contract.uri: r.text for r in build_public_resource_catalog(
         profile=handlers.profile, tool_contracts=handlers.contracts.values())}
+    tool_catalog = json.loads(resources["oel://capabilities/tools/v1"])
+    assert [tool["name"] for tool in tool_catalog["tools"]] == list(handlers.contracts)
     routes = json.loads(resources["oel://agent/workflows/v1"])
     assert routes["study_planner"]["registered_here"] is True
     assert next(r for r in routes["routes"] if r["route_id"] == "scenario")["all_tools_registered_here"] is False

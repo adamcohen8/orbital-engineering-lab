@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 import run_simulation
 
@@ -58,3 +60,40 @@ def test_safe_validation_labels_structural_scope(capsys) -> None:
     assert "STRUCTURALLY PARSED" in output
     assert "SKIPPED (safe validation does not import plugins)" in output
     assert "STRUCTURALLY OK" in output
+
+
+def test_serial_benchmark_uses_private_scratch_outputs(tmp_path, monkeypatch, capsys) -> None:
+    config_path = tmp_path / "benchmark.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "scenario_name": "benchmark_scratch",
+                "simulator": {"duration_s": 1.0, "dt_s": 1.0},
+                "outputs": {"output_dir": str(tmp_path / "user-output"), "review": {"enabled": True}},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    seen: dict[str, object] = {}
+
+    def fake_run(config_path: str) -> dict:
+        cfg = run_simulation.load_simulation_yaml(config_path)
+        seen["output_dir"] = cfg.outputs.output_dir
+        seen["review_enabled"] = cfg.outputs.review.enabled
+        return {"monte_carlo": {"iterations": 1}, "aggregate_stats": {"pass_rate": 1.0, "fail_rate": 0.0}}
+
+    monkeypatch.setattr(run_simulation, "run_simulation_config_file", fake_run)
+    monkeypatch.setattr(run_simulation, "_maxrss_bytes", lambda: 0)
+    monkeypatch.setattr(run_simulation, "_cpu_time_seconds_including_children", lambda: 0.0)
+    monkeypatch.setattr(run_simulation, "_available_memory_bytes", lambda: None)
+    monkeypatch.setattr(run_simulation, "_physical_cpu_count", lambda: None)
+
+    run_simulation._print_serial_benchmark(str(config_path), benchmark_runs=1)
+
+    benchmark_output = Path(str(seen["output_dir"]))
+    assert benchmark_output != tmp_path / "user-output"
+    assert str(benchmark_output.parent.name).startswith("oel-serial-benchmark-")
+    assert seen["review_enabled"] is False
+    assert not benchmark_output.parent.exists()
+    assert "SERIAL MONTE CARLO BENCHMARK" in capsys.readouterr().out

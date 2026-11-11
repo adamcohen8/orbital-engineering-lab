@@ -27,11 +27,24 @@ class InstallationPaths:
         override_config = env.get("OEL_CONFIG_HOME", "").strip()
         host = system or platform.system()
         if host == "Windows":
-            data = Path(override_data or env.get("LOCALAPPDATA", home_path / "AppData" / "Local")) / "OEL"
-            config = Path(override_config or env.get("APPDATA", home_path / "AppData" / "Roaming")) / "OEL"
+            local_app_data = str(env.get("LOCALAPPDATA", "") or "").strip()
+            app_data = str(env.get("APPDATA", "") or "").strip()
+            # Explicit OEL_* overrides are complete managed roots, just like
+            # the CLI --data-root/--config-root options.  Only platform
+            # defaults receive the conventional Windows /OEL suffix.
+            data = (
+                Path(override_data)
+                if override_data
+                else Path(local_app_data or home_path / "AppData" / "Local") / "OEL"
+            )
+            config = (
+                Path(override_config)
+                if override_config
+                else Path(app_data or home_path / "AppData" / "Roaming") / "OEL"
+            )
         else:
-            xdg_data = Path(env.get("XDG_DATA_HOME", home_path / ".local" / "share"))
-            xdg_config = Path(env.get("XDG_CONFIG_HOME", home_path / ".config"))
+            xdg_data = Path(str(env.get("XDG_DATA_HOME", "") or "").strip() or home_path / ".local" / "share")
+            xdg_config = Path(str(env.get("XDG_CONFIG_HOME", "") or "").strip() or home_path / ".config")
             data = Path(override_data) if override_data else xdg_data / "oel"
             config = Path(override_config) if override_config else xdg_config / "oel"
         return cls(data.expanduser().resolve(), config.expanduser().resolve())

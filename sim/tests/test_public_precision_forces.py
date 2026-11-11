@@ -82,34 +82,20 @@ def _load_precision_adapter():
     return module
 
 
-def test_precision_adapter_preserves_public_forces_when_private_ecom_is_absent(monkeypatch):
-    original_import = builtins.__import__
-
-    def without_private_ecom(name, *args, **kwargs):
-        if name == "sim.pro_perturbations.ecom":
-            raise ModuleNotFoundError("private ECOM is absent", name=name)
-        return original_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", without_private_ecom)
-    adapter = _load_precision_adapter()
-    force = SchwarzschildAcceleration()
-    assert adapter.precision_code(force) == 10
-    assert adapter.specifications([force], OrbitContext(398600.4418, 300.0)) == [(10, [], [])]
-
-
 @pytest.mark.parametrize("failure", [
+    ModuleNotFoundError("missing ECOM module", name="sim.pro_perturbations.ecom"),
     ModuleNotFoundError("missing internal ECOM dependency", name="missing_ecom_dependency"),
     ImportError("broken internal ECOM import"),
 ])
-def test_precision_adapter_does_not_hide_private_dependency_failures(monkeypatch, failure):
+def test_precision_adapter_does_not_hide_ecom_import_failures(monkeypatch, failure):
     original_import = builtins.__import__
 
-    def broken_private_ecom(name, *args, **kwargs):
+    def broken_ecom(name, *args, **kwargs):
         if name == "sim.pro_perturbations.ecom":
             raise failure
         return original_import(name, *args, **kwargs)
 
-    monkeypatch.setattr(builtins, "__import__", broken_private_ecom)
+    monkeypatch.setattr(builtins, "__import__", broken_ecom)
     with pytest.raises(type(failure), match=str(failure)) as caught:
         _load_precision_adapter()
     assert caught.value is failure

@@ -1,12 +1,34 @@
 """Explicit study requirements; no downloaded artifact authorizes execution."""
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import timedelta
 
 from .contracts import AcquisitionError, epoch
 from .inspection import inspect_bytes, require_compatible
 
 REQUIREMENTS = {"consumer", "start", "stop", "allow_predictions", "degree", "order", "tide_system", "normalization"}
+
+
+def coverage_contains(kind: str, coverage: Mapping[str, object] | None, start: str, stop: str) -> bool:
+    """Return whether a source coverage interval contains the requested samples."""
+
+    if not isinstance(coverage, Mapping):
+        return False
+    try:
+        requested_start = epoch(start)
+        requested_stop = epoch(stop)
+        covered_start = epoch(coverage["start"])
+        covered_stop = epoch(coverage["stop"])
+    except (AcquisitionError, KeyError, TypeError):
+        return False
+    if requested_stop <= requested_start:
+        return False
+    if requested_start < covered_start or requested_stop > covered_stop:
+        return False
+    # Daily weather coverage is represented by the day after the final row;
+    # that boundary is not itself a sample.
+    return not (kind == "space-weather" and requested_stop == covered_stop)
 
 
 def check(raw, receipt, requirements):
@@ -34,7 +56,7 @@ def check(raw, receipt, requirements):
             raise AcquisitionError("INVALID_REQUIREMENTS", "Requirements need start before stop.")
         # Simulation outputs include the final sample, so stop must itself be covered.
         coverage = value["coverage"]
-        if start < epoch(coverage["start"]) or stop > epoch(coverage["stop"]) or (kind == "space-weather" and stop == epoch(coverage["stop"])):
+        if not coverage_contains(kind, coverage, requirements["start"], requirements["stop"]):
             raise AcquisitionError("COVERAGE_MISSING", "Dataset does not cover every requested simulation sample, including stop.")
         if kind == "space-weather":
             if consumer not in {"nrlmsise00", "msis86"}:

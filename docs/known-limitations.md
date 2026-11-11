@@ -1,25 +1,20 @@
 # Known Limitations
 
-Orbital Engineering Lab is a public beta simulation core. It is useful for
+Orbital Engineering Lab is a public simulation package. It is useful for
 research, education, prototyping, and pre-flight engineering analysis, but it is
 not flight-qualified or operational decision-grade software.
 
-## Public Beta Scope
+## Public scope
 
-- The public core is optimized for deterministic single-run simulation.
-- The public core includes a bounded two-body Lambert solver and grid-based
-  orbit-transfer trade-space example. General optimization, gain tuning, Monte
-  Carlo, sensitivity studies, controller benchmarking, campaign dashboards,
-  AI-assisted reporting, and flight-software workbench/orchestration workflows
-  are Pro surfaces and are not included in the public export. Public users may
-  still provide an importable custom class implementing the complete
-  `SatelliteFlightSoftware` contract; public core does not provide private
-  composition, benchmarking, qualification, or promotion tooling for it.
+- See [OEL v1.0 local workflows](v1-local-workflows.md) for campaign and
+  parallel execution, controller benchmarking and tuning, conjunction and
+  avoidance, and flight-software workbench tools. These support engineering
+  studies with declared inputs and assumptions.
 - The primary public surfaces are the CLI, scenario YAML, Python API, review
   query CLI/API, custom review plotting, and RPO trainer.
 - Payload and artifact shapes are documented, but some non-contract fields may
-  evolve while the project is pre-1.0.
-- Public conjunction assessment is limited to one deterministic primary-
+  evolve between releases.
+- The basic conjunction example is limited to one deterministic primary-
   secondary pair, a small explicitly declared rescreen list, covariance
   declared at TCA, and one educational linear 2D Gaussian Pc method. It is not
   catalog screening, covariance propagation, nonlinear probability analysis,
@@ -161,7 +156,7 @@ dependency vulnerability fixes require Python 3.10 or newer.
   covariance, residuals, and explicit holdout prediction, but not raw
   radiometric reduction, calibrated sensor processing, association, custody,
   calibrated predicted orbit accuracy, or operational tracking authority.
-  Governed, calibrated, bulk, and customer workflows remain Pro.
+  See [Tracking OD](tracking-od.md) for the local precision and SLR workflows.
 - Spherical-harmonic gravity can use inline terms, user-provided coefficient
   files, or the managed digest-pinned EGM96 source. HPOP/GGM03 reference data
   is not distributed with the public core; ICGEM and HPOP/GGM03 require an

@@ -1,0 +1,73 @@
+scenario_name: controller_bench_attitude_rate_recovery
+scenario_description: High-rate attitude recovery benchmark case
+objects:
+  target:
+    enabled: true
+    specs:
+      mass_kg: 120.0
+      mass_properties:
+        center_of_mass_body_m:
+        - 0.0
+        - 0.0
+        - 0.0
+        inertia_kg_m2:
+        - - 12.0
+          - 0.0
+          - 0.0
+        - - 0.0
+          - 10.0
+          - 0.0
+        - - 0.0
+          - 0.0
+          - 8.0
+        inertia_reference_point: center_of_mass
+    initial_state:
+      position_eci_km:
+      - 7000.0
+      - 0.0
+      - 0.0
+      velocity_eci_km_s:
+      - 0.0
+      - 7.5
+      - 0.0
+      attitude_quat_bn:
+      - 0.819152
+      - 0.0
+      - -0.5735764
+      - 0.0
+      angular_rate_body_rad_s:
+      - 0.05
+      - -0.03
+      - 0.025
+    role: target
+    kind: satellite
+    flight_software:
+      stack: fsw.passive
+      hardware_profile: hardware.passive.v1
+      params: {}
+simulator:
+  duration_s: 20.0
+  dt_s: 1.0
+  termination:
+    earth_impact_enabled: false
+  dynamics:
+    attitude:
+      enabled: true
+outputs:
+  output_dir: outputs/controller_bench_attitude_rate_recovery
+  mode: save
+  stats:
+    print_summary: false
+    save_json: false
+    save_full_log: false
+  plots:
+    enabled: false
+    figure_ids: []
+  animations:
+    enabled: false
+    types: []
+metadata:
+  owner: public
+  public_surface: public-example
+  support_level: experimental
+  notes: Synthetic controller benchmark.

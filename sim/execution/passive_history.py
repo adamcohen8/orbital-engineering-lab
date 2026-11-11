@@ -62,9 +62,91 @@ class PassiveHistoryCache:
         self.entries: dict[str, _PreparedHistory] = {}
         self.preparation_count = 0
         self.consumed_samples = 0
+        self._thread_errors: dict[str, Exception] = {}
 
+    def thread_definition(self, agent: Any, initial: StateTruth) -> tuple[Any, ...] | None:
+        """Restrict concurrent work to independent, callback-free ONP kernels."""
+        if self.engine.attitude_enabled:
+            return None
+        if agent.kind != "satellite" or agent.runtime_profile != "trajectory_only":
+            return None
+        if any(getattr(agent, name, None) is not None for name in (
+            "orbit_controller", "attitude_controller", "sensor", "estimator",
+            "knowledge_base", "mission_strategy", "mission_execution",
+        )) or agent.mission_modules:
+            return None
+        dynamics = agent.dynamics
+        if type(dynamics) is not OrbitalAttitudeDynamics:
+            return None
+        propagator = dynamics.orbit_propagator
+        if type(propagator) is not OrbitPropagator:
+            return None
+        if propagator.plugins and not (
+            len(propagator.plugins) == 1 and propagator.plugins[0] is j2_plugin
+        ):
+            return None
+        definition = self._definition(agent, initial)
+        return definition if definition is not None and definition[-2] == "two_body" else None
 
+    def prepare_objects(self, inputs: list[Any], pool: Any, *, max_workers: int) -> None:
+        """Prepare histories in bounded groups; only raw native calls use threads.
 
+        Schedules, cache mutation, profiling, errors, and row consumption remain
+        on the timeline owner. Native errors surface at ordinary object order.
+        """
+        native = import_module("oel_rust_orbit")
+        propagate = native.propagate_passive_sampled_eci_bytes
+        schedules: dict[tuple[Any, ...], _SampledSchedule | None] = {}
+        pending = []
+        started: float | None = None
+        for item in inputs:
+            definition = self.thread_definition(item.agent, item.initial_truth)
+            if definition is None or self._matching_entry(
+                item.object_id, definition, item.initial_truth, item.t_s, item.t_next,
+            ) is not None:
+                continue
+            if started is None:
+                started = perf_counter()
+            key = (definition[5:8], item.initial_truth.t_s, item.t_s, item.t_next)
+            if key not in schedules:
+                # Distinct cadences must not retain one large internal schedule
+                # per object. Both memoized schedules and pending calls are bounded.
+                if len(schedules) >= max_workers:
+                    schedules.clear()
+                schedules[key] = self._schedule(definition, item.initial_truth, item.t_s, item.t_next)
+            schedule = schedules[key]
+            if schedule is not None:
+                pending.append((item, definition, schedule))
+                if len(pending) >= max_workers:
+                    self._prepare_thread_group(pending, pool, propagate)
+                    pending = []
+        if pending:
+            self._prepare_thread_group(pending, pool, propagate)
+        if started is not None:
+            self.engine.runtime_profiler.record_stage("passive_history_prepare_threaded", perf_counter() - started)
+
+    def _prepare_thread_group(self, group: list[Any], pool: Any, propagate: Any) -> None:
+        futures = [pool.submit(
+            propagate,
+            np.concatenate((item.initial_truth.position_eci_km, item.initial_truth.velocity_eci_km_s)).tolist(),
+            np.asarray(schedule.widths, dtype="<f8").tobytes(), schedule.ends,
+            definition[2], definition[3],
+        ) for item, definition, schedule in group]
+        for (item, definition, schedule), future in zip(group, futures):
+            try:
+                raw = future.result()
+                states = np.frombuffer(raw, dtype="<f8").copy().reshape(len(schedule.ends) + 1, 6)
+            except (ValueError, ArithmeticError):
+                # A speculative future failure must not preempt an earlier
+                # impact, termination, or ordinary current-step failure.
+                continue
+            except Exception as exc:
+                self._thread_errors[item.object_id] = exc
+                continue
+            self.entries[item.object_id] = _PreparedHistory(
+                definition, schedule.intervals, schedule.truth_times, states,
+            )
+            self.preparation_count += 1
 
     def _environment(self, agent: Any) -> dict[str, Any]:
         dynamics = agent.dynamics
@@ -351,6 +433,9 @@ class PassiveHistoryCache:
     def step(
         self, *, aid: str, agent: Any, initial: StateTruth, t_s: float, t_next: float,
     ) -> StateTruth | None:
+        error = self._thread_errors.pop(aid, None)
+        if error is not None:
+            raise error
         definition = self._definition(agent, initial)
         if definition is None:
             self.entries.pop(aid, None)

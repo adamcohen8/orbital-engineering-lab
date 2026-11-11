@@ -31,6 +31,65 @@ def test_history_is_reused_offline_and_only_missing_intervals_are_queried(tmp_pa
     assert first["artifacts"][0] in second["artifacts"] and len(network.calls) == 4
 
 
+def test_environment_cache_reuse_requires_requested_coverage(tmp_path):
+    from sim.tests.data_acquisition_helpers import eop
+
+    network = FakeNetwork([eop()])
+    svc = service(tmp_path, network)
+    first = {
+        "provider": "celestrak",
+        "product": "eop",
+        "start": "2024-01-10T00:00:00Z",
+        "stop": "2024-01-11T00:00:00Z",
+    }
+    svc.fetch(first)
+    later = {**first, "start": "2024-01-20T00:00:00Z", "stop": "2024-01-21T00:00:00Z"}
+    plan = svc.plan(later)
+    assert plan["cached_artifacts"] == []
+    assert plan["missing_requests"] == [plan["request"]]
+    with pytest.raises(AcquisitionError) as error:
+        svc.fetch(later, offline=True)
+    assert error.value.code == "OFFLINE"
+
+
+def test_environment_cache_reuses_verified_stored_inspection(tmp_path, monkeypatch):
+    from sim.data_acquisition import service as service_module
+    from sim.tests.data_acquisition_helpers import eop
+
+    svc = service(tmp_path, FakeNetwork([eop()]))
+    request = {
+        "provider": "celestrak",
+        "product": "eop",
+        "start": "2024-01-10T00:00:00Z",
+        "stop": "2024-01-11T00:00:00Z",
+    }
+    first = svc.fetch(request)
+    monkeypatch.setattr(
+        service_module,
+        "inspect_bytes",
+        lambda *_args, **_kwargs: pytest.fail("cache hit reparsed retained bytes"),
+    )
+    plan = svc.plan(request)
+    assert plan["cached_artifacts"] == first["artifacts"]
+    assert plan["missing_requests"] == []
+
+
+def test_environment_fetch_rejects_snapshot_without_requested_coverage(tmp_path):
+    from sim.tests.data_acquisition_helpers import eop
+
+    svc = service(tmp_path, FakeNetwork([eop()]))
+    request = {
+        "provider": "celestrak",
+        "product": "eop",
+        "start": "2024-01-20T00:00:00Z",
+        "stop": "2024-01-21T00:00:00Z",
+    }
+    with pytest.raises(AcquisitionError) as error:
+        svc.fetch(request)
+    assert error.value.code == "COVERAGE_MISSING"
+    assert svc.store.receipts() == []
+
+
 def test_history_queries_batch_objects_and_keep_publication_cutoff(tmp_path):
     svc, network = configured(tmp_path, [[gp(1), gp(2)]])
     value = svc.fetch(history(object_ids=[1, 2], published_before="2024-01-12T00:00:00Z"))

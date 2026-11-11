@@ -5,6 +5,12 @@ from typing import Any
 
 import numpy as np
 
+# Scalar Julian dates lose a few tens of microseconds when converted to
+# relative seconds through binary64 arithmetic at modern epochs.  Callers that
+# derive their partition times from scalar JDs should use this accommodation;
+# exact TAI-second workflows may continue to request zero tolerance.
+JULIAN_DATE_BOUNDARY_TOLERANCE_S = 1.0e-4
+
 
 @dataclass(frozen=True)
 class ObservationPartition:

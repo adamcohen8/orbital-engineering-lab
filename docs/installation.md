@@ -14,7 +14,7 @@ No Python 3.10 managed bundle or clean-audit claim is provided. See
 
 ## Managed Installation
 
-The v0.36.0 managed bundle is qualified for macOS arm64 with CPython 3.11.
+The v1.0.0 managed bundle is qualified for macOS arm64 with CPython 3.11.
 The signed bootstrap selects that installed Python minor, downloads the
 versioned GitHub bundle, verifies its manifest and every dependency wheel,
 and installs without consulting a package index. Install CPython 3.11 first
@@ -24,24 +24,26 @@ for those other targets. Linux, Windows, and Intel Mac users should follow
 [Developer Source Installation](#developer-source-installation) and
 [Building public native source](native-source-build.md).
 
-For an existing v0.31.0 through v0.35.0 managed installation, rerun the official
-installer below with the same data and config roots. Use `--profile <profile>`
-to retain a nondefault dependency profile. The v0.36 trust transition uses the
-new installer to verify the signed source/runtime inventories and
-publish the trusted launcher. Earlier updaters predate this provisioning
-contract. Workspace files and pins remain unchanged. Older engines remain on
-disk for inspection; releases without signed inventories cannot serve as
-authenticated rollback targets under the new launcher.
+For an existing v0.36.0 managed installation, the signed-inventory trust
+boundary is already established and `oel update install latest` can perform the
+v1.0.0 update. For a v0.31.0 through v0.35.0 installation, rerun the official
+installer below with the same data and config roots before updating. Use
+`--profile <profile>` to retain a nondefault dependency profile. The installer
+verifies the signed source/runtime inventories and publishes the trusted
+launcher. Earlier updaters predate this provisioning contract. Workspace files
+and pins remain unchanged. Older engines remain on disk for inspection;
+releases without signed inventories cannot serve as authenticated rollback
+targets under the new launcher.
 
-After this migration, the v0.36 managed launcher supports the ordinary
+After this migration, the v1.0 managed launcher supports the ordinary
 `oel update install latest` and explicit activation workflow.
 
 An official public release publishes a small `install.sh`, `install.ps1`,
 signed `release-manifest.json`, source artifact, and offline bundle as immutable
 assets on the public OEL GitHub release. The stable convenience URL below
 resolves to the installer asset on the latest promoted public release. Never
-pipe an uninspected URL from a third party. Managed OEL Pro installation is a
-separate, deferred distribution decision and does not use the public feed.
+pipe an uninspected URL from a third party. OEL v1.0 has one local edition.
+Install profiles select dependencies; they do not activate features.
 
 POSIX:
 
@@ -425,5 +427,5 @@ open and offers retry; details are recorded in the managed cache's
 fails, the selector asks you to close and reopen Trainer.
 
 This integration is for official managed public desktop installations. Source
-checkouts, developer installations, Pro installations, and the web preview do not
+checkouts, developer installations, and the web preview do not
 automatically check or install updates from the game.

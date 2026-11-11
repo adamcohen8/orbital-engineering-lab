@@ -1,4 +1,4 @@
-"""Stable public API and CLI for bounded CCSDS TDM orbit determination."""
+"""Public orbit determination API and bounded CCSDS TDM CLI."""
 
 from __future__ import annotations
 
@@ -31,6 +31,12 @@ from sim.interchange.ccsds_tdm import (
     validate_tdm,
     write_tdm_kvn,
 )
+from sim.pro_tracking_od.precision import (
+    PrecisionOrbitModel,
+    PrecisionOrbitPredictor,
+    fit_precision_orbit,
+    predict_precision_orbit,
+)
 from sim.tracking_data import NORMALIZED_TRACKING_DATASET_SCHEMA, normalize_tdm_tracking_dataset
 
 __all__ = [
@@ -44,14 +50,18 @@ __all__ = [
     "TdmMetadata",
     "TdmObservation",
     "TdmSegment",
+    "PrecisionOrbitModel",
+    "PrecisionOrbitPredictor",
     "TrackingOdError",
     "TrackingOdProblem",
     "TrackingStation",
     "assess_tdm_orbit_determination",
     "compare_tdm",
+    "fit_precision_orbit",
     "inspect_tdm",
     "normalize_tdm_tracking_dataset",
     "parse_tdm_kvn",
+    "predict_precision_orbit",
     "read_tdm_kvn",
     "serialize_tdm_kvn",
     "validate_tdm",

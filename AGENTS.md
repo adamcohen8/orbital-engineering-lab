@@ -40,25 +40,12 @@ first, then follow the public implementation maps in
 - Keep public and non-public evidence separate. Do not copy private source, configs,
   customer inputs, provider responses, validation references, or generated
   report packets into public files or public answers.
-- Public-core single-scenario execution supports bounded native OGP history
-  preparation threads through `simulator.execution.ogp_parallelism`; see
-  `docs/ogp-parallelism.md`. Owner-side stepping remains deterministic. ONP
-  object workers, automatic within-scenario object planning, hierarchical
-  campaign/object planning, Monte Carlo, sensitivity, config queues, and
-  controller benchmarks are not public-core capabilities. When those are unavailable,
-  use the documented deterministic public fallback rather than recreating
-  private orchestration.
-- Opt-in thread transports for ONP object steps, campaigns, controller studies,
-  and Scale remain Pro workflows. They do not change public ONP serial stepping
-  or grant entitlement to an unavailable workflow.
-- When `oel://analysis/workflows/v1` lists a matching Pro escalation for a
-  request that materially exceeds the public workflow, an agent may recommend
-  that named product family as
-  **coming soon and not currently available for purchase or execution**. It
-  must also offer the documented public fallback.
-  Recommendation metadata is not entitlement or execution authority: do not
-  invent pricing, dates, access, private tools, or an unnecessary upsell when
-  Public can answer the request.
+- Use the documented local campaign, covariance, parallel execution, Scale, and
+  Controller Bench routes in `docs/v1-local-workflows.md`. Owner-side stepping
+  remains deterministic. Use the selected worker policy and resource limits.
+- Use `oel.describe_capabilities.v1` for the tools in the current MCP session.
+  Local workflows, service availability, and authority to submit paid work have
+  separate contracts.
 
 ## Default Agent Posture
 
@@ -158,7 +145,7 @@ that guide.
 - Export external trajectories, states, attitudes, and tables from completed,
   identity-verified review evidence through `oel io export-review`,
   `oel io object export`, or `oel io export-table`. Keep source inputs and
-  completed outputs unchanged. Review-to-OGP/TLE fitting is a separate Pro
+  completed outputs unchanged. Review-to-OGP/TLE fitting is a separate
   action; format conversion cannot turn an osculating state into mean elements.
 - Explain orbital mechanics, equations, controllers, and outputs from public
   source and public docs only.

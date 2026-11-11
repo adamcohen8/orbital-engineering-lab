@@ -21,7 +21,7 @@ from sim.review.generated_artifacts import clear_generated_review_artifacts
 from sim.utils.frames import eci_relative_to_ric_rect
 
 REVIEW_SCHEMA_VERSION = "0.13"
-REVIEW_SCHEMA_COMPATIBILITY_POLICY = "pre_1_0_additive"
+REVIEW_SCHEMA_COMPATIBILITY_POLICY = "stable_1_x_additive"
 REVIEW_SCHEMA_STABLE_TABLES = (
     "run_metadata",
     "objects",
@@ -3010,7 +3010,10 @@ def _write_schema_json(path: Path, *, generated_utc: str, db_path: Path | None =
             "breaking_change_requires_schema_version_bump": True,
             "reader_guidance": (
                 "Prefer table/column discovery through this schema and ReviewWorkspace.schema(); "
-                "new tables or nullable columns may be added before 1.0."
+                "OEL 1.x preserves existing stable table/column names, units and meanings; "
+                "new tables or nullable columns may be added. Schema versions are independent "
+                "of the OEL release version; a schema bump alone does not permit removing "
+                "the supported 1.x read contract."
             ),
         },
         "tables": {

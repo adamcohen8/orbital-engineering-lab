@@ -1,0 +1,48 @@
+{
+  "schema_version": "oel.pro_slr_od_problem.v1",
+  "name": "synthetic-ilrs-crd-v2-three-way-evidence",
+  "object_id": "TESTSAT",
+  "crd_path": "synthetic_crd_v2.np2",
+  "station_catalog": {
+    "WETL": {
+      "ecef_m": [4075576.8, 931785.5, 4801583.6],
+      "coordinate_frame": "ITRF_approximate",
+      "coordinate_epoch": null,
+      "source_url": "https://ilrs.gsfc.nasa.gov/network/stations/active/WETL_station_info.html",
+      "quality": "synthetic_fixture_using_official_site_approximate_position"
+    }
+  },
+  "template_tle": {
+    "line1": "1 25544U 98067A   24001.00000000  .00016717  00000+0  10270-3 0  9003",
+    "line2": "2 25544  51.6416  43.6012 0005423  52.3066  50.1234 15.50000000  1004",
+    "require_checksum": false
+  },
+  "windows": {
+    "fit_duration_s": 700.0,
+    "validation_duration_s": 300.0,
+    "holdout_duration_s": 300.0
+  },
+  "batch": {
+    "estimate_station_biases": true,
+    "station_bias_prior_sigma_km": 0.25,
+    "max_nfev": 40,
+    "robust_loss": "linear",
+    "robust_f_scale": 2.0,
+    "sigma_clip_threshold": null
+  },
+  "sequential": {
+    "initial_covariance_eci": [
+      [1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+      [0.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+      [0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+      [0.0, 0.0, 0.0, 0.000001, 0.0, 0.0],
+      [0.0, 0.0, 0.0, 0.0, 0.000001, 0.0],
+      [0.0, 0.0, 0.0, 0.0, 0.0, 0.000001]
+    ],
+    "step_s": 20.0,
+    "j2": true,
+    "process_noise_model": "white_acceleration",
+    "spectral_density": [1e-12, 1e-12, 1e-12],
+    "innovation_gate_probability": 0.999
+  }
+}

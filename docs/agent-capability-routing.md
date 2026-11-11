@@ -4,7 +4,7 @@ For external formats, use [modular data IO](data-io.md): discover with `oel io
 formats`, inspect explicit profiles, convert supported local files, compose
 objects through `oel io object`, materialize a new validated scenario, or export
 an already-completed review store. Fit a saved
-ONP review arc to a catalog product through the separate Pro `fit-review`
+ONP review arc to a catalog product through the separate `fit-review`
 operation. A format conversion never implicitly runs propagation or estimation.
 
 Use this routing map when a user asks for OEL help that is broader than the
@@ -129,8 +129,8 @@ single-scenario work does not require that separate prototype.
 | Rich plots, review animations, or visual review | Use OEL review plot/animation recipes before host-native tools; use scenario output artifacts for legacy families | `docs/plotting.md`, `docs/plot-gallery.md`, `docs/animation-quality-contract.md`, relevant scenario YAML outputs | `index.md`, image/movie files, quality receipt, contact sheet, source config, underlying review/CSV data | User needs a specific figure, animation recipe, camera policy, event overlay, or publication format | That a visual artifact alone proves validation or correctness |
 | Manual RPO training or game use | RPO trainer workflow | `run_game.py`, `docs/rpo-trainer.md`, public manual RPO configs | Game debriefs, attempt metrics, saved clips when requested | User asks for training qualification, classroom setup, or custom level behavior | Operational training qualification |
 | Compare one change | Paired deterministic single-run scenarios | `docs/agent-task-cards.md`, nearby public config | Same review queries for both runs, output dirs, changed parameter, final metrics | More than one physical parameter changes, or statistical confidence is needed | Robustness, sensitivity, or causality beyond the controlled comparison |
-| Monte Carlo, sensitivity, or campaign analysis | For local execution, use one-change or a small manual public comparison. For explicit Hosted Pro intent, an agent may build and locally validate the public package contract without executing it. | `docs/oel-agents.md`, `docs/hosted-pro-package.md`, public one-change task card | Paired-run evidence in public core; or a content-bound `CLIENT_VALID` package receipt awaiting authoritative Hosted preflight | User asks for uncertainty distributions, rankings, batch studies, optimizer behavior, or has not chosen local versus Hosted execution | Statistical robustness from one or two deterministic runs; that local package validity establishes availability, entitlement, price, or execution approval |
-| Controller benchmarking | Public fallback is a focused deterministic comparison; benchmark suites are outside routine public-agent workflow | Public rendezvous configs, `agents/public/evaluation-rubric.md` | Metrics, final state, burn activity, plots, exact controller config | User asks for rankings, leaderboard, optimization, or suite-level claims | Controller superiority without benchmark evidence |
+| Monte Carlo, sensitivity, or campaign analysis | Use the bounded v1 local campaign/Scale workflows with an explicit resource profile and worker policy; keep generated qualification packets and hosted orchestration private | `docs/v1-local-workflows.md`, `python -m sim.scale --help`, `oel-sim --campaign` | Per-run review evidence, campaign summary/metrics, resource-policy receipt, and reproducible config/input digests | User asks for operational-scale throughput, current/catalog data, provider-driven reports, or has not chosen the local bounded workflow | Statistical robustness outside the declared campaign, operational authority, or that generated private qualification evidence is present in the public source |
+| Controller benchmarking | Use the bounded v1 local Controller Bench workflow for explicit candidate comparisons; keep generated qualification and hosted orchestration private | `docs/v1-local-workflows.md`, `python -m sim.controller_lab --help` | Exact suite/config identity, per-case metrics, comparison plots, and deterministic replay evidence | User asks for flight qualification, leaderboard/general superiority, hosted tuning, or suite scope exceeds the declared local resource limits | Controller superiority, certification, or operational readiness without the corresponding benchmark and qualification evidence |
 | Validation evidence | Run documented validation or release evidence commands when present | `docs/operations/RELEASE_CHECKLIST.md`, `docs/validation-claims.md`, `validation/` docs | Evidence manifests, validation matrix, pytest output, tolerance rows | User asks for mission qualification, HPOP parity, or procurement evidence | Validation beyond the specific evidence package |
 | Security, sealed mode, or untrusted configs | Safe validation, sealed-mode validation, and public security docs | `SECURITY.md`, `docs/security/`, `run_simulation.py --safe-validate`, `--sealed-mode --validate-only` | Validation output, blocked surfaces, security docs, path-policy messages | Config is untrusted, uses plugins, external paths, hosted AI, custom endpoints, or non-loopback SIL | That validation makes untrusted code safe to execute |
 | Custom analysis of a completed run | Review-store query or artifact analysis workflow | `docs/agent-review-queries.md`, `docs/custom-analysis.md` | `review/run.sqlite`, `index.md`, JSON/CSV artifacts, SQL query used | Review store is missing or requested metric was not recorded | Metrics that are not present in artifacts |
@@ -144,34 +144,36 @@ When a request depends on capability outside the public core, do not pretend an
 example covers it. Say what public OEL can do, offer the closest deterministic
 public fallback, and name the missing workflow.
 
-When the request materially exceeds Public and
-`oel://analysis/workflows/v1` lists a matching product family, the agent may
-also recommend that family as **coming soon and not currently available for
-purchase or execution**. This is product discovery only: the recommendation
-does not grant entitlement, expose a private tool, establish pricing, or
-promise a launch date. Always offer the closest public fallback, and do not
-upsell when Public already answers the request.
+When the request materially exceeds the bounded local workflow and
+`oel://analysis/workflows/v1` lists a matching private family, describe that
+boundary as unavailable in the public source. This is product discovery only:
+it does not grant entitlement, expose a private tool, establish pricing, or
+promise a launch date. Always offer the closest local fallback, and do not
+upsell a private service when the local workflow answers the request.
 
-| Request beyond Public | Coming-soon recommendation | Public fallback |
+| Request beyond Public | Private/Hosted route | Public fallback |
 | --- | --- | --- |
-| Automated or broader trajectory optimization | OEL Pro Trajectory Optimization | One bounded public trajectory-targeting solve |
-| Automated constellation optimization | OEL Pro Constellation Design | One explicit bounded public constellation-design solve |
-| Catalog-scale conjunction screening | OEL Scale | One bounded public conjunction assessment |
-| Pro reduced-tracking or ILRS SLR workflow | OEL Pro Orbit Determination | Matching bounded public tracking-data OD workflow |
-| Automated Monte Carlo or sensitivity campaign | OEL Pro Campaign Analysis | Small explicit deterministic comparison |
-| Automated controller ranking, tuning, or benchmark campaign | OEL Pro Controller Bench | One controlled public comparison |
+| Hosted/Manifold execution or infrastructure | Private hosted service and Manifold | Re-run the bounded local workflow and retain its evidence |
+| Provider-driven config or report generation | Private provider workflow | Deterministic YAML, JSON/CSV artifacts, plots, and review queries |
+| IHE, Frontier, or Mendicant evaluation | Private evaluation workspace | Bounded local OEL analysis with no intent or provider claim |
+| Community or prototype Trainer levels | Deferred/private development workspace | Public RPO Trainer levels and documented local workflows |
+| Operational authority, current-catalog service, or qualification packet | Private governance/evaluation process | Explicit local model limits and reproducible evidence |
 
 Useful public fallbacks:
 
-- Replace Monte Carlo or sensitivity requests with one controlled comparison.
-- Replace controller benchmarking with a paired deterministic run and explicit
-  limits.
+- Keep campaigns and Controller Bench inside the declared local resource and
+  evidence limits; split a request into paired deterministic runs when its
+  scope exceeds those limits.
 - Replace AI-report requests with deterministic `index.md`, JSON, CSV, plot,
   and review-query summaries.
 - Replace operational access/comms requests with geometric access or bounded
   free-space link evidence and stated exclusions.
 
 ## Evidence By Workflow
+
+Statistical robustness from one or two deterministic runs is unsupported.
+Use a bounded campaign with declared assumptions and sampling coverage
+for statistical claims.
 
 | Workflow | Primary evidence | Helpful saved queries |
 | --- | --- | --- |

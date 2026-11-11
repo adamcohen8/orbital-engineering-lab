@@ -15,6 +15,13 @@ On a connected verification host, inspect the bundle inventory, verify the
 published bundle digest through the approved out-of-band channel, and transfer
 it using local policy. On the target host:
 
+Before the first direct install on a target, verify the bundled
+`trusted-release-keys.json` through the same approved channel and place it at
+`trusted-release-keys.json` beneath the selected OEL config root. The config
+root is the platform default unless `--config-root` is supplied. The
+`--public-keys` argument below may point to that file, but an explicit key-file
+argument does not replace or initialize the external trust anchor.
+
 ```text
 oel update install-bundle <oel-public-version.bundle.zip> --public-keys <trusted-release-keys.json>
 oel update activate <version>
@@ -27,11 +34,10 @@ devices, duplicate members, excessive expansion, signature failure, hash/size
 mismatch, wrong platform, unsupported Python, and source/manifest version
 mismatch are rejected before activation.
 
-For Pro bundles, also supply the offline license and its separate public-key
-registry. Expired licenses and versions outside `allowed_versions` are
-rejected. External runtimes such as cFS, MATLAB, GPU drivers, or ML stacks are
-reported as qualified prerequisites; their absence does not broaden core
-claims or cause the updater to fabricate replacements.
+The v1 local edition does not require a product license or activation. External
+runtimes such as cFS, MATLAB, GPU drivers, or ML stacks are reported as
+qualified prerequisites; their absence does not broaden core claims or cause
+the updater to fabricate replacements.
 
 Rollback and cleanup are local operations. Retain at least the current and
 previous engine, every workspace-pinned engine, the signed bundle, and its

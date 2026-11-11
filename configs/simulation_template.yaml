@@ -359,6 +359,28 @@ outputs:
     speed_multiple: 5.0
     frame_stride: 2
     draw_earth_map: true
+  monte_carlo:
+    save_iteration_summaries: true
+    save_aggregate_summary: true
+    save_histograms: true
+    save_ops_dashboard: true
+    save_raw_runs: false
+    baseline_summary_json: ''
+    success_termination_reasons:
+    - rocket_orbit_insertion
+    catastrophic_failure_reasons:
+    - terminated_early:earth_impact
+    require_rocket_insertion: false
+    gates:
+      min_closest_approach_km: 0.25
+      max_duration_s: 5400.0
+      max_total_dv_m_s: 250.0
+      max_guardrail_events: 10
+      metric_gates:
+      - name: peak_g_load
+        metric: summary.reentry_summary_by_object.capsule.peak_g_load
+        op: <=
+        value: 8.0
   review:
     enabled: true
     detail: standard
@@ -366,3 +388,10 @@ outputs:
     max_history_memory_mb: 1024
     checkpoint_enabled: true
     throttle_enabled: true
+analysis:
+  enabled: false
+  study_type: sensitivity
+  metrics:
+  - final_state
+  - name: peak_heat_rate
+    path: summary.reentry_summary_by_object.capsule.peak_heat_rate_w_m2

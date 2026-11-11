@@ -1,12 +1,17 @@
 # Payload And Artifact Contract
 
-This document defines the 0.5 contract for simulation payloads, summaries, and
+This document defines the OEL 1.x contract for simulation payloads, summaries, and
 output artifacts. It focuses on single-run payloads and the public review
-surface. Batch/campaign payloads are included only at a high level because their
-full schemas remain Pro/private maturity work.
+surface, while the v1 local edition also publishes bounded batch/campaign
+schemas and review tables. Hosted orchestration, provider-driven reports, and
+generated qualification packets remain private-service or governance surfaces.
 
 
 ## Stability Level
+
+The [compatibility policy](../compatibility-policy.md) governs supported fields,
+independent schema versions, and corrections. Explicitly versioned campaign
+products retain their own contracts; undocumented debug extensions do not.
 
 Stable enough to rely on:
 
@@ -366,9 +371,10 @@ These wrappers are part of the intended public API. If payload keys change,
 wrappers should either preserve compatibility or receive release-note coverage
 and focused tests.
 
-Private Pro workflow helpers such as controller-bench execution, Monte Carlo
-custom-metric runners, parameter sweeps, and AI report/config helpers are
-documented separately in the private Pro Python API guide.
+Local workflow helpers such as Controller Bench execution, bounded Monte Carlo
+custom-metric runners, and parameter sweeps are documented in the v1 local
+workflow guides. Provider-driven AI report/config helpers remain private
+service workflows.
 
 
 ## Batch And Campaign Payloads
@@ -385,9 +391,10 @@ Batch payloads may include:
 - sensitivity rankings,
 - AI report artifacts.
 
-These are Pro/private workflow surfaces in 0.4. They are real and tested, but
-their complete schema is not yet a public-core contract. Campaign and benchmark
-schema stabilization should happen in a dedicated benchmark/campaign contract.
+These are bounded local workflow surfaces in the OEL 1.x compatibility contract.
+They are real and tested, but the complete benchmark/campaign schema remains a
+separate contract document. Provider-driven AI report artifacts and hosted
+retention remain private-service surfaces.
 
 
 ## Compatibility Rules

@@ -917,6 +917,9 @@ def test_trusted_dispatcher_refuses_source_or_runtime_tamper_before_execve(
 ) -> None:
     """The external preflight blocks tampered inputs without starting code."""
 
+    # The in-process dispatcher prepends its verifier bundle before execve.
+    # Restore the complete import path even if an assertion interrupts the test.
+    monkeypatch.setattr(sys, "path", list(sys.path))
     private, public = lane04_signing_keys
     original_cwd = Path.cwd()
     monkeypatch.chdir(original_cwd)
@@ -930,7 +933,7 @@ def test_trusted_dispatcher_refuses_source_or_runtime_tamper_before_execve(
     )
     assert verified["status"] == "official"
 
-    dispatcher_path, bundle = _make_dispatcher_bundle(tmp_path / "dispatcher")
+    dispatcher_path, _bundle = _make_dispatcher_bundle(tmp_path / "dispatcher")
     monkeypatch.setattr(trusted_dispatcher, "__file__", str(dispatcher_path))
     exec_calls: list[tuple[Any, ...]] = []
     monkeypatch.setattr(trusted_dispatcher.os, "execve", lambda *arguments: exec_calls.append(arguments))
@@ -994,8 +997,6 @@ def test_trusted_dispatcher_refuses_source_or_runtime_tamper_before_execve(
     assert result == 78
     assert exec_calls == []
     source_file.write_bytes(original_source)
-    while str(bundle) in sys.path:
-        sys.path.remove(str(bundle))
 
 
 def test_external_trusted_dispatcher_blocks_tampered_inputs_before_managed_exec(
@@ -1203,6 +1204,8 @@ def test_nonrevoking_key_rotation_preserves_official_preflight_and_revocation_fa
 ) -> None:
     """Existing installs survive an authorized rotation until their signer is revoked."""
 
+    # execve is mocked below, so its preparatory sys.path mutation must be local.
+    monkeypatch.setattr(sys, "path", list(sys.path))
     private, public = lane04_signing_keys
     original_cwd = Path.cwd()
     monkeypatch.chdir(original_cwd)

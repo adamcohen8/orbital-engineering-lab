@@ -43,6 +43,15 @@ def test_authoritative_installation_guide_covers_supported_platforms_and_minors(
     assert "Activation is optional" in guide
 
 
+def test_offline_installation_guide_matches_v1_single_local_edition() -> None:
+    guide = _read("docs/offline-installation.md")
+
+    assert "The v1 local edition does not require a product license or activation." in guide
+    assert "For Pro bundles" not in guide
+    assert "offline license" not in guide
+    assert "does not replace or initialize the external trust anchor" in guide
+
+
 def test_entry_onboarding_docs_keep_explicit_windows_and_posix_paths() -> None:
     onboarding_paths = ["README.md", "docs/quickstart.md"]
     if (ROOT / "docs" / "public-readme.md").is_file():

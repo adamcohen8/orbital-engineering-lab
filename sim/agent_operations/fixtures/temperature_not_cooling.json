@@ -1,0 +1,17 @@
+{
+  "schema": "oel.synthetic_temperature_playback.v1",
+  "samples": [
+    {"time_s": 0, "temperature_c": 76, "quality": "valid"},
+    {"time_s": 5, "temperature_c": 78, "quality": "valid"},
+    {"time_s": 10, "temperature_c": 80, "quality": "valid"},
+    {"time_s": 20, "temperature_c": 82, "quality": "valid"},
+    {"time_s": 30, "temperature_c": 84, "quality": "valid"},
+    {"time_s": 40, "temperature_c": 86, "quality": "valid"},
+    {"time_s": 50, "temperature_c": 87, "quality": "valid"},
+    {"time_s": 60, "temperature_c": 88, "quality": "valid"},
+    {"time_s": 70, "temperature_c": 89, "quality": "valid"},
+    {"time_s": 80, "temperature_c": 90, "quality": "valid"},
+    {"time_s": 90, "temperature_c": 91, "quality": "valid"},
+    {"time_s": 100, "temperature_c": 92, "quality": "valid"}
+  ]
+}

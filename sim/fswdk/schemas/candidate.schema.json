@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "oel.fswdk.candidate.v1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "candidate_id",
+    "revision",
+    "kind",
+    "source",
+    "interfaces",
+    "claims",
+    "verification",
+    "handling"
+  ],
+  "properties": {
+    "schema_version": {"const": "oel.fswdk.candidate.v1"},
+    "candidate_id": {"type": "string", "pattern": "^[a-z][a-z0-9_]{1,63}$"},
+    "revision": {"type": "string", "minLength": 1, "maxLength": 80},
+    "kind": {"enum": ["python_stack", "external_process", "cfs"]},
+    "source": {
+      "type": "object",
+      "required": ["root", "revision_id"],
+      "properties": {
+        "root": {"type": "string", "minLength": 1},
+        "revision_id": {"type": "string", "minLength": 1, "maxLength": 200},
+        "entrypoint": {
+          "type": "object",
+          "required": ["module", "class_name"],
+          "properties": {
+            "module": {"type": "string", "minLength": 1},
+            "class_name": {"type": "string", "minLength": 1}
+          },
+          "additionalProperties": false
+        },
+        "artifact": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "interfaces": {
+      "type": "object",
+      "required": ["onboard_contract", "hardware_profile", "task_period_s"],
+      "properties": {
+        "onboard_contract": {"type": "string", "minLength": 1},
+        "hardware_profile": {"type": "string", "minLength": 1},
+        "task_period_s": {"type": "number", "exclusiveMinimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "claims": {
+      "type": "object",
+      "required": ["intended_use", "declared_envelope"],
+      "properties": {
+        "intended_use": {"type": "string", "minLength": 1, "maxLength": 200},
+        "declared_envelope": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "verification": {
+      "type": "object",
+      "required": ["component_suite", "smoke_case", "bench_suite", "qualification_spec"],
+      "properties": {
+        "component_suite": {"type": "string", "minLength": 1},
+        "smoke_case": {"type": "string", "minLength": 1},
+        "bench_suite": {"type": "string", "minLength": 1},
+        "qualification_spec": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "handling": {
+      "type": "object",
+      "required": ["classification", "hosted_ai_allowed"],
+      "properties": {
+        "classification": {"enum": ["public", "private", "customer"]},
+        "hosted_ai_allowed": {"type": "boolean"},
+        "owner": {"type": "string", "maxLength": 200}
+      },
+      "additionalProperties": false
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"kind": {"const": "python_stack"}}},
+      "then": {"properties": {"source": {"required": ["entrypoint"]}}}
+    },
+    {
+      "if": {"properties": {"kind": {"enum": ["external_process", "cfs"]}}},
+      "then": {"properties": {"source": {"required": ["artifact"]}}}
+    }
+  ],
+  "additionalProperties": false
+}

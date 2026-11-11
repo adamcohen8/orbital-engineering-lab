@@ -28,6 +28,8 @@ def validate_generated_batch_configs(
     cfg: SimulationScenarioConfig,
     *,
     import_plugins: bool = True,
+    source_path: str | Path | None = None,
+    path_policy: Any | None = None,
 ) -> dict[str, Any]:
     strict_plugins = bool(cfg.simulator.plugin_validation.get("strict", True))
     try:
@@ -52,12 +54,16 @@ def validate_generated_batch_configs(
             prepared=prepared,
             strict_plugins=strict_plugins,
             import_plugins=import_plugins,
+            source_path=source_path,
+            path_policy=path_policy,
         )
 
     report, _validated = validate_prepared_monte_carlo_runs(
         prepared=prepared,
         strict_plugins=strict_plugins,
         import_plugins=import_plugins,
+        source_path=source_path,
+        path_policy=path_policy,
     )
     return report
 
@@ -67,6 +73,8 @@ def validate_prepared_monte_carlo_runs(
     prepared: list[dict[str, Any]],
     strict_plugins: bool,
     import_plugins: bool = True,
+    source_path: str | Path | None = None,
+    path_policy: Any | None = None,
 ) -> tuple[dict[str, Any], list[SimulationScenarioConfig | None]]:
     """Validate every sampled scenario before a Monte Carlo worker starts."""
 
@@ -76,7 +84,11 @@ def validate_prepared_monte_carlo_runs(
         iteration = int(item.get("iteration", len(validated)))
         sampled = dict(item.get("sampled_parameters", {}) or {})
         try:
-            run_cfg = scenario_config_from_dict(dict(item.get("config_dict", {}) or {}))
+            run_cfg = scenario_config_from_dict(
+                dict(item.get("config_dict", {}) or {}),
+                source_path=source_path,
+                path_policy=path_policy,
+            )
             plugin_errors = validate_scenario_plugins(run_cfg, import_plugins=import_plugins) if strict_plugins else []
         except Exception as exc:
             validated.append(None)

@@ -117,6 +117,6 @@ bit-to-byte, input-order, source confinement, source retention, and replay
 checks.
 
 See [the frozen contract](contracts/mission-scheduling-contract.md) for exact
-solver semantics, [the source-adapter contract](contracts/mission-scheduling-source-adapter-contract.md)
-for product conversion, and [Public Core And Pro Boundary](public-vs-pro.md)
-for packaging.
+solver semantics and [the source-adapter contract](contracts/mission-scheduling-source-adapter-contract.md)
+for product conversion. The local v1 edition includes these bounded workflows;
+Hosted service infrastructure and the Manifold remain private.

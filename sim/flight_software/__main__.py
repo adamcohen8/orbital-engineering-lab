@@ -91,7 +91,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     author_parser.add_argument("author_args", nargs=argparse.REMAINDER)
 
-    if (Path(__file__).resolve().parents[1] / "fswdk").is_dir():
+    if (Path(__file__).resolve().parents[1] / "fswdk" / "__main__.py").is_file():
         fswdk_parser = sub.add_parser(
             "fswdk",
             help="Run the private agent-native Flight Software Development and Verification Kit.",

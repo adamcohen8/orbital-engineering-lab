@@ -16,6 +16,9 @@ configure_runtime_caches()
 configure_headless_runtime()
 
 _EXPORTS = {
+    "validate_review_sql": "sim.review.workspace",
+    "scientific_evidence": "sim.review.scientific",
+    "read_scientific_evidence": "sim.review.scientific",
     "render_cr3bp_research": "sim.review.cr3bp",
     "load_cr3bp_history": "sim.review.cr3bp",
     "EVIDENCE_CAPSULE_MANIFEST": "sim.review.evidence_capsule",

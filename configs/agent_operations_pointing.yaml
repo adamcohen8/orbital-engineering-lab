@@ -1,0 +1,77 @@
+scenario_name: agent_operations_pointing
+scenario_description: Local Yamcs pointing exercise with ideal delivered navigation and power telemetry; unqualified custom stack.
+metadata:
+  owner: public
+  public_surface: public-example
+  support_level: experimental
+objects:
+  sat:
+    kind: satellite
+    specs:
+      mass_kg: 100.0
+      mass_properties:
+        inertia_kg_m2: [[12.0, 0.0, 0.0], [0.0, 10.0, 0.0], [0.0, 0.0, 8.0]]
+        inertia_reference_point: center_of_mass
+      thermal:
+        enabled: false
+      power:
+        enabled: true
+        panels:
+          - area_m2: 2.0
+            normal_body: [1.0, 0.0, 0.0]
+            efficiency: 0.3
+        baseline_load_w: 150.0
+        battery_capacity_wh: 50.0
+        initial_soc: 0.60
+        max_charge_w: 200.0
+        max_discharge_w: 300.0
+        charge_efficiency: 0.95
+        discharge_efficiency: 0.95
+        conversion_efficiency: 0.95
+        max_step_s: 1.0
+    initial_state:
+      position_eci_km: [7000.0, 0.0, 0.0]
+      velocity_eci_km_s: [0.0, 7.54605329, 0.0]
+      attitude_quat_bn: [1.0, 0.0, 0.0, 0.0]
+      angular_rate_body_rad_s: [0.0, 0.0, 0.0]
+    flight_software:
+      stack: fsw.attitude_reference
+      hardware_profile: hardware.reaction_wheels_magnetorquer.v1
+      task_period_s: 0.1
+      params:
+        numeric_backend: python
+        reference_mode: target
+        target_position_eci_m: [1000000000.0, 0.0, 0.0]
+        boresight_body: [1.0, 0.0, 0.0]
+        kp: 0.20
+        kd: 0.65
+        max_torque_n_m: 0.08
+        wheel_max_torque_n_m: [0.08]
+        wheel_max_momentum_n_m_s: [3.0]
+simulator:
+  duration_s: 3600.0
+  dt_s: 1.0
+  initial_jd_utc: 2461315.5
+  dynamics:
+    orbit:
+      model: two_body
+      orbit_substep_s: 1.0
+    attitude:
+      enabled: true
+      attitude_substep_s: 0.05
+  environment:
+    sun_pos_eci_km: [149597870.7, 0.0, 0.0]
+    srp_shadow_model: conical
+  termination:
+    earth_impact_enabled: false
+outputs:
+  output_dir: outputs/agent_operations_pointing
+  mode: save
+  stats:
+    print_summary: false
+  plots:
+    enabled: false
+    figure_ids: []
+  animations:
+    enabled: false
+    types: []

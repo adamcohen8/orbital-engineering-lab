@@ -1,0 +1,93 @@
+scenario_name: cfs_sil_single_sat
+metadata:
+  owner: public
+  public_surface: public-example
+  support_level: experimental
+  notes: Config-driven single-satellite cFS SIL bridge demo. Run a cFS or mock endpoint
+    on 127.0.0.1:50101 before running this scenario.
+objects:
+  target:
+    enabled: true
+    role: target
+    specs:
+      mass_kg: 300.0
+      dry_mass_kg: 300.0
+    initial_state:
+      coes:
+        a_km: 6778.0
+        ecc: 0.0
+        inc_deg: 28.5
+        raan_deg: 0.0
+        argp_deg: 0.0
+        true_anomaly_deg: 0.0
+      attitude_quat_bn:
+      - 1.0
+      - 0.0
+      - 0.0
+      - 0.0
+      angular_rate_body_rad_s:
+      - 0.0
+      - 0.0
+      - 0.0
+    kind: satellite
+    flight_software:
+      module: integrations.cfs_sil.v2_codec
+      class_name: CfsV2UdpFlightSoftwareAdapter
+      hardware_profile: hardware.ideal_wrench.v1
+      task_period_s: 0.01
+      params:
+        satellite_id: target
+        implementation_hash: 56a4d434d02c0e3b53c1781d615ea7666b08328bd32fcfb38eca9e8729419724
+        bind_host: 127.0.0.1
+        bind_port: 50100
+        cfs_host: 127.0.0.1
+        cfs_port: 50101
+        timeout_s: 1.0
+        checkpointable: false
+        actuator_id: wrench
+simulator:
+  duration_s: 180.0
+  dt_s: 0.2
+  dynamics:
+    orbit:
+      model: two_body
+      orbit_substep_s: 0.2
+      j2: false
+      j3: false
+      j4: false
+      drag: false
+      srp: false
+    attitude:
+      enabled: true
+      attitude_substep_s: 0.2
+      disturbance_torques:
+        gravity_gradient: false
+        magnetic: false
+        drag: false
+        srp: false
+    rocket:
+      enabled: false
+  environment:
+    ephemeris_mode: analytic_simple
+  plugin_validation:
+    strict: true
+  termination:
+    earth_impact_enabled: true
+    earth_radius_km: 6378.137
+outputs:
+  output_dir: outputs/cfs_sil_single_sat
+  mode: save
+  stats:
+    enabled: true
+    print_summary: true
+    save_json: true
+    save_csv: true
+    save_full_log: true
+  plots:
+    enabled: true
+    figure_ids:
+    - orbit_eci
+    - control_effort
+  animations:
+    enabled: false
+    types: []

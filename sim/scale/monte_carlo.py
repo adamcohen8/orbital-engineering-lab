@@ -1,0 +1,104 @@
+"""Compatibility façade for Scale Monte Carlo workflows."""
+
+from __future__ import annotations
+
+import hashlib as hashlib
+import json as json
+import os as os
+import time as time
+from concurrent.futures import ProcessPoolExecutor as ProcessPoolExecutor
+from dataclasses import replace as replace
+from pathlib import Path as Path
+from typing import Any as Any
+
+import numpy as np  # noqa: F401 - historical module attribute
+
+from sim.dynamics.orbit.sgp4 import sgp4_propagate_teme_batch_numba as sgp4_propagate_teme_batch_numba
+from sim.dynamics.orbit.sgp4 import sgp4_propagate_teme_batch_reference as sgp4_propagate_teme_batch_reference
+from sim.dynamics.orbit.tle import parse_tle_lines as parse_tle_lines
+from sim.scale.campaign_execution import build_campaign_trial_result as build_campaign_trial_result
+from sim.scale.campaign_execution import load_worker_scale_planner_config as load_worker_scale_planner_config
+from sim.scale.monte_carlo_batch_parity import (
+    _attach_numba_chunked_propagation_summaries as _attach_numba_chunked_propagation_summaries,
+)
+from sim.scale.monte_carlo_batch_parity import _batch_parity_trial_payload as _batch_parity_trial_payload
+from sim.scale.monte_carlo_batch_parity import _build_batch_propagation_parity as _build_batch_propagation_parity
+from sim.scale.monte_carlo_batch_parity import _chunked_propagation_payload as _chunked_propagation_payload
+from sim.scale.monte_carlo_batch_parity import _propagation_time_grid as _propagation_time_grid
+from sim.scale.monte_carlo_batch_parity import _updated_product_refs as _updated_product_refs
+from sim.scale.monte_carlo_batch_parity import _with_numba_chunked_error as _with_numba_chunked_error
+from sim.scale.monte_carlo_batch_parity import _with_propagation_summary as _with_propagation_summary
+from sim.scale.monte_carlo_batch_parity import (
+    _write_batch_propagation_parity_artifact as _write_batch_propagation_parity_artifact,
+)
+from sim.scale.monte_carlo_execution import DEFAULT_NUMBA_CHUNK_DURATION_S as DEFAULT_NUMBA_CHUNK_DURATION_S
+from sim.scale.monte_carlo_execution import PROPAGATION_SUMMARY_BACKENDS as PROPAGATION_SUMMARY_BACKENDS
+from sim.scale.monte_carlo_execution import _latest_results_by_trial as _latest_results_by_trial
+from sim.scale.monte_carlo_execution import _monte_carlo_run_id as _monte_carlo_run_id
+from sim.scale.monte_carlo_execution import _monte_carlo_run_telemetry as _monte_carlo_run_telemetry
+from sim.scale.monte_carlo_execution import _normalize_parallel_backend as _normalize_parallel_backend
+from sim.scale.monte_carlo_execution import (
+    _normalize_propagation_summary_backend as _normalize_propagation_summary_backend,
+)
+from sim.scale.monte_carlo_execution import _parallel_cpu_trial_results as _parallel_cpu_trial_results
+from sim.scale.monte_carlo_execution import _parallel_cpu_trial_worker as _parallel_cpu_trial_worker
+from sim.scale.monte_carlo_execution import _pending_trials as _pending_trials
+from sim.scale.monte_carlo_execution import (
+    _propagation_summary_telemetry_from_results as _propagation_summary_telemetry_from_results,
+)
+from sim.scale.monte_carlo_execution import _resolved_chunk_duration_s as _resolved_chunk_duration_s
+from sim.scale.monte_carlo_execution import _run_monte_carlo_execution as _run_monte_carlo_execution
+from sim.scale.monte_carlo_execution import _thread_pool_trial_results as _thread_pool_trial_results
+from sim.scale.monte_carlo_execution import _thread_pool_trial_worker as _thread_pool_trial_worker
+from sim.scale.monte_carlo_execution import run_monte_carlo_campaign as run_monte_carlo_campaign
+from sim.scale.monte_carlo_execution import run_monte_carlo_parallel_cpu as run_monte_carlo_parallel_cpu
+from sim.scale.monte_carlo_execution import run_monte_carlo_serial as run_monte_carlo_serial
+from sim.scale.monte_carlo_execution import run_monte_carlo_threaded as run_monte_carlo_threaded
+from sim.scale.monte_carlo_planning import _apply_derived_parameters as _apply_derived_parameters
+from sim.scale.monte_carlo_planning import _campaign_warnings as _campaign_warnings
+from sim.scale.monte_carlo_planning import _digest as _digest
+from sim.scale.monte_carlo_planning import _execution_contract as _execution_contract
+from sim.scale.monte_carlo_planning import _run_artifact_stem as _run_artifact_stem
+from sim.scale.monte_carlo_planning import _run_id_suffix as _run_id_suffix
+from sim.scale.monte_carlo_planning import _sample_parameter as _sample_parameter
+from sim.scale.monte_carlo_planning import _sample_trial_parameter_sets as _sample_trial_parameter_sets
+from sim.scale.monte_carlo_planning import _trial_record as _trial_record
+from sim.scale.monte_carlo_planning import _trial_result as _trial_result
+from sim.scale.monte_carlo_planning import build_monte_carlo_campaign as build_monte_carlo_campaign
+from sim.scale.monte_carlo_quality import _coerce_float as _coerce_float
+from sim.scale.monte_carlo_quality import _evaluate_quality_gates as _evaluate_quality_gates
+from sim.scale.monte_carlo_quality import _quality_check as _quality_check
+from sim.scale.monte_carlo_reporting import _extract_numeric_metric as _extract_numeric_metric
+from sim.scale.monte_carlo_reporting import _format_summary_value as _format_summary_value
+from sim.scale.monte_carlo_reporting import _numeric_stats as _numeric_stats
+from sim.scale.monte_carlo_reporting import _render_serial_summary_markdown as _render_serial_summary_markdown
+from sim.scale.monte_carlo_reporting import _serial_metric_stats as _serial_metric_stats
+from sim.scale.monte_carlo_reporting import _serial_non_claims as _serial_non_claims
+from sim.scale.monte_carlo_reporting import _summary_metric_names as _summary_metric_names
+from sim.scale.monte_carlo_reporting import _write_campaign_manifest as _write_campaign_manifest
+from sim.scale.monte_carlo_reporting import _write_serial_run_manifest as _write_serial_run_manifest
+from sim.scale.monte_carlo_reporting import _write_serial_run_summary as _write_serial_run_summary
+from sim.scale.planner import ScalePlannerConfig as ScalePlannerConfig
+from sim.scale.planner import load_scale_planner_config as load_scale_planner_config
+from sim.scale.planner import resolve_selected_object_ids as resolve_selected_object_ids
+from sim.scale.store import CampaignTrialResultRecord as CampaignTrialResultRecord
+from sim.scale.store import SensitivityCampaignRecord as SensitivityCampaignRecord
+from sim.scale.store import SensitivityTrialRecord as SensitivityTrialRecord
+from sim.scale.store import load_campaign_trial_results as load_campaign_trial_results
+from sim.scale.store import load_current_tle_states as load_current_tle_states
+from sim.scale.store import load_sensitivity_trials as load_sensitivity_trials
+from sim.scale.store import write_campaign_trial_results as write_campaign_trial_results
+from sim.scale.store import write_sensitivity_campaign as write_sensitivity_campaign
+from sim.scale.trial_builders import fit_payload_to_elements as fit_payload_to_elements
+from sim.utils.parallel import restore_env_vars as restore_env_vars
+from sim.utils.parallel import set_parallel_worker_thread_limits as set_parallel_worker_thread_limits
+
+attach_numba_chunked_propagation_summaries = _attach_numba_chunked_propagation_summaries
+campaign_run_telemetry = _monte_carlo_run_telemetry
+evaluate_quality_gates = _evaluate_quality_gates
+latest_results_by_trial = _latest_results_by_trial
+normalize_propagation_summary_backend = _normalize_propagation_summary_backend
+pending_trials = _pending_trials
+resolved_chunk_duration_s = _resolved_chunk_duration_s
+serial_metric_stats = _serial_metric_stats
+summary_metric_names = _summary_metric_names

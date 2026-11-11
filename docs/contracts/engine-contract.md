@@ -12,17 +12,17 @@ The contract applies to:
 - `SimulationSession` and public API single-run execution,
 - deterministic single-run scenarios used by validation and examples.
 
-Batch workflows such as Monte Carlo, sensitivity, and controller benchmarking
-reuse the same scenario model and single-run machinery where possible, but their
-orchestration and artifact contracts are still Pro/private surfaces and are not
-fully covered here.
+Local Monte Carlo, sensitivity, and Controller Bench workflows reuse the
+scenario model and single-run engine. Their orchestration and artifacts fall
+outside this contract.
 
 
 ## Stability Level
 
-This is a 0.4 contract. It is meant to document intended behavior, not freeze
-every implementation detail permanently. Changes that alter the observable
-contract should update this document, tests, and release notes together.
+This is the stable single-run contract for OEL 1.x. The
+[compatibility policy](../compatibility-policy.md) governs additive changes,
+deprecation, and corrections. Implementation ownership may change while
+documented entry points and behavior remain compatible.
 
 Stable enough to rely on:
 
@@ -36,8 +36,8 @@ Stable enough to rely on:
 Still maturing:
 
 - exact payload field stability beyond documented summary fields,
-- batch-analysis orchestration semantics,
-- controller-benchmark and campaign artifact schemas,
+- explicitly experimental batch/benchmark extensions beyond their published
+  versioned contracts.
 
 
 ## Canonical Entrypoints
@@ -305,7 +305,7 @@ Single-run payloads should include:
 - summary metadata,
 - plot and animation artifact paths when enabled.
 
-The summary is the primary stable review surface for 0.4. It should include:
+The summary is a stable review surface for OEL 1.x. It should include:
 
 - scenario name and description,
 - object IDs,
@@ -338,7 +338,7 @@ Internal surfaces:
 - `_SingleRunEngine` implementation details,
 - exact controller debug record contents,
 - legacy master-simulator orchestration,
-- Pro/private batch-analysis internals.
+- undocumented batch-analysis implementation details.
 
 When in doubt, prefer extending through config, presets, validated plugin
 pointers, or the public API rather than importing private helpers.
@@ -357,14 +357,14 @@ Changes should update this document when they alter:
 - public API behavior,
 - supported extension points.
 
-For pre-1.0 releases, changes may still be made, but they should be explicit in
-release notes and accompanied by focused tests.
+Preserve supported behavior throughout 1.x under the compatibility policy.
+Document numerical and security corrections with focused tests and release
+notes; version incompatible successors explicitly.
 
 
 ## Known Gaps
 
-- Batch workflow contracts are not yet fully documented.
-- Campaign and benchmark contracts are not yet as complete as the single-run,
-  scenario YAML, payload/artifact, sensitivity, and AI-report contracts.
-- Release-grade validation packages are still private maturity work, not a
-  completed public-core contract.
+- Experimental batch/benchmark extensions have only their declared maturity;
+  use the owning workflow contract for its supported envelope.
+- Generated release qualification packets remain private evidence. Public
+  validation recipes and inputs support only their documented bounded claims.

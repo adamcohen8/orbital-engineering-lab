@@ -44,35 +44,17 @@ def test_analysis_workflow_resource_routes_typed_problems_without_expanding_exec
     assert constellation["evidence"] == "oel.constellation_design_evidence.v1"
     assert constellation["authoritative_replay"] == "python -m sim.constellation_design replay"
     assert constellation["mcp_tools"] == []
-    assert constellation["pro_escalation"] == {
-        "availability": "coming_soon",
-        "capability_ids": ["constellation_design.optimization"],
-        "commercially_available": False,
-        "estimated_launch": None,
-        "execution_available": False,
-        "mcp_tools": [],
-        "product_family": "OEL Pro Constellation Design",
-        "public_fallback": "Evaluate one explicit public constellation design with bounded objectives.",
-        "recommendation_only": True,
-        "use_when": "The request requires automated constellation optimization rather than one public design solve.",
-    }
-    tracking_od = next(
-        item for item in payload["workflows"] if item["workflow_id"] == "tracking_data_orbit_determination"
-    )
-    assert tracking_od["pro_escalation"]["product_family"] == "OEL Pro Orbit Determination"
-    assert tracking_od["pro_escalation"]["capability_ids"] == [
-        "orbit_determination.reduced_tracking",
-        "orbit_determination.ilrs_slr",
-    ]
-    collection = next(item for item in payload["workflows"] if item["workflow_id"] == "collection_analysis")
-    assert "pro_escalation" not in collection
-    assert payload["routing"]["pro_recommendations_are_not_execution_authority"] is True
+    by_id = {item["workflow_id"]: item for item in payload["workflows"]}
+    assert by_id["constellation_optimization"]["interfaces"] == ["python -m sim.pro_constellation_optimization"]
+    assert "python -m sim.pro_slr_od" in by_id["local_tracking_and_slr"]["interfaces"]
+    assert "oel.run_scale_refresh_to_onp.v1" in by_id["scale_catalog"]["mcp_tools"]
+    assert "pro_escalation" not in by_id["collection_analysis"]
     assert payload["routing"]["hosted_pro_package_validator"] == "oel.hosted.validate_package.v1"
     assert payload["routing"]["hosted_pro_package_validation_is_not_execution"] is True
-    assert all(item["mcp_tools"] == [] for item in payload["cross_cutting_pro_escalations"])
+    assert payload["cross_cutting_pro_escalations"] == []
     assert '"mcp_tools": []' in workflow.text
     assert "scenario YAML or typed orbital-analysis problem" in workflow.text
-    assert "sim.pro_" not in workflow.text
+    assert "sim.intent_hypothesis" not in workflow.text
     assert "agents/pro" not in workflow.text
     assert "/Users/" not in workflow.text
 

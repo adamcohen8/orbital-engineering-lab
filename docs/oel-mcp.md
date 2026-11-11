@@ -4,7 +4,7 @@ OEL MCP is an optional interoperability adapter over documented Orbital
 Engineering Lab workflows. It does not replace `AGENTS.md`, scenario YAML, the
 CLI, Python APIs, deterministic physics, or saved evidence.
 
-The supported M5.2 surface is intentionally local. It uses the
+The supported OEL tool surface is local. It uses the
 official Python MCP SDK v2 over stdio while preserving the frozen OEL handlers,
 policy, schemas, and result envelopes. In addition to the M3 discovery and
 read-only evidence tools, it supports bounded planning, structural-first
@@ -74,7 +74,7 @@ source or contract changes with:
 ```
 
 An explicitly authorized model-backed routing fixture can additionally verify
-that Codex and Claude select OEL's professional RIC recipe from a natural-
+that Codex and Claude select OEL's flagship RIC recipe from a natural-
 language request and receive an inspectable image:
 
 ```bash
@@ -231,6 +231,7 @@ retry. MCP policy messages do not recommend unsupported CLI retention switches.
 | `oel.inspect_study.v1` | `R0_read` | Verifies and summarizes one content-bound public study bundle |
 | `oel.replay_study.v1` | `R0_read` | Recomputes a study bundle's identity and citation bindings without rerunning domain analysis |
 | `oel.compare_studies.v1` | `R0_read` | Compares study identities, root records, and evidence-step digests |
+| `oel.inspect_od_json.v1` | `R0_read` | Inspects bounded metadata and record counts in one local OD JSON artifact |
 | `oel.inspect_ccsds.v1` | `R0_read` | Parses and inspects one bounded OEM, ODM, TDM, or CDM source |
 | `oel.convert_frame_time.v1` | `R0_read` | Converts one epoch, audits one EOP source, or transforms one state/covariance |
 | `oel.fsw.describe.v1` | `R0_read` | Reports public FSW authoring templates, contracts, limits, and private boundaries |
@@ -277,8 +278,9 @@ callbacks, and progress is reported only for meaningful validation,
 execution, and evidence phases.
 
 `oel.run_agent_task.v1` accepts only recipes that are checked in, tagged
-`public`, marked `supported`, and use the ordinary scenario-run workflow. Pro,
-prototype, experimental, and specialized private workflows fail closed.
+`public`, marked `supported`, and use the ordinary scenario-run workflow.
+Hosted-only, prototype, experimental, and specialized private workflows fail
+closed.
 
 ## Public FSW Authoring
 
@@ -297,8 +299,31 @@ candidate content cannot reuse a stale approval artifact.
 
 The deterministic smoke is ordinary OEL simulation evidence, not Controller
 Bench, tuning, qualification, certification, hardware readiness, or
-operational approval. The private FSWDK and its cFS/SIL and external-process
-surfaces are not discoverable from the public registry.
+operational approval. The separate `oel.fswdk.*.v1` tools support the local FSWDK lifecycle.
+
+## Local Analysis Tools
+
+The `public_local` profile includes the following OEL tool families. Use
+`oel.describe_capabilities.v1` for exact input schemas, limits, and readiness.
+
+| Workflow | Tool IDs |
+| --- | --- |
+| Orbit determination | `oel.run_dynamics_od.v1`, `oel.run_ground_sensor_od.v1`, `oel.run_ogp_od.v1`, `oel.run_sequential_od.v1`, `oel.run_relative_od.v1`, `oel.inspect_od_json.v1` |
+| Scale | `oel.inspect_scale_catalog.v1`, `oel.plan_scale_recompute.v1`, `oel.inspect_scale_recompute_plan.v1`, `oel.validate_scale_refresh.v1`, `oel.run_scale_refresh_to_onp.v1`, `oel.inspect_scale_refresh.v1` |
+| Trajectory optimization | `oel.validate_trajectory_optimization.v1`, `oel.run_trajectory_optimization.v1`, `oel.replay_trajectory_optimization.v1` |
+| FSWDK | `oel.fswdk.*.v1` |
+| Spacecraft twin authoring | `oel.twin.*.v1` |
+
+The analysis contracts take local handling metadata. Set `release_scope` to
+`local_only`, `data_label` to `public_source_local_analysis`, and
+`hidden_truth_access` to `false`. Supply the operator grant for a write or
+execution, and the independent source-trust grant for FSWDK steps that run
+candidate code. These workflows use the installed OEL engine and local files.
+
+For clients migrating from the legacy local server, use `oel.run_relative_od.v1`
+for `oel.pro.run_relative_od.v1` and `oel.twin.*.v1` for `oel.pro.twin.*.v1`.
+Use `oel.fswdk.*.v1` for `oel.pro.fsw.*.v1`. The local Dynamics OD and OD
+inspection tool IDs appear in the table above.
 
 ## Agent-Native Review Plotting
 
@@ -420,16 +445,17 @@ represented by a dedicated MCP tool or recipe:
   setting in existing scenario YAML or estimator Python APIs. It defaults off,
   requires full-state observations and positive-definite measurement covariance,
   and uses the ordinary scenario validation/run and completed-review query
-  routes. It does not configure flight-software navigation or extend Pro
-  sequential/continuous tracking OD. See [Full-state innovation
+  routes. It does not configure flight-software navigation or extend the
+  separate tracking-OD workflows. See [Full-state innovation
   recovery](innovation-recovery.md).
 
 The existing `oel://agent/workflows/v1` resource includes `local_workflows`
 metadata for these IO and recovery entry points, with empty
 `dedicated_mcp_tools` lists. These are host-authorized local fallbacks, not
-additional callable MCP contracts. Review-to-OGP/TLE fitting remains a separate
-Pro `tracking_od` operation; advanced OD, calibration, SLR, and continuous
-tracking retain their Pro boundaries and have no new MCP contracts in v0.35.0.
+additional callable MCP contracts. Review-to-OGP/TLE fitting remains outside
+the bounded public IO workflow; advanced OD, calibration, SLR, and continuous
+tracking use their documented local entry points and have no new MCP contracts
+in v1.0.0.
 
 These are capability gaps for a future MCP contract review, not permissions to
 broaden the current registry. Use the documented local fallback only when the
@@ -465,8 +491,7 @@ private resource discovery are not supported.
 - Response, row, query-step, and review-store size budgets fail closed.
 - Tool discovery is deployment-specific; the resource catalog is public-safe
   in every profile and never includes Pro resources.
-- Workflow and glue tools are absent from `direct_frontier_restricted`, `mendicant_sealed`,
-  and `mendicant_tandem`; only local public/Pro processes may discover them.
+- Workflow and glue tools are absent from `direct_frontier_restricted`.
 - MCP discovery and transport are not authorization or release policy.
 - Deployment-profile selection is trusted operator configuration, not
   authentication, entitlement, or proof of caller identity.

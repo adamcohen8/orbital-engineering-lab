@@ -46,7 +46,6 @@ pub enum PrecisionForce {
         quadrature: Vec<Vec<f64>>,
     },
     Schwarzschild,
-    #[cfg(feature = "pro")]
     Ecom2 { coefficients: [f64; 7] },
     EmpiricalRic {
         coefficients: [f64; 3],
@@ -136,7 +135,6 @@ impl PrecisionForce {
                 })
             }
             SCHWARZSCHILD if values.is_empty() && tables.is_empty() => Ok(Self::Schwarzschild),
-            #[cfg(feature = "pro")]
             ECOM2 if values.len() == 7 && tables.is_empty() => Ok(Self::Ecom2 { coefficients: values.try_into().unwrap() }),
             SOLID
                 if values.len() == 4
@@ -194,7 +192,6 @@ impl PrecisionForce {
         match self {
             Self::Radiation { .. } => RADIATION,
             Self::Schwarzschild => SCHWARZSCHILD,
-            #[cfg(feature = "pro")]
             Self::Ecom2 { .. } => ECOM2,
             Self::EmpiricalRic { .. } => EMPIRICAL_RIC,
             Self::Solid { .. } => SOLID,
@@ -210,7 +207,6 @@ impl PrecisionForce {
         mass: f64,
         reflectivity: f64,
     ) -> Result<[f64; 3], String> {
-        #[cfg(feature = "pro")]
         if let Self::Ecom2 { coefficients } = self {
             return crate::ecom::acceleration(state, stage.sun, *coefficients);
         }
@@ -317,12 +313,14 @@ impl PrecisionForce {
     }
 }
 
-#[cfg(all(test, not(feature = "pro")))]
-mod public_boundary_tests {
+#[cfg(test)]
+mod tests {
     use super::{PrecisionForce, ECOM2};
 
     #[test]
-    fn public_plan_rejects_private_ecom_specification() {
-        assert!(PrecisionForce::new((ECOM2, vec![0.0; 7], vec![])).is_err());
+    fn ecom2_plan_requires_seven_coefficients() {
+        let force = PrecisionForce::new((ECOM2, vec![0.0; 7], vec![])).unwrap();
+        assert_eq!(force.code(), ECOM2);
+        assert!(PrecisionForce::new((ECOM2, vec![0.0; 6], vec![])).is_err());
     }
 }

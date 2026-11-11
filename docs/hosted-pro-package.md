@@ -8,11 +8,11 @@ service instructions; this package does not establish service availability.
 The acceptance proof uses simulated settlement, not real payments.
 
 Public OEL can prepare and locally validate an analysis package that may be
-considered for public-capability or Pro-capability execution through Hosted
-OEL. Public-only packages remain runnable locally for free. A locally valid
-Hosted route does not establish an available venue. Pro packages still require
-a qualified Hosted executor because the public installation does not contain
-or import Pro implementations. Both reuse the versioned OEL StudyRequest and
+considered for local or Hosted-only execution through Hosted OEL. Local
+packages remain runnable locally for free. A locally valid Hosted route does
+not establish an available venue. Hosted-only packages require a qualified
+Hosted executor because the public installation does not contain or import
+service implementations. Both reuse the versioned OEL StudyRequest and
 StudyPlan contracts rather than introducing a second planning language or
 accepting arbitrary shell commands.
 
@@ -42,7 +42,8 @@ configuration references, and requested retention policy. Its public JSON
 Schema is
 [`docs/contracts/schemas/oel-hosted-execution-package-v1.schema.json`](contracts/schemas/oel-hosted-execution-package-v1.schema.json).
 The validator continues to accept the legacy `oel.hosted_pro_package.v1`
-manifest for Pro-only packages.
+manifest for Hosted-only packages. The `pro` spelling is a compatibility
+identifier, not a separate local product or license tier.
 
 The request uses `oel.hosted_study_request.v1`. Required inputs may initially
 set `content_sha256` to `null`; the local validator streams each selected file,
@@ -77,7 +78,7 @@ payment authorized:         false
 files uploaded:             false
 ```
 
-A Pro-capability package instead reports `HOSTED_PRO_REQUIRED`, local execution
+A Hosted-only package instead reports `HOSTED_PRO_REQUIRED`, local execution
 unavailable, and no executable venue recommended. Neither route has a price;
 these local results do not establish that a live quote can be issued. If an
 authorized Hosted service is operating, it must revalidate the sealed package
@@ -102,8 +103,8 @@ The validator:
 - requires every operation to contribute to promised evidence;
 - accepts a fully public `LOCAL_FREE_AVAILABLE` plan through the generic
   manifest; and
-- keeps the legacy Pro manifest fail-closed by requiring at least one published
-  Pro capability and a `HOSTED_PRO_REQUIRED` route.
+- keeps the legacy Hosted-only manifest fail-closed by requiring at least one
+  published Hosted capability and a `HOSTED_PRO_REQUIRED` route.
 
 Control documents are limited to 2 MB. Individual selected inputs are bounded
 to 16 GiB in this v1 client contract. A future upload grant may impose a lower

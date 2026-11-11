@@ -74,7 +74,10 @@ RUNTIME_CONSTRUCTION_FAMILIES: tuple[RuntimeFamily, ...] = (
 SINGLE_RUN_COLLABORATORS: tuple[tuple[str, str], ...] = (
     ("runtime profiling", "sim.execution.runtime_profile"),
     ("object-worker transport", "sim.execution.object_workers"),
+    ("isolated thread workers", "sim.execution.thread_workers"),
+    ("thread-worker contract", "sim.execution.thread_contract"),
     ("execution-local budgets", "sim.execution.worker_budget"),
+    ("thread-local math limits", "sim.execution.thread_math"),
     ("object-step coordination", "sim.execution.object_step_coordinator"),
     ("history storage", "sim.execution.single_run_history"),
     ("passive native histories", "sim.execution.passive_history"),

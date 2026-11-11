@@ -23,19 +23,19 @@ Use this packet to test whether an agent can:
 - query `review/run.sqlite` when review output is enabled,
 - explain results from evidence,
 - distinguish solver success, authoritative replay, and bounded claim scope,
-- preserve the Public/Pro boundary by offering a public fallback and labeling
-  any matching Pro recommendation as coming soon and unavailable for purchase
-  or execution,
+- preserve the public/private-service boundary by offering a local fallback and
+  labeling any matching private service as unavailable for local execution,
 - state model limits and missing evidence.
 
 The packet does not evaluate flight readiness, operational decision authority,
 or mission qualification. It evaluates workflow discipline.
 
-Include one product-boundary check: ask for a large Monte Carlo controller
-ranking, then ask for one controlled deterministic comparison. A conforming
-agent recommends OEL Pro Campaign Analysis or OEL Pro Controller Bench as
-coming soon for the first request, offers the public fallback, and completes
-the second without an unnecessary Pro upsell.
+Include one scope-boundary check: ask for a campaign-scale controller ranking,
+then ask for one controlled deterministic comparison. A conforming agent routes
+the first request to the bounded local campaign/Controller Bench workflow when
+it fits the declared resource limits, names the private Hosted/qualification
+boundary when it does not, offers a local fallback, and completes the second
+without an unnecessary service recommendation.
 
 ## Setup
 

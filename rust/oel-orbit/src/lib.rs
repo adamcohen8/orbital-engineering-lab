@@ -6,6 +6,7 @@ mod actuation;
 pub mod adaptive;
 pub mod attitude;
 pub mod attitude_ekf;
+pub mod campaigns;
 pub mod communications;
 pub mod conjunction;
 pub mod conjunction_probability;
@@ -30,6 +31,7 @@ mod additional_gravity_binding;
 #[cfg(feature = "python")]
 mod planetary_binding;
 
+pub mod gas_absorption;
 pub mod harmonics;
 pub mod iod;
 pub mod links;
@@ -51,14 +53,20 @@ mod ogp_python;
 #[cfg(feature = "python")]
 pub mod output;
 pub mod ogp;
+pub mod onp_od;
+#[cfg(feature = "python")]
+mod slr_od;
 pub mod passive;
 pub mod perturbations;
 pub mod precision_forces;
 pub mod precision_plan;
+pub mod ecom;
 pub mod solid_tides;
 pub mod ocean_tides;
 pub mod relative;
 pub mod resources;
+pub mod scale_work;
+pub mod screening;
 pub mod spacecraft;
 pub mod targeting;
 #[cfg(feature = "python")]
@@ -284,6 +292,7 @@ mod python {
     use super::force_context::plan_from_inputs as force_plan;
     use super::numeric_bytes::{decode_f64_bytes, output_bytes};
     use super::ogp;
+    use super::screening;
     use super::{adaptive, force_plan::StageInputs};
     use super::{
         propagate_history, rk4_step, rk4_zonal_step, rkf78_zonal_step, OrbitParameters, State,
@@ -333,6 +342,75 @@ mod python {
                 .map_err(PyValueError::new_err)?;
             output_bytes(py, &result)
         }
+    }
+
+    #[pyfunction]
+    fn screen_sampled_pairs_bytes(
+        py: Python<'_>,
+        object_indices: Vec<usize>,
+        sample_indices: Vec<i64>,
+        states: &[u8],
+        threshold_km: f64,
+        squared_comparison: bool,
+    ) -> PyResult<Vec<(usize, usize, f64, f64, f64)>> {
+        let states = decode_f64_bytes(states)?;
+        let hits = py
+            .detach(|| {
+                screening::discover_pairs(
+                    &object_indices,
+                    &sample_indices,
+                    &states,
+                    threshold_km,
+                    squared_comparison,
+                )
+            })
+            .map_err(PyValueError::new_err)?;
+        Ok(hits
+            .into_iter()
+            .map(|hit| {
+                (
+                    hit.left,
+                    hit.right,
+                    hit.distance_km,
+                    hit.jd_utc,
+                    hit.relative_speed_km_s,
+                )
+            })
+            .collect())
+    }
+
+    #[pyfunction]
+    fn screen_sampled_pairs(
+        py: Python<'_>,
+        object_indices: Vec<usize>,
+        sample_indices: Vec<i64>,
+        states: Vec<f64>,
+        threshold_km: f64,
+        squared_comparison: bool,
+    ) -> PyResult<Vec<(usize, usize, f64, f64, f64)>> {
+        let hits = py
+            .detach(|| {
+                screening::discover_pairs(
+                    &object_indices,
+                    &sample_indices,
+                    &states,
+                    threshold_km,
+                    squared_comparison,
+                )
+            })
+            .map_err(PyValueError::new_err)?;
+        Ok(hits
+            .into_iter()
+            .map(|hit| {
+                (
+                    hit.left,
+                    hit.right,
+                    hit.distance_km,
+                    hit.jd_utc,
+                    hit.relative_speed_km_s,
+                )
+            })
+            .collect())
     }
 
     fn parameters(
@@ -940,7 +1018,7 @@ mod python {
         module.add("ONP_PRECISION_FORCE_PLAN_VERSION", 1)?;
         module.add("ONP_EMPIRICAL_RIC_VERSION", 1)?;
         module.add("ONP_EMPIRICAL_RIC_HARMONIC_VERSION", 1)?;
-        module.add("ONP_ECOM2_VERSION", u32::from(cfg!(feature = "pro")))?;
+        module.add("ONP_ECOM2_VERSION", 1)?;
         module.add("ONP_IMMUTABLE_STAGE_TABLE_MAX_EPOCHS", 262144)?;
         module.add("ONP_IAU76_80_SIDEREAL_VERSION", 2)?;
         module.add("__version__", env!("CARGO_PKG_VERSION"))?;
@@ -958,6 +1036,7 @@ mod python {
         super::mechanical::register(module)?;
         super::mission_schedule::register(module)?;
         super::nrlmsise00_native::register(module)?;
+        super::campaigns::register(module)?;
         super::collisions::register(module)?;
         super::control::register(module)?;
         super::covariance::register(module)?;
@@ -968,6 +1047,8 @@ mod python {
         super::stage_context::register(module)?;
         super::passive::register(module)?;
         super::estimation::register(module)?;
+        super::onp_od::register(module)?;
+        super::slr_od::register(module)?;
         super::links::register(module)?;
         super::measurements::register(module)?;
         super::optical_collection::register(module)?;
@@ -976,10 +1057,12 @@ mod python {
         super::ocean_tides::register_py(module)?;
         super::relative::register(module)?;
         super::resources::register(module)?;
+        super::scale_work::register(module)?;
         super::spacecraft::register(module)?;
         super::communications::register(module)?;
         super::conjunction::register(module)?;
         super::conjunction_probability::register(module)?;
+        super::gas_absorption::register(module)?;
         super::covariance_orbit::register(module)?;
         super::iod::register(module)?;
         super::targeting::register(module)?;
@@ -997,6 +1080,8 @@ mod python {
         module.add_function(wrap_pyfunction!(super::planetary_binding::planetary_atmosphere_sample, module)?)?;
         module.add_class::<OgpObservationBatch>()?;
         module.add("MAX_HARMONIC_DEGREE", super::harmonics::MAX_DEGREE)?;
+        module.add_function(wrap_pyfunction!(screen_sampled_pairs, module)?)?;
+        module.add_function(wrap_pyfunction!(screen_sampled_pairs_bytes, module)?)?;
         module.add_function(wrap_pyfunction!(rk4_step_eci, module)?)?;
         module.add_function(wrap_pyfunction!(propagate_history_eci, module)?)?;
         module.add_function(wrap_pyfunction!(propagate_history_eci_bytes, module)?)?;

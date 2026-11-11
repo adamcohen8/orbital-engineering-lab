@@ -58,7 +58,7 @@ def build_parser():
     materialize.add_argument("--start-epoch", help="Explicit common UTC epoch for a catalog scenario.")
     materialize.add_argument("--options")
     fit = commands.add_parser(
-        "fit-review", help="Pro: fit a completed review arc with OGP and check encoded TLE/OMM residuals."
+        "fit-review", help="Fit a completed review arc with OGP and check encoded TLE/OMM residuals."
     )
     fit.add_argument("completed_run")
     fit.add_argument("output_dir")
@@ -267,12 +267,6 @@ def main(argv=None):
                 expected_source_identities=materialization_identities,
             )
         elif args.command == "fit-review":
-            import importlib.util
-
-            if importlib.util.find_spec("sim.data_io.fit") is None:
-                raise DataIOError(
-                    "Review mean-element fitting requires the Pro implementation and tracking_od entitlement."
-                )
             from .api import _eop
             from .catalog import read_catalog
             from .fit import fit_review_catalog

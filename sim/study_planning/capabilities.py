@@ -112,18 +112,6 @@ PARAMETER_SCHEMAS: dict[str, dict[str, Any]] = {
         },
         required=("mode", "maximum_candidates"),
     ),
-    "oel.pro.intent_hypothesis.v1": _parameters(
-        {
-            "hypotheses": {
-                "type": "array",
-                "items": {"type": "string"},
-                "minItems": 1,
-                "maxItems": 128,
-                "uniqueItems": True,
-            }
-        },
-        required=("hypotheses",),
-    ),
     "oel.pro.report.packet.v1": _parameters(
         {
             "sections": {
@@ -262,7 +250,6 @@ EXECUTOR_BINDING_REGISTRY: dict[str, CapabilityExecutorBinding] = {
                 "orbit_determination.reduced_tracking",
                 "orbit_determination.ilrs_slr",
                 "oel.pro.scale.screening.v1",
-                "oel.pro.intent_hypothesis.v1",
                 "oel.pro.report.packet.v1",
             )
         ),
@@ -725,19 +712,6 @@ PRO_STUDY_CAPABILITIES = (
         input_kinds=("scale_store", "screening_specification"),
         output_kinds=("screening_evidence", "handoff_product"),
         limitations=("Generic operational catalog authority and unrestricted campaign execution are not supported.",),
-    ),
-    StudyCapability(
-        capability_id="oel.pro.intent_hypothesis.v1",
-        title="Run intent-hypothesis evaluation",
-        description="Evaluate declared maneuver hypotheses over supported evidence without exposing hidden truth.",
-        edition="pro",
-        maturity="experimental",
-        **_executor_binding_fields("oel.pro.intent_hypothesis.v1"),
-        writes=True,
-        executes=True,
-        input_kinds=("ihe_visible_dataset", "hypothesis_study"),
-        output_kinds=("hypothesis_evidence",),
-        limitations=("Outputs are bounded engineering evidence, not calibrated intent probabilities.",),
     ),
     StudyCapability(
         capability_id="oel.pro.report.packet.v1",

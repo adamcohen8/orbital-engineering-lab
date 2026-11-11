@@ -24,9 +24,11 @@ repository directly.
 
 ## Check And Install The Latest Release
 
-These commands apply to the v0.36.0 or newer managed launcher. For a v0.31.0
-through v0.35.0 installation, first rerun the official installer as described in
-[installation](installation.md) to establish the signed-inventory trust boundary.
+These commands apply to the v1.0.0 or newer managed launcher. A v0.36.0
+installation already has the signed-inventory trust boundary and can update
+directly. For a v0.31.0 through v0.35.0 installation, first rerun the official
+installer as described in [installation](installation.md) to establish that
+boundary.
 
 ```text
 oel update status --full
@@ -121,10 +123,9 @@ provisioning-time derived caches from its trusted staging runtime before the
 signed check; any bytecode cache found in the published source or runtime is
 an authentication failure.
 
-Pro releases also require `--license` and `--license-public-keys`. The license
-must be valid, unexpired, for `oel-pro`, and permit the target version through
-`allowed_versions`. Public release keys and customer-license keys are separate
-trust roots.
+The v1 local edition does not require a product license or activation. Hosted
+execution, when available, is separately provisioned by the service and is not
+part of the local updater or workspace migration contract.
 
 ## Audit And Adopt Per Workspace
 

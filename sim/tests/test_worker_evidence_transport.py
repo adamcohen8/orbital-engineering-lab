@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from copy import deepcopy
 from pathlib import Path
 
@@ -23,6 +24,7 @@ def _complete_evidence_worker_loop(connection, engines) -> None:
 
 def test_evidence_delta_transport_preserves_complete_process_run(tmp_path: Path, monkeypatch) -> None:
     root = Path(__file__).resolve().parents[2]
+    monkeypatch.setattr(sys, "path", [str(root), *sys.path])
     config = yaml.safe_load((root / "configs" / "quickstart_5min.yaml").read_text())
     config["objects"]["observer"] = deepcopy(config["objects"]["target"])
     config["simulator"]["duration_s"] = 20.0

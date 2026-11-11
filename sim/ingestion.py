@@ -1,28 +1,25 @@
-"""Orbital Engineering Lab Pro data-ingestion tools are not included in the public core."""
+# ruff: noqa: F401,F821,I001
+"""Compatibility façade for mission-input ingestion and scenario building."""
 
+from . import ingestion_contracts as _contracts
+from . import ingestion_normalization as _normalization
+from . import ingestion_sources as _sources
+from . import scenario_builders as _builders
+from . import ingestion_cli as _cli
 
-def _unavailable(*args, **kwargs):
-    raise ImportError(
-        "Data ingestion and observation normalization are part of Orbital Engineering Lab Pro. "
-        "The public core supports deterministic scenarios and local simulation artifacts."
-    )
+INGESTION_CAPABILITY_FAMILIES = {
+    "contracts": "sim.ingestion_contracts",
+    "normalization": "sim.ingestion_normalization",
+    "sources": "sim.ingestion_sources",
+    "scenario_builders": "sim.scenario_builders",
+    "cli": "sim.ingestion_cli",
+}
 
+for _module in (_contracts, _normalization, _sources, _builders, _cli):
+    globals().update({name: value for name, value in vars(_module).items() if not name.startswith("__")})
 
-load_observation_file = _unavailable
-normalize_observations = _unavailable
-write_ingestion_manifest = _unavailable
-MissionInputPacket = _unavailable
-build_basic_propagation_scenario = _unavailable
-build_basic_rpo_scenario = _unavailable
-ingest_coes = _unavailable
-ingest_ephemeris_object_set = _unavailable
-ingest_ephemeris_samples = _unavailable
-ingest_relative_ric_state = _unavailable
-ingest_satellite_card = _unavailable
-ingest_state_vector = _unavailable
-ingest_tle = _unavailable
-inspect_packet = _unavailable
-load_packet = _unavailable
-merge_packets = _unavailable
-packet_from_dict = _unavailable
-render_ingestion_summary = _unavailable
+MissionInputPacket.__module__ = __name__
+del _module
+
+if __name__ == "__main__":
+    raise SystemExit(main())

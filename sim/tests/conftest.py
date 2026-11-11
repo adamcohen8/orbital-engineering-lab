@@ -23,7 +23,7 @@ def _retire_test_python_provider_aliases(root: Path) -> None:
     """
     if os.name != "posix" or root.is_symlink():
         return
-    providers = {str(Path(value).resolve()) for value in (
+    providers = {Path(value).resolve() for value in (
         sys.executable, getattr(sys, "_base_executable", sys.executable),
     )}
     names = {"python", "python3", f"python{sys.version_info.major}.{sys.version_info.minor}", "𝜋thon"}
@@ -31,9 +31,12 @@ def _retire_test_python_provider_aliases(root: Path) -> None:
         for name in names.intersection(files):
             try:
                 metadata = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
-                if stat.S_ISLNK(metadata.st_mode) and os.readlink(name, dir_fd=directory_fd) in providers:
+                if not stat.S_ISLNK(metadata.st_mode):
+                    continue
+                target = Path(os.readlink(name, dir_fd=directory_fd))
+                if target.is_absolute() and target.resolve() in providers:
                     os.unlink(name, dir_fd=directory_fd)
-            except FileNotFoundError:
+            except (OSError, RuntimeError):
                 continue
 
 
@@ -132,12 +135,6 @@ SLOW_TESTS = {
         "test_dynamics_orbit_determination_detects_synthetic_maneuver",
     ),
     ("test_game_scenarios_arcade.py", "test_level_eleven_game_attempt_uses_dynamic_history"),
-    (
-        "test_intent_hypothesis_workflow.py",
-        "test_ihe_synthetic_core_v1_generates_and_benchmarks_all_case_families",
-    ),
-    ("test_intent_hypothesis_workflow.py", "test_evaluation_pack_separates_visible_inputs_from_hidden_truth"),
-    ("test_mendicant_dependency_boundary.py", "test_sim_never_imports_optional_mendicant_integration"),
     ("test_mission_recovery.py", "test_orbit_transfer_planner_grid_refinement_approaches_hohmann_transfer"),
     (
         "test_oel_agents.py",
@@ -155,10 +152,6 @@ SLOW_TESTS = {
         "test_precise_orbit_compare_detects_synthetic_maneuver",
     ),
     ("test_orbit_hcw_lqr_convergence.py", "test_converges_for_starts_within_10km_envelope"),
-    (
-        "test_od_phase8.py",
-        "test_phase8_all_models_report_nonlinear_withheld_disagreement_and_chief_uncertainty",
-    ),
     ("test_plotting_public.py", "test_payload_plotting_api_writes_expected_artifacts"),
     ("test_plotting_public.py", "test_plot_outputs_expands_public_plot_presets"),
     ("test_public_export_check.py", "test_generated_public_export_has_no_known_private_surfaces"),
@@ -229,9 +222,6 @@ EXTERNAL_TESTS = {
 }
 
 LOCAL_EVIDENCE_TESTS = {
-    ("test_mendicant_adapter_runtime_v07.py", "test_v07_adapter_runtime_rejects_partial_adapter"),
-    ("test_mendicant_30b_eval.py", "test_harness_freeze_is_intact"),
-    ("test_mendicant_30b_eval.py", "test_preserved_v06_predictions_replay_to_preserved_summary"),
     ("test_orbit_runtime_speedups.py", "test_adaptive_trajectory_fixture_stays_within_approved_rounding_bound"),
 }
 LOCAL_EVIDENCE_OPT_IN_ENV = "OEL_RUN_LOCAL_EVIDENCE_TESTS"
@@ -276,10 +266,7 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
             item.add_marker(pytest.mark.local_evidence)
 
 
-_FROZEN_FIFO_TEST = (
-    "test_mendicant_adapter_runtime_v08.py",
-    "test_v08_checkpoint_reader_rejects_non_regular_checkpoint",
-)
+_FROZEN_FIFO_TEST = ("__public_unavailable__", "")
 _FROZEN_FIFO_CALL_REPORT = pytest.StashKey[pytest.TestReport]()
 
 

@@ -624,7 +624,7 @@ request the Numba backend explicitly. Unsupported dynamics combinations fall
 back to the standard Python path. Set `acceleration.warmup: true` to compile
 supported kernels before the run starts.
 
-`simulator.dynamics.orbit.numeric_backend` defaults to `rust` in v0.32.0.
+`simulator.dynamics.orbit.numeric_backend` defaults to `rust` in v1.0.0.
 Select `python` explicitly for reference execution. The required `oel_rust_orbit` wheel for
 Earth-centered two-body ONP special propagation with RK4, RKF78 (`rkf78`/`adaptive`), or DOPRI5,
 or ideal rotating barycentric CR3BP (`model: cr3bp`, requiring wheel 0.6.0
@@ -688,10 +688,208 @@ and a nonnegative `workers` count when OGP objects select
 `general.numeric_backend: rust`. It prepares bounded native OGP history rows
 inside one scenario; ONP stepping and owner-side lifecycle handling stay serial.
 See [Parallel OGP](ogp-parallelism.md) for the optional source build, example,
-resource limits and actual-worker evidence. Campaign execution remains Pro.
+resource limits and actual-worker evidence. Campaign execution is available in
+the v1 local edition; Hosted/Manifold orchestration is a separate private
+service boundary.
 
-Public OGP supports bounded native history preparation threads; see docs/ogp-parallelism.md. ONP object workers and hierarchical campaign/object process planning are available in OEL Pro; see `docs/public-vs-pro.md` for the product boundary.
+The local edition can plan deterministic within-scenario ONP object workers
+automatically.
 
+```yaml
+simulator:
+  resource_profile: off
+  execution:
+    policy: auto
+    object_parallelism:
+      enabled: auto
+      max_workers: 12
+      reserve_workers: 1
+      min_objects: 3
+```
+
+Execution policies are:
+
+- `serial`: always use parent-process object stepping.
+- `parallel`: require the requested parallel backend (processes by default) and fail clearly when the scenario or
+  resource profile is incompatible.
+- `auto`: select serial or process workers from active-object count, estimated
+  object-step cost, planned step count/startup amortization, available CPUs,
+  worker caps, resource profile, dynamic membership, OGP mixing, bridges, and
+  runtime-state serializability.
+- `configured`: backward-compatible behavior for the legacy
+  `enabled/backend/workers` fields.
+
+`enabled: auto` is shorthand for `policy: auto`. `workers` requests a worker
+count, while `max_workers` caps planner selection. The selected backend,
+reason, estimated work score, and deterministic object-to-worker allocation are
+recorded under `summary.runtime_profile.executor.planner` and printed in the
+completion summary.
+
+The process backend pins each object to a persistent local subprocess while the
+main simulator remains the timeline orchestrator. A worker may own multiple
+objects. Each worker receives one immutable start-of-step world snapshot, and
+knowledge synchronization remains centralized for deterministic observer
+ordering. Current automatic eligibility covers fixed-membership ONP scenarios.
+Dynamic deployment, mixed OGP/ONP propagation, external object bridges, and
+runtime-attached external intent providers select serial execution in `auto`
+mode and are rejected by `parallel` mode.
+This backend is single-node; distribute independent scenarios or trials, not
+individual object steps, across cluster nodes.
+
+Automatic selection records both the per-step `estimated_work_score` and the
+duration-aware `estimated_run_work_score`. This prevents short, otherwise
+expensive-looking runs from paying process startup costs that cannot be
+amortized. A forced `parallel` policy remains available for backend validation
+and explicit benchmarking. Programmatic API launches apply the same native
+math thread limits to spawned object workers as the CLI; explicit user thread
+settings are preserved.
+
+OEL Pro also supports explicitly selected threads for supported complete ONP
+object steps. Threads use private object state and the same maintained stepping
+functions as process workers:
+
+```yaml
+simulator:
+  resource_profile: standard
+  execution:
+    policy: parallel
+    object_parallelism:
+      backend: thread_pool
+      thread_scope: object_step
+      workers: 2
+      min_objects: 2
+```
+
+The complete object-step scope supports both Python and optional Rust dynamics;
+it does not require a native wheel. Attitude, control, sensing, estimation and
+flight software remain part of their ordinary object-step lifecycle. Each
+thread receives an independent engine snapshot and independent copies of step
+inputs; the timeline owner applies ordered results and performs scenario-wide
+processing. The thread contract accepts exact maintained component identities.
+Custom components and callbacks require an implementation-level
+`OEL_THREAD_SAFE = True` declaration, independent object state, and
+process-serializable inputs/results. An instance field or scenario string is
+not a thread-safety declaration. Subclasses must declare their own opt-in;
+they do not inherit admission from a base implementation. Live FSW input
+publishers and process-global ephemeris providers remain owner/process-only.
+The contract is checked again before each
+threaded step to catch runtime replacement of a component.
+
+Python 3.11 callbacks continue to share the interpreter's GIL. Callback-free
+native kernels that release the GIL can compute concurrently; moving ordinary
+Python code to threads does not promise a speedup. Native crashes affect the
+whole simulation process. Running threads cannot be forcibly killed, so use
+process workers when hard termination or dependency isolation is required.
+Unrecognized extensions are rejected by `parallel` or cause the existing
+configured serial fallback. Existing process restrictions on deployment,
+bridges, mixed OGP and coordinated interactions remain applicable.
+
+The default `thread_scope: auto` chooses the native-history optimization when
+all objects qualify and its binding is available, otherwise complete object
+steps. This is a scope choice within an explicitly selected thread backend;
+execution `policy: auto` remains unavailable for threads until its crossover
+is qualified. The planner records `parallel_scope: object_step` or
+`parallel_scope: native_history_preparation`.
+
+For passive two-body/J2 ONP studies, select the narrow native-history scope
+explicitly to require that optimization:
+
+```yaml
+simulator:
+  resource_profile: off
+  execution:
+    policy: parallel
+    object_parallelism:
+      backend: thread_pool
+      thread_scope: native_history
+      workers: 4
+      min_objects: 2
+  dynamics:
+    orbit:
+      numeric_backend: rust
+      integrator: rk4
+      j2: true
+    attitude:
+      enabled: false
+```
+
+In the `native_history` scope every active object must be an independent `trajectory_only` satellite using
+ECI RK4 with two-body gravity and optional built-in J2. Controllers, flight
+software, sensing/estimation, mission callbacks, resources, geometry callbacks,
+other forces, coupled interactions, bridges, OGP, and dynamic deployment are
+outside this optimization's envelope. The native wheel must advertise
+`PASSIVE_HISTORY_GIL_RELEASED`; validation rejects older bindings. `parallel`
+rejects unavailable resources or incompatible objects; `configured` can retain
+the ordinary serial fallback and records its reason. Thread selection with
+`auto` is deferred until its scenario-level crossover is qualified.
+
+Only copied native propagation inputs go to threads, in groups bounded by the
+selected worker count. Compatible objects share one unchanged substep schedule.
+Each history retains the existing limits of 256 samples and 4096 internal
+steps. The timeline owner consumes rows and runs callbacks, events, knowledge
+updates, and output processing in ordinary object/sample order. State, force,
+gravity, and cadence changes invalidate prepared rows. Numerical failures in
+future rows return to ordinary current-step propagation so earlier termination
+boundaries remain visible. The planner records
+`parallel_scope: native_history_preparation`. Existing resource profiles and
+inherited object-worker budgets also cap threads, preventing nested campaigns
+from creating an unbudgeted pool. This option retains the existing Pro
+object-parallelism entitlement; general ONP process workers are unchanged.
+
+For independent local Monte Carlo or sensitivity runs, select the campaign
+transport separately from within-scenario object stepping:
+
+```yaml
+analysis:
+  execution:
+    parallel_enabled: true
+    parallel_workers: 2
+    parallel_backend: thread_pool
+```
+
+Keep the existing analysis study definition and use a resource profile that
+permits parallel execution. Config queues use `execution.backend: thread_pool`;
+controller benchmark and optimization suites use `parallel_backend: thread_pool`.
+The default transport remains `process_pool`. Scale queue/campaign commands
+expose their explicit thread transport through `--backend thread_pool`.
+
+Campaign threads require independent supported scenarios with per-run plots
+and animations disabled. They reject SPICE, unrecognized extension pointers,
+live callbacks and nested process pools before simulation work. Runtime
+admission also checks the constructed component graph. Owner-side progress,
+checkpoint/resume, ordered aggregation and physics-input identity checks keep
+their existing contracts. Cancellation is cooperative: queued tasks can be
+cancelled, while running threads must reach a cancellation check or finish.
+Hierarchical budgets cap campaign and inner object workers together.
+
+When a Monte Carlo, sensitivity, config-queue, or controller-benchmark
+campaign is itself parallel, OEL applies one hierarchical worker budget to
+both layers. One slot is reserved for the campaign parent. Independent
+campaign runs receive slots first because they do not synchronize at every
+timestep; remaining slots are divided evenly into per-run object-worker caps.
+For example, a 24-CPU allocation with one reserved parent slot and four active
+runs selects four campaign workers and at most four object workers per run,
+using at most 20 of the 23 worker slots. If there are 20 ready independent
+runs, the planner selects 20 campaign workers and keeps child object stepping
+serial. A forced child `policy: parallel` reduces campaign concurrency enough
+to provide at least two object workers per active run or fails clearly when the
+global budget cannot satisfy that contract.
+
+Campaign output records `hierarchical_execution` with the total process
+budget, campaign workers, per-run object cap, forced-inner status, and planner
+reason. Each child run also records its inherited hierarchy under
+`summary.runtime_profile.executor.planner.hierarchical_budget`. Resource
+profiles constrain the shared budget once rather than independently multiplying
+the same cap at both layers.
+
+Campaign executors keep at most twice the selected worker count in flight, so
+large Monte Carlo, sensitivity, config-queue, controller-benchmark, and
+optimization campaigns do not retain one future plus a complete task payload
+for every queued run. Live progress transport is created only when a progress
+consumer is present and is not a prerequisite for parallel physics execution;
+if progress transport is unavailable, final artifacts remain the authoritative
+evidence. Scale Monte Carlo and sensitivity workers also reuse their parsed
+planner config within each persistent worker process.
 
 Controller timing is configured independently:
 
@@ -1259,10 +1457,10 @@ changing the deterministic simulation aggregate.
 The legacy
 `outputs.resource_limits.resource_profile` field is still accepted for older
 configs, but new configs should use `simulator.resource_profile`. Use
-Private campaign workflows can estimate requirements before long campaign runs.
+Local campaign workflows can estimate requirements before long campaign runs.
 Monte Carlo checkpoints are stored under `outputs.output_dir/mc_checkpoints`
 and keyed by generated iteration config hashes. Remove that checkpoint directory
-when you intentionally want a clean private campaign rerun.
+when you intentionally want a clean local campaign rerun.
 Sensitivity-study checkpoints are stored under
 `outputs.output_dir/sensitivity_checkpoints` and use the same generated-config
 hash rule. Resource preflight estimates sensitivity run count for

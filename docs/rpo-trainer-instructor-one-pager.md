@@ -110,8 +110,7 @@ lesson.
 - Structured RPO levels covering passive motion, V-bar/R-bar approaches,
   terminal rendezvous, eccentric-orbit cases, evasive-target survival, and
   defensive-target pursuit examples.
-- Level 11B Safe Inspection Clone, a mechanical continuity clone of Level 5.
-  Level 11 Pursuit is Pilot-only; Operator mode intentionally omits it, so the
+- Level 11 Pursuit is Pilot-only; Operator mode intentionally omits it, so the
   two selector lists are not identical.
 - A cislunar rendezvous bonus level with Moon-centered RIC controls around an
   Earth-Moon L2 NRHO target.

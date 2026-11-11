@@ -13,6 +13,11 @@ maintainers and coding agents, not replacement public APIs.
 preset resolution, object parsing, simulator parsing, analysis parsing,
 output parsing, path security, cross-section validation, and loading.
 
+Configuration helpers must be importable without constructing or importing
+their optional feature runtime. In particular, `sim.ground_segment.config`
+normalizes ground settings independently; the package loads its runtime classes
+only when those exports are requested. Fresh-process tests enforce this boundary.
+
 The static `SCENARIO_CONFIG_FAMILIES` map in
 `sim.config.scenario.architecture` identifies the implementation owner for
 representative capabilities. Configuration normalization, object ordering,
@@ -38,6 +43,8 @@ integrations.
 
 ## Change Rules
 
+- Follow the [OEL 1.x compatibility policy](compatibility-policy.md) for
+  supported entry points, deprecation, and schema evolution.
 - Add schema fields and parsing behavior to the owning scenario module, then
   re-export compatibility names through the façade when required.
 - Add result queries to `results.py`, interactive lifecycle behavior to

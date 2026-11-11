@@ -1,15 +1,22 @@
-"""Orbital Engineering Lab Pro dynamics OD workflow tools are not included in the public core."""
+# ruff: noqa: F401,I001
+"""Compatibility façade for dynamics orbit determination."""
 
+from . import orbit_od_common as _common
+from . import orbit_od_parameters as _parameters
+from . import orbit_od_artifacts as _artifacts
+from . import orbit_od_quality as _quality
+from . import orbit_od_maneuvers as _maneuvers
+from . import orbit_od_solver as _solver
 
-def _unavailable(*args, **kwargs):
-    raise ImportError(
-        "Dynamics orbit determination, fit/holdout OD artifacts, and estimated-parameter "
-        "workflows are part of Orbital Engineering Lab Pro. The public core supports deterministic "
-        "scenario YAML and runtime EKF/UKF state estimation."
-    )
+ORBIT_OD_CAPABILITY_FAMILIES = {
+    "parameters": "sim.estimation.orbit_od_parameters",
+    "solving": "sim.estimation.orbit_od_solver",
+    "quality": "sim.estimation.orbit_od_quality",
+    "maneuvers": "sim.estimation.orbit_od_maneuvers",
+    "artifacts": "sim.estimation.orbit_od_artifacts",
+}
 
+for _module in (_common, _parameters, _artifacts, _quality, _maneuvers, _solver):
+    globals().update({name: value for name, value in vars(_module).items() if not name.startswith("__")})
 
-build_dynamics_od_quality_gates = _unavailable
-build_orbit_od_parameter_set = _unavailable
-selected_orbit_od_parameters = _unavailable
-solve_dynamics_orbit_determination = _unavailable
+del _module

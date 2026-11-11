@@ -267,7 +267,7 @@ def test_single_run_review_store_writes_queryable_sqlite(tmp_path: Path) -> None
     assert db_path.parent == tmp_path / "review"
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     assert schema["schema_version"] == REVIEW_SCHEMA_VERSION
-    assert schema["compatibility"]["policy"] == REVIEW_SCHEMA_COMPATIBILITY_POLICY
+    assert schema["compatibility"]["policy"] == REVIEW_SCHEMA_COMPATIBILITY_POLICY == "stable_1_x_additive"
     assert schema["compatibility"]["breaking_change_requires_schema_version_bump"] is True
     assert tuple(schema["compatibility"]["stable_tables"]) == REVIEW_SCHEMA_STABLE_TABLES
     assert set(REVIEW_SCHEMA_STABLE_TABLES).issubset(schema["tables"])
@@ -928,6 +928,35 @@ def test_review_store_writes_mission_recovery_tables(tmp_path: Path) -> None:
     assert all(row[3] == "initial_orbit" for row in candidate_rows)
     assert all(row[4] in (0, 1) for row in candidate_rows)
     assert all(row[5] in (0, 1) for row in candidate_rows)
+
+
+@pytest.mark.parametrize("policy", ["pre_1_0_additive", "stable_1_x_additive"])
+def test_review_workspace_reads_policy_metadata_without_rewriting(tmp_path: Path, policy: str) -> None:
+    review_dir = tmp_path / "review"
+    review_dir.mkdir()
+    db_path = review_dir / "run.sqlite"
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute("CREATE TABLE run_metadata (scenario_name TEXT, review_schema_version TEXT)")
+        connection.execute("INSERT INTO run_metadata VALUES ('saved_run', '0.13')")
+        connection.commit()
+    finally:
+        connection.close()
+    schema_path = review_dir / "schema.json"
+    schema_path.write_text(json.dumps({
+        "schema_version": "0.13",
+        "compatibility": {"policy": policy, "stable_tables": ["run_metadata"]},
+    }), encoding="utf-8")
+    original_bytes = {path: path.read_bytes() for path in (db_path, schema_path)}
+
+    workspace = ReviewWorkspace.open(tmp_path)
+    try:
+        assert workspace.schema()["compatibility"]["policy"] == policy
+        rows = workspace.query("SELECT scenario_name, review_schema_version FROM run_metadata").rows
+        assert rows == [{"scenario_name": "saved_run", "review_schema_version": "0.13"}]
+    finally:
+        workspace.close()
+    assert {path: path.read_bytes() for path in original_bytes} == original_bytes
 
 
 def test_review_workspace_query_api_allows_safe_selects(tmp_path: Path) -> None:

@@ -188,18 +188,18 @@ mission-specific parameters are supplied:
 The public export includes profile discovery, validation, materialization, and
 the declared Supported-within-envelope catalog status. Discovery reports
 effective maturity separately and fails closed when qualification evidence is
-unavailable. It does not include the
-private Pro qualification runner, qualification specifications, manifests, or
-campaign evidence, so public users should not expect `status` or `qualify`
-subcommands to be available. Public custom authoring ends at content-bound
-validation, contract tests, and deterministic smoke evidence; see
-[Public Core And Pro Boundary](public-vs-pro.md).
+unavailable. It does not include generated qualification packets, restricted
+qualification inputs, or release-governance evidence, so profile discovery
+remains conservative when those artifacts are unavailable. Public custom
+authoring ends at content-bound validation, contract tests, and deterministic
+smoke evidence; see [Public Local Edition And Private Services](public-vs-pro.md).
 
-In an authorized private Pro source workspace, FSWDK owns profile comparison
-and qualification. A passing private packet is still simulation evidence for
-the exact profile and envelope, not automatic promotion or flight
-qualification. This public page intentionally does not expose private evidence
-paths as reproducible public commands.
+The local FSWDK owns profile comparison and qualification within the declared
+simulation envelope. A generated qualification packet is still simulation
+evidence for the exact profile and envelope, not automatic promotion or flight
+qualification. Restricted inputs and release-governance evidence remain
+private, and this page does not expose those private evidence paths as
+reproducible public commands.
 
 ## Maturation contract
 

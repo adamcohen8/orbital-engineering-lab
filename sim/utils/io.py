@@ -30,6 +30,10 @@ class SafeReadError(OSError):
     """Raised when a bounded no-follow read cannot be completed safely."""
 
 
+class SafeReadLimitError(SafeReadError):
+    """Raised when the verified input exceeds the maximum read size."""
+
+
 def read_regular_file_nofollow(
     path: str | Path,
     *,
@@ -204,7 +208,9 @@ def _read_stable_descriptor(descriptor: int, *, path: Path, minimum: int, maximu
     before = os.fstat(descriptor)
     if not stat.S_ISREG(before.st_mode):
         raise SafeReadError(f"Evidence input must be a regular file: {path}")
-    if before.st_size < minimum or before.st_size > maximum:
+    if before.st_size > maximum:
+        raise SafeReadLimitError(f"Evidence input must contain between {minimum} and {maximum} bytes: {path}")
+    if before.st_size < minimum:
         raise SafeReadError(f"Evidence input must contain between {minimum} and {maximum} bytes: {path}")
     chunks: list[bytes] = []
     remaining = maximum + 1

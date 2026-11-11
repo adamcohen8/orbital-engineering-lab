@@ -1,6 +1,6 @@
 # Conjunction Assessment
 
-OEL v0.29 provides a bounded public conjunction-assessment foundation. It can
+OEL v1.0 provides a bounded public conjunction-assessment foundation. It can
 inspect and canonically round-trip a CCSDS CDM 1.0 KVN message, refine one
 two-object time of closest approach (TCA), construct encounter-plane geometry,
 project declared covariances, integrate one transparent educational 2D
@@ -186,14 +186,14 @@ comparison remains appropriate only for a later claim that lacks a
 reproducible analytic, published, numerical-integration, Monte Carlo, or open
 implementation reference.
 
-## Public And Pro Boundary
+## Local Edition And Private-Service Boundary
 
 Public core includes the bounded two-object CDM, TCA, encounter geometry,
 educational Pc, small explicit rescreen, targeter-backed candidate, and JSON
 evidence surfaces described here.
 
-Pro remains the owner for catalog-scale ingestion and monitoring, event
-association and updates, covariance calibration/propagation, multiple or
-nonlinear Pc methods, probability sensitivity campaigns, constrained or
-multi-object avoidance optimization, full-catalog rescreening, operational
-stores, dashboards, and review-ready operational workflows.
+The local edition does not provide catalog-scale monitoring, event association
+and updates, covariance calibration, nonlinear Pc qualification, or operational
+stores and maneuver authority. Hosted service infrastructure and the Manifold
+remain private. Any result from this bounded workflow remains engineering
+evidence, not an operational disposition.

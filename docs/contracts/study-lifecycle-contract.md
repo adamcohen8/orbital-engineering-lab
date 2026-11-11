@@ -160,4 +160,4 @@ evidence and a future capability contract with an appropriate maximum.
 This v1 slice does not provide execution queues, monitoring, cancellation,
 resume, migrations, a visual workbench, campaign orchestration, team review,
 authorization, retention policy, customer data governance, or operational
-qualification. Those remain future or Pro workflow layers.
+qualification. Those remain future or private-service workflow layers.

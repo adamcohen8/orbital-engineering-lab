@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 from integrations.oel_mcp.contracts import (
     HANDLING_SCHEMA,
     MAX_MANIFEST_BYTES,
     MAX_REVIEW_RESULT_BYTES,
+    MAX_REVIEW_STORE_BYTES,
     MAX_REVIEW_VALUE_BYTES,
     MAX_ROWS,
     MAX_VM_STEPS,
@@ -18,6 +20,7 @@ from integrations.oel_mcp.execution import M4_RESOURCE_PROFILES
 from integrations.oel_mcp.fsw_authoring_registry import FSW_AUTHORING_TOOL_CONTRACTS, FSW_AUTHORING_TOOL_IDS
 from sim.review.animation_recipes import list_review_animation_recipes
 from sim.review.plot_recipes import list_review_plot_recipes
+from sim.review.scientific import operation_schema as scientific_operation_schema
 
 PUBLIC_PROFILES = ("public_local", "direct_frontier_restricted")
 M4_LOCAL_PROFILES = ("public_local",)
@@ -865,6 +868,28 @@ PUBLIC_TOOL_CONTRACTS: tuple[ToolContract, ...] = (
         },
     ),
     ToolContract(
+        tool_id="oel.review_scientific.v1",
+        title="Read scientific evidence from recorded OEL samples",
+        description="Describe quantities, select saved samples, or compute a bounded derived result with source provenance.",
+        risk_class="R0_read",
+        oel_api="sim.review.scientific_evidence",
+        maturity="supported",
+        install_profile="mcp",
+        deployment_profiles=M4_LOCAL_PROFILES,
+        data_classes=("run_evidence",),
+        writes=False,
+        input_schema=object_schema(handling_properties({
+            "output_dir": {"type": "string", "minLength": 1},
+            "request": scientific_operation_schema(),
+        }), required=("output_dir", "request", "handling")),
+        result_schema={"type": "object", "required": ["schema", "status", "request", "rows", "receipt_sha256"],
+                       "properties": {"schema": {"const": "oel.review.scientific.v1"},
+                                      "status": {"enum": ["available", "unavailable"]},
+                                      "request": {"type": "object"}, "rows": {"type": "array"},
+                                      "receipt_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}},
+        limits={"max_review_store_bytes": MAX_REVIEW_STORE_BYTES},
+    ),
+    ToolContract(
         tool_id="oel.plan_run.v1",
         title="Plan a bounded OEL scenario run",
         description="Inspect a trusted local scenario structurally and report its normalized identity, phases, and resource estimate without executing it.",
@@ -1563,9 +1588,77 @@ PUBLIC_TOOL_CONTRACTS: tuple[ToolContract, ...] = (
 
 PUBLIC_TOOL_CONTRACTS = PUBLIC_TOOL_CONTRACTS + FSW_AUTHORING_TOOL_CONTRACTS + CR3BP_TOOL_CONTRACTS
 
+PUBLIC_TOOL_CONTRACTS += (
+    ToolContract(
+        tool_id="oel.inspect_od_json.v1",
+        title="Inspect an OD JSON artifact",
+        description="Read bounded metadata and counts from a local orbit determination artifact.",
+        risk_class="R0_read",
+        oel_api="integrations.oel_mcp.public_handlers.inspect_od_json_metadata",
+        maturity="supported",
+        install_profile="mcp",
+        deployment_profiles=M4_LOCAL_PROFILES,
+        data_classes=("orbit_determination",),
+        writes=False,
+        input_schema=object_schema(
+            handling_properties({
+                "path": {"type": "string", "minLength": 1, "maxLength": 2048},
+                "max_file_bytes": {"type": "integer", "minimum": 1, "maximum": MAX_MANIFEST_BYTES},
+            }),
+            required=("path", "handling"),
+        ),
+        result_schema=object_schema(
+            {
+                "status": {"const": "completed"},
+                "kind": {"type": "string"},
+                "schema_version": {"type": ["integer", "null"]},
+                "top_level_keys": {"type": "array", "items": {"type": "string"}},
+                "safe_summary": {"type": "object"},
+                "file_bytes": {"type": "integer", "minimum": 0},
+                "hidden_truth_visible": {"const": False},
+                "local_only": {"const": True},
+                "non_claims": {"type": "array", "items": {"type": "string"}},
+            },
+            required=(
+                "status", "kind", "schema_version", "top_level_keys", "safe_summary",
+                "file_bytes", "hidden_truth_visible", "local_only", "non_claims",
+            ),
+        ),
+        limits={"max_file_bytes": MAX_MANIFEST_BYTES, "local_only": True},
+    ),
+)
+
 
 def public_contracts_for_profile(profile: str) -> tuple[ToolContract, ...]:
-    return tuple(contract for contract in PUBLIC_TOOL_CONTRACTS if profile in contract.deployment_profiles)
+    contracts = tuple(contract for contract in PUBLIC_TOOL_CONTRACTS if profile in contract.deployment_profiles)
+    if profile != "public_local":
+        return contracts
+
+    from integrations.oel_mcp.fswdk_registry import FSWDK_TOOL_CONTRACTS
+    from integrations.oel_mcp.local_analytics_registry import LOCAL_ANALYTICS_CONTRACTS
+    from integrations.oel_mcp.od_registry import OD_TOOL_CONTRACTS
+    from integrations.oel_mcp.twin_registry import TWIN_TOOL_CONTRACTS
+
+    # The metadata inspector already has a public contract.
+    local = LOCAL_ANALYTICS_CONTRACTS + OD_TOOL_CONTRACTS[:-1] + FSWDK_TOOL_CONTRACTS + TWIN_TOOL_CONTRACTS
+    return contracts + tuple(
+        replace(
+            contract,
+            tool_id=(
+                contract.tool_id.replace("oel.pro.fsw.", "oel.fswdk.", 1)
+                if contract.tool_id.startswith("oel.pro.fsw.")
+                else contract.tool_id.replace("oel.pro.", "oel.", 1)
+            ),
+            title=contract.title.replace("Pro ", ""),
+            description=contract.description.replace("OEL Pro ", "OEL "),
+            deployment_profiles=M4_LOCAL_PROFILES,
+            install_profile="mcp",
+            required_entitlement="",
+            required_entitlements=(),
+            limits={**contract.limits, "entitlement_required": False},
+        )
+        for contract in local
+    )
 
 
 def public_contract_map(profile: str) -> dict[str, ToolContract]:

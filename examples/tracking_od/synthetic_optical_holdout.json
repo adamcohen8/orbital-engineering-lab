@@ -1,0 +1,21 @@
+{
+  "schema_version": "oel.pro_tracking_od_problem.v1",
+  "name": "synthetic-optical-holdout",
+  "object_id": "SAT-1",
+  "measurement_model": "optical_ra_dec",
+  "measurements": [
+    {"measurement_id":"optical:0","time_s":0.0,"ra_deg":0.0,"dec_deg":0.0,"observer_id":"OBS-1","observer_eci_km":[6378.137,0.0,0.0],"sigma_arcsec":5.0},
+    {"measurement_id":"optical:1","time_s":120.0,"ra_deg":58.04034543543463,"dec_deg":0.6441635305358068,"observer_id":"OBS-1","observer_eci_km":[6378.137,0.0,0.0],"sigma_arcsec":5.0},
+    {"measurement_id":"optical:2","time_s":240.0,"ra_deg":77.74870520695782,"dec_deg":0.7419487039875384,"observer_id":"OBS-1","observer_eci_km":[6378.137,0.0,0.0],"sigma_arcsec":5.0},
+    {"measurement_id":"optical:3","time_s":360.0,"ra_deg":87.80950764835731,"dec_deg":0.7586826537917898,"observer_id":"OBS-1","observer_eci_km":[6378.137,0.0,0.0],"sigma_arcsec":5.0},
+    {"measurement_id":"optical:4","time_s":480.0,"ra_deg":94.86171862417638,"dec_deg":0.7565060755919321,"observer_id":"OBS-1","observer_eci_km":[6378.137,0.0,0.0],"sigma_arcsec":5.0},
+    {"measurement_id":"optical:5","time_s":600.0,"ra_deg":100.633464119991,"dec_deg":0.7462010520455421,"observer_id":"OBS-1","observer_eci_km":[6378.137,0.0,0.0],"sigma_arcsec":5.0}
+  ],
+  "initial_jd_utc": 2461182.5,
+  "initial_state_eci_km_km_s": [7000.05,-0.04,0.02,0.00001,7.54604,0.10001],
+  "initial_covariance_eci": [[0.01,0,0,0,0,0],[0,0.01,0,0,0,0],[0,0,0.01,0,0,0],[0,0,0,1e-8,0,0],[0,0,0,0,1e-8,0],[0,0,0,0,0,1e-8]],
+  "fit_duration_s": 360.0,
+  "holdout_duration_s": 240.0,
+  "propagation": {"step_s": 10.0, "j2": false},
+  "filter": {"process_noise_model":"white_acceleration","spectral_density":[1e-14,1e-14,1e-14]}
+}

@@ -6,8 +6,40 @@ from pathlib import Path
 
 import pytest
 
+import sim.security.output_writes as output_writes
 from integrations.oel_mcp.execution import complete_manifest
 from sim.security.output_writes import SecureWriteError, SecureWriteRoot, staged_output
+
+
+def test_directory_sync_failure_does_not_leak_child_descriptor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    opened: list[int] = []
+    real_open = os.open
+
+    def record_open(path, *args, **kwargs):
+        fd = real_open(path, *args, **kwargs)
+        if path == "nested":
+            opened.append(fd)
+        return fd
+
+    def fail_sync(_fd: int) -> None:
+        raise OSError("injected directory sync failure")
+
+    with SecureWriteRoot.open(tmp_path, approved_roots=(tmp_path,)) as writer:
+        monkeypatch.setattr(output_writes.os, "open", record_open)
+        monkeypatch.setattr(output_writes, "_fsync_directory", fail_sync)
+        with pytest.raises(OSError, match="injected directory sync failure"):
+            writer.mkdir("nested")
+        leaked = []
+        for fd in opened:
+            try:
+                os.fstat(fd)
+            except OSError:
+                continue
+            leaked.append(fd)
+            os.close(fd)
+        assert not leaked
 
 
 def test_manifest_hashes_retained_directory_after_path_substitution(tmp_path: Path) -> None:

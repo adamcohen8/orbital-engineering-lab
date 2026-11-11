@@ -303,7 +303,8 @@ def _validate_dependency_sources(
                 continue
             unexpected.append(f"unqualified-local:{row.get('name', '')}")
             continue
-        if urlparse(source_url).hostname not in allowed_hosts:
+        parsed_source_url = urlparse(source_url)
+        if parsed_source_url.scheme != "https" or parsed_source_url.hostname not in allowed_hosts:
             unexpected.append(source_url or "<missing-source-url>")
             continue
         if is_native and qualified_native_wheels is not None:

@@ -24,7 +24,7 @@ from sim.study_planning.config_validation import validate_config_path
 ROOT = Path(__file__).resolve().parents[2]
 
 
-@pytest.mark.parametrize("path", ["C:/escape", "C:escape", "dir/C:/escape", "report.json:stream", "../escape", "\\\\host\\share"])
+@pytest.mark.parametrize("path", ["C:/escape", "C:escape", "dir/C:/escape", "report.json:stream", "../escape", "\\\\host\\share", "a//b", "report.json/"])
 def test_result_paths_are_safe_on_windows_and_posix(path: str) -> None:
     with pytest.raises(ValueError, match="Unsafe path"):
         _safe_relative_path(path)

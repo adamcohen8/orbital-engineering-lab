@@ -26,7 +26,7 @@ from integrations.oel_mcp.interop import (
     plot_selection_prompt,
     run_sdk_stdio,
 )
-from integrations.oel_mcp.public_registry import PUBLIC_TOOL_CONTRACTS
+from integrations.oel_mcp.public_registry import PUBLIC_TOOL_CONTRACTS, public_contracts_for_profile
 from integrations.oel_mcp.resources import PUBLIC_RESOURCE_URIS, PUBLIC_SAVED_QUERY_NAMES, build_public_resource_catalog
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -62,7 +62,7 @@ def test_public_tool_annotations_match_declared_effects() -> None:
 
 
 def test_supported_public_resources_are_bounded_and_exclude_private_metadata() -> None:
-    catalog = build_public_resource_catalog(profile="public_local", tool_contracts=PUBLIC_TOOL_CONTRACTS)
+    catalog = build_public_resource_catalog(profile="public_local", tool_contracts=public_contracts_for_profile("public_local"))
 
     assert tuple(resource.contract.uri for resource in catalog) == PUBLIC_RESOURCE_URIS
     assert all(resource.size <= 500_000 for resource in catalog)
@@ -86,26 +86,14 @@ def test_supported_public_resources_are_bounded_and_exclude_private_metadata() -
     }
     assert animation_catalog["quality_policy"]["contact_sheet_required"] is True
     assert plot_catalog["routing"]["oel_review_evidence_plotter_is_authoritative"] is True
-    pro_escalations = [
-        workflow["pro_escalation"]
-        for workflow in workflow_catalog["workflows"]
-        if "pro_escalation" in workflow
-    ] + workflow_catalog["cross_cutting_pro_escalations"]
-    assert {capability_id for item in pro_escalations for capability_id in item["capability_ids"]} == {
-        "constellation_design.optimization",
-        "oel.pro.campaign.monte_carlo.v1",
-        "oel.pro.campaign.sensitivity.v1",
-        "oel.pro.controller.benchmark.v1",
-        "oel.pro.scale.screening.v1",
-        "oel.pro.trajectory_optimization.v1",
-        "orbit_determination.ilrs_slr",
-        "orbit_determination.reduced_tracking",
-    }
-    assert all(item["availability"] == "coming_soon" for item in pro_escalations)
-    assert all(item["recommendation_only"] is True for item in pro_escalations)
-    assert all(item["execution_available"] is False and item["mcp_tools"] == [] for item in pro_escalations)
+    local_routes = {workflow["workflow_id"]: workflow for workflow in workflow_catalog["workflows"]}
+    assert {"trajectory_optimization", "constellation_optimization", "scale_catalog",
+            "local_tracking_and_slr", "local_campaigns", "controller_bench"} <= set(local_routes)
+    assert not workflow_catalog["cross_cutting_pro_escalations"]
+    for workflow in local_routes.values():
+        assert set(workflow["mcp_tools"]) <= set(PUBLIC_TOOL_IDS)
     public_resource_text = "".join(resource.text for resource in catalog)
-    assert "sim.pro_" not in public_resource_text
+    assert "sim.intent_hypothesis" not in public_resource_text
     assert "agents/pro" not in public_resource_text
     assert "/Users/" not in public_resource_text
 

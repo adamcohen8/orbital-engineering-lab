@@ -90,7 +90,7 @@ identity, and cross-file references.
 
 MCP handlers supply logical/physical output bindings for scenario execution,
 agent-task packets, hypothesis studies, dynamics OD, Scale refresh-to-ONP,
-detection-to-IHE handoffs, trajectory optimization, interchange materialization,
+event-centered handoffs, trajectory optimization, interchange materialization,
 FSW/FSWDK authoring, and spacecraft twins. Engine helpers use the bound writer;
 path-only libraries such as SQLite and media encoders use private per-file
 staging. Producers construct persisted paths and content hashes using the final

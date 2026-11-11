@@ -31,10 +31,11 @@ one authorized workspace, symbolic-link inputs are refused, outputs must be new
 or empty, component tests are time-bounded, and the workflow does not use the
 network or hosted AI.
 
-The private FSWDK remains the strict workflow superset for Controller Bench,
-comparison campaigns, tuning, qualification and baseline promotion, packaged
-review evidence, cFS/SIL, and program-specific
-integration.
+The local FSWDK is the workflow superset for Controller Bench, comparison
+campaigns, tuning, qualification and baseline promotion, packaged review
+evidence, cFS/SIL, and program-specific integration. Qualification inputs and
+generated release-governance packets may remain private; running a local
+workflow does not establish flight qualification or operational approval.
 
 ## First Candidate
 
@@ -139,8 +140,10 @@ Builds execute reviewed build scripts and record compiler/source/binary identity
 Build directories and logs remain beside their receipt; remove them only when
 no retained evidence needs the executable. Edits require rebuild/revalidation.
 Native validation is non-executing; native tests and smoke execute trusted code.
-The generic local stdio adapter and SDKs are public; cFS/SIL and the broader
-FSWDK verification workflows retain their Pro boundary.
+The generic local stdio adapter, cFS/SIL bridge, and FSWDK verification
+workflows are public local code. Hosted infrastructure, restricted program
+inputs, and generated qualification/governance evidence retain their private
+boundary.
 
 Read the [native stdio contract](contracts/fsw-native-stdio-contract.md) for wire
 records, checkpoint declarations, timing, failure behavior, SDK coverage, and

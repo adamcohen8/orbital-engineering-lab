@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "oel.fswdk.qualification.v1",
+  "type": "object",
+  "required": ["schema_version", "candidate_id", "target", "envelope", "requirements", "gates"],
+  "properties": {
+    "schema_version": {"const": "oel.fswdk.qualification.v1"},
+    "candidate_id": {"type": "string", "pattern": "^[a-z][a-z0-9_]{1,63}$"},
+    "target": {"enum": ["simulation_qualified_candidate"]},
+    "envelope": {"type": "string", "minLength": 1},
+    "max_evidence_age_s": {"type": "number", "exclusiveMinimum": 0},
+    "requirements": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "required": ["id", "statement"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[A-Z][A-Z0-9_-]{2,79}$"},
+          "statement": {"type": "string", "minLength": 1},
+          "verification": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "gates": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "required": ["id", "kind", "required", "requirement_ids"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{1,79}$"},
+          "kind": {"enum": ["contract_test", "smoke", "controller_bench", "artifact"]},
+          "required": {"type": "boolean"},
+          "requirement_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string"},
+            "uniqueItems": true
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "non_claims": {"type": "array", "items": {"type": "string"}}
+  },
+  "additionalProperties": false
+}
