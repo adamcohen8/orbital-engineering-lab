@@ -12,16 +12,18 @@ from sim.config import SimulationScenarioConfig
 from sim.core.models import StateBelief
 from sim.digital_twin.mass_properties import resolve_inertia_kg_m2
 from sim.dynamics.orbit.environment import EARTH_MU_KM3_S2, EARTH_RADIUS_KM
-from sim.dynamics.orbit.frames import frame_context_from_environment, transform_position
+from sim.dynamics.orbit.frames import frame_context_from_environment, frame_context_from_mapping, transform_position
 from sim.numeric_backend import normalize_numeric_backend
 from sim.presets.rockets import BASIC_1ST_STAGE, BASIC_SSTO_ROCKET, BASIC_TWO_STAGE_STACK, RocketStackPreset
 from sim.rocket import (
+    LandingGear,
     MaxQThrottleLimiterGuidance,
     OpenLoopPitchProgramGuidance,
     OrbitInsertionCutoffGuidance,
     RocketAscentSimulator,
     RocketGuidanceLaw,
     RocketSimConfig,
+    RocketTouchdownLimits,
     RocketVehicleConfig,
     TVCSteeringGuidance,
 )
@@ -52,6 +54,9 @@ def _earth_impact_policy_for_object(termination: Any, object_id: str) -> dict[st
             policy["earth_impact_enabled"] = bool(override.get("enabled"))
         if override.get("earth_radius_km") is not None:
             policy["earth_radius_km"] = float(override.get("earth_radius_km"))
+    object_policy = by_object.get(str(object_id), {})
+    if isinstance(object_policy, dict) and "touchdown" in object_policy:
+        policy["touchdown"] = object_policy["touchdown"]
     return policy
 
 
@@ -148,6 +153,13 @@ def _create_rocket_runtime(
     )
     atmosphere_env = dict(cfg.simulator.environment.get("atmosphere_env", {}) or {})
     earth_impact_policy = _earth_impact_policy_for_object(cfg.simulator.termination, object_id)
+    touchdown = earth_impact_policy.get("touchdown")
+    if touchdown is not None:
+        atmosphere_env["frame_context"] = frame_context_from_mapping(
+            dict(cfg.simulator.frames or {}), jd_utc_start=cfg.simulator.initial_jd_utc,
+        )
+        if cfg.simulator.initial_jd_utc is not None:
+            atmosphere_env["jd_utc_start"] = cfg.simulator.initial_jd_utc
     aero_cfg = RocketAeroConfig(
         enabled=bool(rocket_dyn.get("aero_model_enabled", True)),
         reference_area_m2=float(aero_dyn.get("reference_area_m2", object_aero.reference_area_m2)),
@@ -194,6 +206,7 @@ def _create_rocket_runtime(
         enable_j4=bool(orbit_dyn.get("j4", False)),
         terminate_on_earth_impact=bool(earth_impact_policy.get("earth_impact_enabled", True)),
         earth_impact_radius_km=float(earth_impact_policy.get("earth_radius_km", 6378.137)),
+        touchdown=RocketTouchdownLimits(**touchdown) if touchdown is not None else None,
         area_ref_m2=rocket_area_ref_m2,
         use_stagewise_aero_geometry=bool(rocket_dyn.get("use_stagewise_aero_geometry", True)),
         cd=float(rocket_dyn.get("cd", 0.35)),
@@ -214,6 +227,7 @@ def _create_rocket_runtime(
         stack=_resolve_rocket_stack(dict(rc.specs or {})),
         payload_mass_kg=float(r_specs.get("payload_mass_kg", 150.0)),
         thrust_axis_body=np.array(r_specs.get("thrust_axis_body", [1.0, 0.0, 0.0]), dtype=float),
+        landing_gear=LandingGear.from_mapping(r_specs["landing_gear"]) if "landing_gear" in r_specs else None,
     )
     guidance = _build_rocket_guidance(rc)
     if bool(rocket_dyn.get("tvc_steering_enabled", False)):

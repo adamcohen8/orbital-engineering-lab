@@ -12,6 +12,8 @@ from sim.dynamics.orbit.frames import frame_context_from_environment, transform_
 from sim.dynamics.orbit.propagator import OrbitPropagator, drag_plugin, j2_plugin, j3_plugin, j4_plugin, srp_plugin
 from sim.numeric_backend import normalize_numeric_backend
 from sim.rocket.aero import RocketAeroConfig, compute_aero_loads, compute_aero_state
+from sim.rocket.landing_gear import GearContactModel, gear_evidence
+from sim.rocket.landing_step import advance_held_gear, advance_landing
 from sim.rocket.models import (
     GuidanceCommand,
     RocketGuidanceLaw,
@@ -21,6 +23,7 @@ from sim.rocket.models import (
     RocketVehicleConfig,
 )
 from sim.rocket.navigation import _clip_scalar, _cross3, _norm3, rocket_air_relative_state_eci_m_s
+from sim.rocket.touchdown import RocketTouchdown, locate_touchdown
 from sim.utils.geodesy import ecef_to_geodetic_deg_km, geodetic_to_ecef_km
 from sim.utils.quaternion import normalize_quaternion, quaternion_to_dcm_bn
 
@@ -192,6 +195,13 @@ class RocketAscentSimulator:
     guidance: RocketGuidanceLaw
 
     def __post_init__(self) -> None:
+        self.gear_model = None
+        if self.vehicle_cfg.landing_gear is not None:
+            if self.sim_cfg.touchdown is None or self.sim_cfg.touchdown.contact_height_m != 0.0:
+                raise ValueError("Landing gear requires a touchdown policy with zero contact_height_m.")
+            if self.sim_cfg.attitude_mode.strip().lower() != "dynamic":
+                raise ValueError("Landing gear requires dynamic rocket attitude.")
+            self.gear_model = GearContactModel(self.vehicle_cfg.landing_gear, self.sim_cfg)
         stages = self.vehicle_cfg.stack.stages
         if len(stages) == 0:
             raise ValueError("vehicle_cfg.stack must contain at least one stage.")
@@ -268,10 +278,12 @@ class RocketAscentSimulator:
             stage_prop_remaining_kg=self._stage_prop0.copy(),
             payload_attached=True,
             thrust_vector_body=_unit(np.asarray(self.vehicle_cfg.thrust_axis_body, dtype=float)),
+            landing_legs={} if self.gear_model is None else self.gear_model.initial_legs(),
         )
 
     def hold_on_launch_pad(self, state: RocketState, *, t_s: float) -> RocketState:
         """Advance a prelaunch state while keeping it fixed to the rotating launch pad."""
+        advance_held_gear(self, state, float(t_s))
         r_eci, v_eci = _launch_position_velocity_eci(
             lat_deg=self.sim_cfg.launch_lat_deg,
             lon_deg=self.sim_cfg.launch_lon_deg,
@@ -335,6 +347,10 @@ class RocketAscentSimulator:
                 sample_state.position_eci_km,
                 sample_state.t_s,
                 jd_utc_start=self.sim_cfg.atmosphere_env.get("jd_utc_start"),
+                frame_context=(
+                    frame_context_from_environment(self.sim_cfg.atmosphere_env)
+                    if self.sim_cfg.touchdown is not None else None
+                ),
             )
             alt[idx] = float(
                 alt_now
@@ -356,7 +372,10 @@ class RocketAscentSimulator:
 
             cmd = self.guidance.command(state, self.sim_cfg, self.vehicle_cfg)
             throttle = _clamp(float(cmd.throttle), 0.0, 1.0)
-            state = self._step_once(state, cmd, throttle, dt)
+            interval = dt if self.gear_model is None else min(dt, self.sim_cfg.max_time_s - k * dt)
+            trial = self.step(state, cmd, dt_s=interval)
+            touchdown = self.resolve_touchdown(state, trial, cmd)
+            state = trial if touchdown is None else touchdown.state
             _record_sample(k + 1, state)
             sample_idx = k + 1
             thr_cmd[sample_idx] = throttle
@@ -371,9 +390,11 @@ class RocketAscentSimulator:
             aero_force_n[sample_idx] = float(getattr(state, "_last_step_aero_force_n", 0.0))
             aero_moment_nm[sample_idx] = float(getattr(state, "_last_step_aero_moment_nm", 0.0))
 
-            if self.sim_cfg.terminate_on_earth_impact:
+            if touchdown is not None or (
+                self.sim_cfg.terminate_on_earth_impact and self.sim_cfg.touchdown is None
+            ):
                 impact_radius_km = float(self.sim_cfg.earth_impact_radius_km)
-                impact = float(_norm3(state.position_eci_km)) <= impact_radius_km
+                impact = touchdown is not None or float(_norm3(state.position_eci_km)) <= impact_radius_km
                 # EARTH_RADIUS_KM is the WGS-84 equatorial semi-major axis and
                 # remains the default selector for the ellipsoidal physical
                 # surface. A non-default radius is an explicit spherical
@@ -382,7 +403,7 @@ class RocketAscentSimulator:
                 use_wgs84_surface = (
                     self.sim_cfg.use_wgs84_geodesy and impact_radius_km == EARTH_RADIUS_KM
                 )
-                if use_wgs84_surface:
+                if touchdown is None and use_wgs84_surface:
                     _, _, alt_check = _geodetic_state_from_eci(
                         state.position_eci_km,
                         state.t_s,
@@ -391,7 +412,7 @@ class RocketAscentSimulator:
                     impact = bool(alt_check <= 0.0)
                 if impact:
                     terminated_early = True
-                    termination_reason = "earth_impact"
+                    termination_reason = "earth_impact" if touchdown is None else touchdown.termination_reason
                     termination_time = float(state.t_s)
                     n = k + 2
                     return RocketSimResult(
@@ -423,6 +444,8 @@ class RocketAscentSimulator:
                         terminated_early=terminated_early,
                         termination_reason=termination_reason,
                         termination_time_s=termination_time,
+                        touchdown=state.gear_touchdown if self.gear_model else (None if touchdown is None else touchdown.evidence),
+                        landing_gear=gear_evidence(state) if self.gear_model else None,
                     )
 
             # insertion criterion: altitude near target and low eccentricity while coasting.
@@ -473,6 +496,8 @@ class RocketAscentSimulator:
                         terminated_early=terminated_early,
                         termination_reason=termination_reason,
                         termination_time_s=termination_time,
+                        touchdown=state.gear_touchdown,
+                        landing_gear=gear_evidence(state) if self.gear_model else None,
                     )
             else:
                 insertion_hold_counter = 0.0
@@ -506,15 +531,54 @@ class RocketAscentSimulator:
             terminated_early=terminated_early,
             termination_reason=termination_reason,
             termination_time_s=termination_time,
+            touchdown=state.gear_touchdown,
+            landing_gear=gear_evidence(state) if self.gear_model else None,
         )
 
     def step(self, state: RocketState, command: GuidanceCommand, dt_s: float | None = None) -> RocketState:
         """Public single-step API for external scenario orchestrators."""
         h = float(self.sim_cfg.dt_s if dt_s is None else dt_s)
         throttle = _clamp(float(command.throttle), 0.0, 1.0)
+        if self.gear_model is not None:
+            if not np.isfinite(h) or h <= 0.0:
+                raise ValueError("Rocket landing step duration must be finite and positive.")
+            return advance_landing(self, state, command, throttle, h)
+        if command.landing_gear_commands:
+            raise ValueError("Landing gear commands require configured landing gear.")
         return self._step_once(state=state, cmd=command, throttle=throttle, dt_s=h)
 
-    def _step_once(self, state: RocketState, cmd: GuidanceCommand, throttle: float, dt_s: float) -> RocketState:
+    def resolve_touchdown(
+        self, start: RocketState, end: RocketState, command: GuidanceCommand
+    ) -> RocketTouchdown | None:
+        """Inspect a trial step for contact and return its pre-impact state."""
+        cfg = self.sim_cfg
+        if cfg.touchdown is None:
+            return None
+        if self.gear_model is not None:
+            terminal = end.gear_terminal
+            if terminal is None:
+                return None
+            return RocketTouchdown(end, terminal["outcome"], {
+                **terminal,
+                "mass_kg": end.mass_kg,
+                "position_eci_km": end.position_eci_km.tolist(),
+                "velocity_eci_km_s": end.velocity_eci_km_s.tolist(),
+                "attitude_quat_bn": end.attitude_quat_bn.tolist(),
+                "angular_rate_body_rad_s": end.angular_rate_body_rad_s.tolist(),
+            })
+        return locate_touchdown(
+            start, end, lambda dt_s: self.step(start, command, dt_s=dt_s),
+            limits=cfg.touchdown,
+            context=frame_context_from_environment(cfg.atmosphere_env),
+            use_wgs84=cfg.use_wgs84_geodesy,
+            radius_km=cfg.earth_impact_radius_km,
+            upright_axis_body=self.vehicle_cfg.thrust_axis_body,
+        )
+
+    def _step_once(
+        self, state: RocketState, cmd: GuidanceCommand, throttle: float, dt_s: float,
+        *, ground_wrench: tuple[np.ndarray, np.ndarray] | None = None,
+    ) -> RocketState:
         s = state.copy()
         stage_i = s.active_stage_index
         thrust_n = 0.0
@@ -678,11 +742,14 @@ class RocketAscentSimulator:
             cd=self.sim_cfg.cd,
             cr=self.sim_cfg.cr,
         )
+        command_accel = accel_thrust_eci_km_s2 + accel_aero_eci_km_s2
+        if ground_wrench is not None:
+            command_accel += ground_wrench[0] / (1000.0 * mass_for_forces_kg)
         x_next = self._propagator.propagate(
             x_eci=x_orbit,
             dt_s=dt_s,
             t_s=s.t_s,
-            command_accel_eci_km_s2=accel_thrust_eci_km_s2 + accel_aero_eci_km_s2,
+            command_accel_eci_km_s2=command_accel,
             env=env,
             ctx=ctx,
         )
@@ -698,6 +765,7 @@ class RocketAscentSimulator:
                 np.zeros(3) if cmd.torque_body_nm_cmd is None else np.array(cmd.torque_body_nm_cmd, dtype=float)
             )
             torque_cmd = torque_cmd + torque_aero_body_nm + torque_tvc_body_nm
+            torque_with_contact = torque_cmd if ground_wrench is None else torque_cmd + ground_wrench[1]
             att_h = max(min(self.sim_cfg.attitude_substep_s, dt_s), 1e-4)
             rem = dt_s
             qn = s.attitude_quat_bn.copy()
@@ -708,7 +776,7 @@ class RocketAscentSimulator:
                     quat_bn=qn,
                     omega_body_rad_s=wn,
                     inertia_kg_m2=self.sim_cfg.inertia_kg_m2,
-                    torque_body_nm=torque_cmd,
+                    torque_body_nm=torque_with_contact,
                     dt_s=h,
                     numeric_backend=self.sim_cfg.numeric_backend,
                 )

@@ -193,6 +193,9 @@ def _default_next_steps(*, workflow: str, artifacts: dict[str, Any], base_dir: P
         if "summary_json" in artifacts:
             name = _linked_artifact_name(artifacts, "summary_json", "master_run_summary.json", base_dir=base_dir)
             steps.append(f"Open {name} for stable run metadata and metrics.")
+        if "docking_json" in artifacts:
+            name = _linked_artifact_name(artifacts, "docking_json", "docking.json", base_dir=base_dir)
+            steps.append(f"Open {name} for docking events, relative port motion, and interface loads.")
         if "run_log_json" in artifacts:
             name = _linked_artifact_name(artifacts, "run_log_json", "master_run_log.json", base_dir=base_dir)
             steps.append(f"Open {name} for saved time histories and custom plotting data.")

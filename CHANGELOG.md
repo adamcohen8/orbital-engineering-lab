@@ -6,6 +6,21 @@ This project follows semantic versioning. The notes below retain historical
 pre-1.0 behavior where relevant; v1.0.0 is the first stable public local
 release, and migration-sensitive behavior is called out explicitly.
 
+## 1.1.0 - 2026-11-18
+
+- Add experimental cooperative spacecraft docking with rigid-body contact,
+  rebound, compliant soft capture, and hard mate. Include passive examples
+  and a two-vehicle flight-software example with typed port measurements and
+  capture and mate commands.
+- Record docking events, sampled interface loads, and port motion in
+  `docking.json` and the review store. Include optional Basilisk/MuJoCo
+  welded-motion and Tohoku axial-contact comparison examples.
+- Add experimental rocket touchdown classification and deployable landing
+  gear. Record contact limits, rebound, settling, and per-leg loads in the
+  run evidence. Include a synthetic four-leg drop example.
+- Explain that both spacecraft maneuver in Quickstart and that the target's
+  ideal actuator reports delta-v without consuming propellant.
+
 ## 1.0.0 - 2026-11-07
 
 - Define the stable 1.x API, CLI, scenario and evidence compatibility policy,

@@ -203,9 +203,14 @@ def write_single_run_review_store(
                 insert_resource_review(conn, payload.get("spacecraft_resources", {}))
                 from sim.ground_segment.artifacts import insert_ground_review
                 insert_ground_review(conn, payload.get("ground_segment", []))
+                docking = payload.get("docking")
+                if docking:
+                    from sim.reporting.docking import insert_docking_samples
+
+                    insert_docking_samples(conn, docking["samples"])
                 _insert_events(conn, t_s=t_s, summary=summary, thrust_hist=thrust_hist,
                                impulsive_maneuvers=payload.get("impulsive_maneuvers", ()),
-                               collision_events=payload.get("collision_events", ()))
+                               collision_events=payload.get("collision_events", ()), docking=docking)
                 _insert_mission_recovery(conn, summary=summary)
                 _insert_metrics(conn, summary=summary)
                 _insert_artifacts(
@@ -2624,8 +2629,19 @@ def _insert_events(
     thrust_hist: dict[str, np.ndarray],
     impulsive_maneuvers: list[dict[str, Any]] | tuple[dict[str, Any], ...] = (),
     collision_events: list[dict[str, Any]] | tuple[dict[str, Any], ...] = (),
+    docking: dict[str, Any] | None = None,
 ) -> None:
     rows = []
+    if docking:
+        pair = docking["summary"]
+        for index, event in enumerate(docking["events"]):
+            time_s = event["time_s"]
+            kind = event["event"]
+            rows.append((
+                f"docking:{index}", time_s, _sample_index_for_time(t_s, time_s),
+                f'{pair["probe_id"]},{pair["receiver_id"]}', f"docking_{kind}", "info",
+                f'{kind.replace("_", " ").capitalize()}. Phase: {event["phase"]}.', "docking_dynamics",
+            ))
     for index, impact in enumerate(collision_events):
         event_time = float(impact["time_s"])
         object_ids = list(impact["object_ids"])
@@ -2642,6 +2658,45 @@ def _insert_events(
             f"{impact['post_velocity_eci_km_s']}",
             "collision_dynamics",
         ))
+    gear_by_object = summary.get("rocket_landing_gear_by_object", {})
+    for object_id, gear in gear_by_object.items():
+        rebound = gear["first_rebound_time_s"]
+        if rebound is not None:
+            rows.append((
+                f"rocket_rebound:{object_id}", rebound, _sample_index_for_time(t_s, rebound),
+                object_id, "rocket_rebound", "info", "All contact points cleared the surface.", "rocket_dynamics",
+            ))
+        contact = gear["touchdown"]
+        if contact:
+            time_s = contact["time_s"]
+            rows.append((
+                f"rocket_touchdown:{object_id}", time_s, _sample_index_for_time(t_s, time_s),
+                object_id, "rocket_touchdown", "warning" if contact["outcome"] == "crash" else "info",
+                f"First contact at {contact['contact_point_id']} ({contact['contact_point_status']}). "
+                f"Normal approach energy {contact['normal_energy_j']:.9g} J.",
+                "rocket_dynamics",
+            ))
+        terminal = gear["terminal_event"]
+        if terminal:
+            time_s = terminal["time_s"]
+            event_type = f"rocket_{terminal['outcome']}"
+            rows.append((
+                f"{event_type}:{object_id}", time_s, _sample_index_for_time(t_s, time_s),
+                object_id, event_type, "info" if terminal["outcome"] == "landing" else "warning",
+                terminal["reason"].replace("_", " ").capitalize(), "rocket_dynamics",
+            ))
+    touchdown = summary.get("rocket_touchdown")
+    if touchdown and touchdown["object_id"] not in gear_by_object:
+        event_time = float(touchdown["time_s"])
+        failed = ", ".join(touchdown["failed_limits"]) or "none"
+        rows.append((
+            "rocket_touchdown", event_time, _sample_index_for_time(t_s, event_time),
+            touchdown["object_id"], "rocket_touchdown",
+            "info" if touchdown["outcome"] == "landing" else "warning",
+            f"{touchdown['outcome'].capitalize()}; normal impact energy "
+            f"{touchdown['normal_energy_j']:.9g} J; failed limits: {failed}.",
+            "rocket_dynamics",
+        ))
     if bool(summary.get("terminated_early", False)):
         event_time = _float_or_none(summary.get("termination_time_s"))
         rows.append(
@@ -2651,7 +2706,7 @@ def _insert_events(
                 _sample_index_for_time(t_s, event_time),
                 _none_or_str(summary.get("termination_object_id")),
                 "termination",
-                "warning",
+                "info" if summary.get("termination_reason") == "rocket_landing" else "warning",
                 _none_or_str(summary.get("termination_reason")) or "simulation terminated early",
                 "summary",
             )
@@ -3135,6 +3190,8 @@ def _write_schema_json(path: Path, *, generated_utc: str, db_path: Path | None =
             ]
             for table_name in table_names:
                 entry = dict(schema["tables"].get(table_name, {}) or {})
+                if table_name == "docking_samples":
+                    entry["description"] = "Docking port pose, relative motion and interface loads at recorded substeps."
                 entry.setdefault("description", f"Review evidence table: {table_name}.")
                 entry["columns"] = [
                     {

@@ -1,11 +1,8 @@
 # Validation Claims
 
-This page states v1.0.0 local-release validation claims only where the evidence
-names a bounded use and retained source/config identity. A local branch or
-unsigned release candidate is not proof that a public GitHub release has been
-published. This page is intentionally conservative: the open-source edition
-should be useful and credible without implying decision-grade mission
-assurance.
+These validation claims apply to bounded uses with retained source and
+configuration identities. Published versions and signed assets are listed
+in the [public release history](https://github.com/adamcohen8/orbital-engineering-lab/releases).
 
 ## Current Public Claims
 
@@ -33,6 +30,11 @@ The public repository supports these claims:
 - The public [offline validation suite](tracking-od.md#offline-release-validation)
   runs synthetic force and orbit determination checks against an installed
   runtime. Its claims are limited to the tested inputs and tolerances.
+- Experimental docking covers the documented synthetic contact and capture
+  examples, an ideal welded-motion comparison, and one axial bench correlation.
+  Rocket touchdown and landing gear cover demonstrated simulation outcomes
+  with illustrative contact properties. See the [docking model](models/docking.md)
+  and [rocket landing example](scenario-yaml.md#deployable-rocket-landing-gear).
 
 For bounded analysis surfaces, claims are limited to the following retained
 evidence and their current contract versions. A later change needs its own

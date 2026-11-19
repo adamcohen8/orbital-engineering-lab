@@ -1,0 +1,88 @@
+schema_version: oel.scenario.v1
+scenario_name: public_rocket_landing_gear
+scenario_description: A synthetic unpowered drop onto four deployed legs.
+metadata:
+  owner: public
+  public_surface: public-rocket
+  support_level: experimental
+objects:
+  article:
+    kind: rocket
+    initial_state:
+      launch_lat_deg: 35.0
+      launch_lon_deg: -116.0
+      launch_alt_km: 0.025
+    base_guidance:
+      module: sim.rocket.guidance
+      class_name: HoldAttitudeGuidance
+      params: {throttle: 0.0}
+    specs:
+      mass_properties:
+        inertia_kg_m2: [[8000000, 0, 0], [0, 8000000, 0], [0, 0, 8000000]]
+        center_of_mass_body_m: [0, 0, 0]
+        inertia_reference_point: center_of_mass
+      landing_gear:
+        body_contact_points_m:
+          - [-0.5, -1, -1]
+          - [-0.5, -1, 1]
+          - [-0.5, 1, -1]
+          - [-0.5, 1, 1]
+        legs:
+          - id: foot_1
+            mount_body_m: [0, -2, -2]
+            stowed_offset_m: [-0.1, 0, 0]
+            deployed_offset_m: [-2.5, 0, 0]
+            travel_time_s: 0.4
+            initially_deployed: true
+            stiffness_n_m: 8000000
+            damping_n_s_m: 1000000
+            max_stroke_m: 0.7
+            friction_coefficient: 0.35
+          - id: foot_2
+            mount_body_m: [0, -2, 2]
+            stowed_offset_m: [-0.1, 0, 0]
+            deployed_offset_m: [-2.5, 0, 0]
+            travel_time_s: 0.4
+            initially_deployed: true
+            stiffness_n_m: 8000000
+            damping_n_s_m: 1000000
+            max_stroke_m: 0.7
+            friction_coefficient: 0.35
+          - id: foot_3
+            mount_body_m: [0, 2, -2]
+            stowed_offset_m: [-0.1, 0, 0]
+            deployed_offset_m: [-2.5, 0, 0]
+            travel_time_s: 0.4
+            initially_deployed: true
+            stiffness_n_m: 8000000
+            damping_n_s_m: 1000000
+            max_stroke_m: 0.7
+            friction_coefficient: 0.35
+          - id: foot_4
+            mount_body_m: [0, 2, 2]
+            stowed_offset_m: [-0.1, 0, 0]
+            deployed_offset_m: [-2.5, 0, 0]
+            travel_time_s: 0.4
+            initially_deployed: true
+            stiffness_n_m: 8000000
+            damping_n_s_m: 1000000
+            max_stroke_m: 0.7
+            friction_coefficient: 0.35
+simulator:
+  initial_jd_utc: 2460000.5
+  duration_s: 7.0
+  dt_s: 0.1
+  dynamics:
+    orbit: {drag: false, j2: false, numeric_backend: python}
+    rocket: {aero_model_enabled: false, numeric_backend: python}
+  termination:
+    by_object:
+      article:
+        touchdown:
+          surface_altitude_m: 22.0
+          max_normal_energy_j: 1000000000.0
+outputs:
+  output_dir: outputs/examples/public_rocket_landing_gear
+  plots: {enabled: false}
+  stats: {save_json: true, save_full_log: false}
+  review: {enabled: true, detail: standard}

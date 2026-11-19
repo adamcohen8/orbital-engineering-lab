@@ -11,6 +11,7 @@ from sim.acceleration.settings import acceleration_context_from_config
 from sim.dynamics.attitude.rigid_body import get_attitude_guardrail_stats
 from sim.reporting.single_run_artifacts import SingleRunArtifactContext, write_single_run_artifacts
 from sim.reporting.single_run_payload import SingleRunPayloadContext, build_single_run_payload
+from sim.rocket.landing_gear import gear_evidence
 
 if TYPE_CHECKING:
     from sim.single_run import _SingleRunEngine
@@ -158,6 +159,18 @@ class SingleRunPayloadAssembler:
                 object_id: {key: interpolate_last(hist) for key, hist in metrics.items()}
                 for object_id, metrics in reentry_metrics_out.items()
             }
+        contact = getattr(engine, "rocket_terminal_state", None)
+        if contact is not None:
+            aid = contact["object_id"]
+            truth_out[aid] = truth_out[aid].copy()
+            truth_out[aid][-1, :14] = [
+                *contact["position_eci_km"], *contact["velocity_eci_km_s"],
+                *contact["attitude_quat_bn"], *contact["angular_rate_body_rad_s"],
+                contact["mass_kg"],
+            ]
+            if aid in belief_out:
+                belief_out[aid] = belief_out[aid].copy()
+                belief_out[aid][-1, :6] = truth_out[aid][-1, :6]
         if not bool(getattr(engine, "terminated_early", False)):
             thrust_stats = {
                 object_id: {
@@ -287,6 +300,27 @@ class SingleRunPayloadAssembler:
 
         if getattr(engine, "planetary_domain_exit", None) is not None:
             payload["summary"]["gravity_domain_exit"] = dict(engine.planetary_domain_exit)
+        if getattr(engine, "rocket_touchdown", None) is not None:
+            payload["summary"]["rocket_touchdown"] = dict(engine.rocket_touchdown)
+        landing_gear = {}
+        for aid, agent in engine.agents.items():
+            state = getattr(agent, "rocket_state", None)
+            if state is None or not state.landing_legs:
+                continue
+            record = gear_evidence(state)
+            cutoff = float(parts.t_s[-1])
+            for event_key in ("touchdown", "terminal_event"):
+                event = record[event_key]
+                if event is not None and event["time_s"] > cutoff + 1e-9:
+                    record[event_key] = None
+            if state.t_s > cutoff + 1e-9:
+                # Another object ended the outer interval before this observation.
+                record["legs"] = {}
+            if record["first_rebound_time_s"] is not None and record["first_rebound_time_s"] > cutoff + 1e-9:
+                record["first_rebound_time_s"] = None
+            landing_gear[aid] = record
+        if landing_gear:
+            payload["summary"]["rocket_landing_gear_by_object"] = landing_gear
         if engine.cfg.simulator.central_body == "earth" and engine.cfg.simulator.additional_gravity is not None:
             from sim.reporting.additional_gravity import attach_earth_evidence
             attach_earth_evidence(payload, engine, parts)
@@ -301,6 +335,9 @@ class SingleRunPayloadAssembler:
             payload["spacecraft_resources"] = resources
         payload["impulsive_maneuvers"] = list(engine.impulsive_maneuvers)
         payload["collision_events"] = list(engine.collision_events)
+        if getattr(engine, "docking_stepper", None) is not None:
+            payload["docking"] = engine.docking_stepper.evidence()
+            payload["summary"]["docking"] = payload["docking"]["summary"]
         if engine.collision_events:
             payload["summary"]["collisions"] = {"count": len(engine.collision_events)}
         if engine.impulsive_maneuvers:

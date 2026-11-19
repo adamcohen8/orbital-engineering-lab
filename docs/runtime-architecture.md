@@ -110,3 +110,18 @@ at factory construction or wraps the planetary native plan. Its separate Rust
 composition evaluator adds complete relative external fields; ordinary Earth
 force and integration loops have no additional-body dispatch. See
 [extended third-body gravity](additional-gravity.md).
+
+## Cooperative docking
+
+For an enabled `simulator.docking` block, the single-run owner routes the two
+configured objects through `sim.execution.docking.DockingStepper`. It calls the
+ONP stage acceleration and rigid-body derivative owners on a synchronized RK4
+clock. `sim.dynamics.docking` owns interface geometry, internal wrenches, and
+the rigid assembly. The usual object result and artifact paths retain both
+object identities. Commanded docking coordinates both per-satellite runtime
+calendars before stepping the physical pair. Each stack receives a typed
+port measurement from the same physical boundary. The paired integrator
+consumes realized wrenches through the actuator runtime. The contact owner
+resolves discrete docking requests against the configured physical
+envelopes. See the [docking model guide](models/docking.md) for supported
+physics and evidence semantics.

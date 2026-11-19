@@ -1,0 +1,65 @@
+scenario_name: cooperative_docking_rebound
+scenario_description: Tilted approach outside the latch envelope that rebounds.
+metadata:
+  owner: public
+  public_surface: public-example
+  support_level: experimental
+objects:
+  target:
+    kind: satellite
+    runtime_profile: trajectory_only
+    specs:
+      mass_kg: 100
+      mass_properties:
+        inertia_kg_m2: [[25, 0, 0], [0, 25, 0], [0, 0, 20]]
+        inertia_reference_point: center_of_mass
+    initial_state:
+      position_eci_km: [7000, 0, 0]
+      velocity_eci_km_s: [0, 7.5, 0]
+      attitude_quat_bn: [1, 0, 0, 0]
+  chaser:
+    kind: satellite
+    runtime_profile: trajectory_only
+    specs:
+      mass_kg: 100
+      mass_properties:
+        inertia_kg_m2: [[25, 0, 0], [0, 25, 0], [0, 0, 20]]
+        inertia_reference_point: center_of_mass
+    initial_state:
+      position_eci_km: [7000, 0.00005, 0.0011]
+      velocity_eci_km_s: [0, 7.5, -0.0001]
+      attitude_quat_bn: [0.04997916927067833, 0.9987502603949663, 0, 0]
+simulator:
+  duration_s: 5
+  dt_s: 0.1
+  dynamics:
+    orbit: {model: two_body, integrator: rk4, numeric_backend: python}
+    attitude: {enabled: true, numeric_backend: python}
+    rocket: {numeric_backend: python}
+    reentry: {numeric_backend: python}
+  docking:
+    enabled: true
+    probe: {object_id: chaser, offset_body_m: [0, 0, 0.5], radius_m: 0.20}
+    receiver: {object_id: target, offset_body_m: [0, 0, 0.5], radius_m: 0.25}
+    max_step_s: 0.005
+    contact_stiffness_n_m: 1500
+    contact_damping_n_s_m: 25
+    max_compression_m: 0.025
+    latch:
+      capture_lateral_m: 0.02
+      capture_angle_rad: 0.05
+      capture_speed_m_s: 0.15
+      capture_rate_rad_s: 0.1
+      stiffness_n_m: 500
+      damping_n_s_m: 280
+      angular_stiffness_n_m_rad: 100
+      angular_damping_n_m_s_rad: 80
+      max_travel_m: 0.05
+      max_force_n: 150
+      max_torque_n_m: 40
+outputs:
+  mode: save
+  output_dir: outputs/examples/cooperative_docking_rebound
+  stats: {save_full_log: false, print_summary: false}
+  plots: {enabled: false}
+  review: {enabled: true, detail: standard}

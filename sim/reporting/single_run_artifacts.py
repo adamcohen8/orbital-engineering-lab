@@ -447,6 +447,10 @@ def write_single_run_artifacts(
             "coverage": [item.get("artifacts", {}) for item in payload["orbital_analysis"].get("coverage", [])],
             "directed_links": [item.get("artifacts", {}) for item in payload["orbital_analysis"].get("directed_links", [])],
         }
+    if payload.get("docking"):
+        docking_path = output_dir / "docking.json"
+        write_json(str(docking_path), {"schema_version": 1, **payload["docking"]})
+        artifacts["docking_json"] = str(docking_path)
     if payload.get("ground_segment"):
         from sim.ground_segment.artifacts import write_ground_artifacts
         artifacts.update(

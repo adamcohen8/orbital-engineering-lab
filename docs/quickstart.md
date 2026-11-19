@@ -106,10 +106,14 @@ python run_simulation.py --quickstart
 ```
 
 The quickstart scenario is intentionally small and headless. It propagates a
-two-satellite rendezvous setup with public controllers, sensing, and EKF
+two-satellite relative-motion hold with public controllers, sensing, and EKF
 knowledge updates, then writes summary artifacts under
 `outputs/quickstart_5min/`. Open `outputs/quickstart_5min/index.md` first for
 the run summary, review order, and artifact inventory.
+
+Both spacecraft maneuver, so the reported total delta-v includes both the
+chaser and the target. The target uses an ideal actuator that applies force
+without consuming propellant.
 
 Plots are disabled in this first path to keep the first run fast, headless, and
 focused on the generated summary artifacts. The quickstart does write

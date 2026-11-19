@@ -45,6 +45,7 @@ The detailed pages under `docs/models/` are organized by model family:
 | Orbit dynamics | [Orbit Dynamics](models/orbit-dynamics.md) | Two-body propagation, numerical integration, object state units, and orbit-propagation boundaries. |
 | Relative motion | [Relative Motion](models/relative-motion.md) | RIC/Hill frame conventions, relative-state construction, and relative-motion controller assumptions. |
 | Attitude dynamics | [Attitude Dynamics](models/attitude-dynamics.md) | Quaternion and body-rate propagation, rigid-body torque response, attitude substepping, and disturbance coupling. |
+| Cooperative docking | [Docking Dynamics](models/docking.md) | Paired six-degree-of-freedom contact, compliant capture and joined rigid-body propagation. |
 | Environment perturbations | [Environment Perturbations](models/environment-perturbations.md), [Earth precision forces](orbit-precision-forces.md) | Gravity harmonics, atmosphere/drag, SRP, third bodies, albedo/IR, relativity, solid/ocean tides, eclipse and re-entry diagnostics. |
 | Actuators | [Actuator Models](models/actuators.md) | Force and torque limits, allocation, propulsion devices, attitude actuators, faults, and applied-command logging. |
 | Sensors and measurements | [Sensor And Measurement Models](models/sensors-and-measurements.md) | Synthetic own-state/relative measurements, access, cadence, latency, dropout, composition, and typed event boundaries. |

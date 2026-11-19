@@ -454,8 +454,7 @@ metadata for these IO and recovery entry points, with empty
 `dedicated_mcp_tools` lists. These are host-authorized local fallbacks, not
 additional callable MCP contracts. Review-to-OGP/TLE fitting remains outside
 the bounded public IO workflow; advanced OD, calibration, SLR, and continuous
-tracking use their documented local entry points and have no new MCP contracts
-in v1.0.0.
+tracking use their documented local entry points.
 
 These are capability gaps for a future MCP contract review, not permissions to
 broaden the current registry. Use the documented local fallback only when the

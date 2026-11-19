@@ -550,6 +550,46 @@ def _validate_object_references(cfg: SimulationScenarioConfig) -> None:
         for object_id, section in objects.items()
         if bool(getattr(section, "enabled", False)) and str(getattr(section, "kind", "")).strip().lower() == "rocket"
     ]
+    termination = cfg.simulator.termination
+    policies = dict(termination.get("by_object", {}) or {})
+    for object_id, section in objects.items():
+        specs = getattr(section, "specs", {}) or {}
+        if "landing_gear" not in specs:
+            continue
+        from sim.rocket.landing_gear import LandingGear
+
+        path = f"objects.{object_id}.specs.landing_gear"
+        if str(getattr(section, "kind", "")).strip().lower() != "rocket":
+            raise ValueError(f"{path} requires a rocket object.")
+        try:
+            LandingGear.from_mapping(specs["landing_gear"])
+        except ValueError as error:
+            raise ValueError(f"{path}: {error}") from error
+        if not bool(section.enabled):
+            continue
+        if getattr(section, "flight_software", None) is not None:
+            raise ValueError(f"{path} uses rocket mission execution or guidance for commands.")
+        policy = policies.get(object_id, {}).get("touchdown")
+        if policy is None or policy.get("contact_height_m", 0.0) != 0.0:
+            raise ValueError(f"{path} requires a touchdown policy with zero contact_height_m.")
+        rocket_dynamics = cfg.simulator.dynamics.get("rocket", {}) or {}
+        if str(rocket_dynamics.get("attitude_mode", "dynamic")).strip().lower() != "dynamic":
+            raise ValueError(f"{path} requires dynamic rocket attitude.")
+    for object_id, policy in policies.items():
+        if "touchdown" not in policy:
+            continue
+        path = f"simulator.termination.by_object.{object_id}.touchdown"
+        if object_id not in enabled_rockets:
+            raise ValueError(f"{path} requires a named, enabled rocket object.")
+        impact_enabled = termination.get("earth_impact_enabled", True)
+        for key in ("*", "all", object_id):
+            override = termination.get("by_object", {}).get(key, {})
+            impact_enabled = override.get("earth_impact_enabled", impact_enabled)
+        if not impact_enabled:
+            raise ValueError(f"{path} requires earth_impact_enabled.")
+        orbit = dict(cfg.simulator.dynamics.get("orbit", {}) or {})
+        if orbit.get("model", "two_body") != "two_body":
+            raise ValueError(f"{path} requires Earth-centered two_body dynamics.")
     relative_dependencies: dict[str, str] = {}
     for object_id, section in objects.items():
         initial_state = dict(getattr(section, "initial_state", {}) or {})

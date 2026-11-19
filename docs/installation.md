@@ -14,7 +14,7 @@ No Python 3.10 managed bundle or clean-audit claim is provided. See
 
 ## Managed Installation
 
-The v1.0.0 managed bundle is qualified for macOS arm64 with CPython 3.11.
+The v1.1.0 managed bundle targets macOS arm64 with CPython 3.11.
 The signed bootstrap selects that installed Python minor, downloads the
 versioned GitHub bundle, verifies its manifest and every dependency wheel,
 and installs without consulting a package index. Install CPython 3.11 first
@@ -24,9 +24,9 @@ for those other targets. Linux, Windows, and Intel Mac users should follow
 [Developer Source Installation](#developer-source-installation) and
 [Building public native source](native-source-build.md).
 
-For an existing v0.36.0 managed installation, the signed-inventory trust
-boundary is already established and `oel update install latest` can perform the
-v1.0.0 update. For a v0.31.0 through v0.35.0 installation, rerun the official
+For an existing v1.0.0 managed installation or a v0.36.0 installation with
+signed inventories, use `oel update install latest` to install the latest
+stable release. For a v0.31.0 through v0.35.0 installation, rerun the official
 installer below with the same data and config roots before updating. Use
 `--profile <profile>` to retain a nondefault dependency profile. The installer
 verifies the signed source/runtime inventories and publishes the trusted
@@ -35,14 +35,14 @@ and pins remain unchanged. Older engines remain on disk for inspection;
 releases without signed inventories cannot serve as authenticated rollback
 targets under the new launcher.
 
-After this migration, the v1.0 managed launcher supports the ordinary
+After this migration, the managed launcher supports the ordinary
 `oel update install latest` and explicit activation workflow.
 
 An official public release publishes a small `install.sh`, `install.ps1`,
 signed `release-manifest.json`, source artifact, and offline bundle as immutable
 assets on the public OEL GitHub release. The stable convenience URL below
 resolves to the installer asset on the latest promoted public release. Never
-pipe an uninspected URL from a third party. OEL v1.0 has one local edition.
+pipe an uninspected URL from a third party. OEL has one local edition.
 Install profiles select dependencies; they do not activate features.
 
 POSIX:
@@ -293,10 +293,11 @@ for the current platform.
 
 ## Native numeric runtime
 
-Version 0.36.0 requires matching `oel-rust-orbit` >=0.18.3,<0.19 and `oel-rust-game`
-0.5.x wheels for core installation and runtime-built flight-software stacks. Source
-installations must first install wheels built for their host from the native
-crates; signed offline bundles retain the exact qualified wheel inventory.
+Core installation and runtime-built flight-software stacks require
+`oel-rust-orbit` and `oel-rust-game`. Build the wheels from the native crates
+in your source checkout and select the [constraints file](../constraints/README.md)
+for your Python version. Signed offline bundles retain the exact qualified
+wheel inventory.
 The public repository includes the source and build inputs for both native
 packages; see [building native source](native-source-build.md).
 Rust is the default numeric engine. Explicit `numeric_backend: python` and

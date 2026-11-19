@@ -456,7 +456,8 @@ class _SingleRunEngine:
             if agent.active
         }
         for _aid, agent in self.agents.items():
-            if agent.kind == "satellite" and agent.active and agent.flight_software_runtime is not None:
+            if (not cfg.simulator.docking.get("commanded") and agent.kind == "satellite"
+                    and agent.active and agent.flight_software_runtime is not None):
                 agent.flight_software_runtime.prepare_interval(
                     agent.truth,
                     start_time_ns=0,
@@ -551,6 +552,8 @@ class _SingleRunEngine:
 
         self.terminated_early = False
         self.termination_reason: str | None = None
+        self.rocket_touchdown: dict[str, Any] | None = None
+        self.rocket_terminal_state: dict[str, Any] | None = None
         self.termination_time_s: float | None = None
         self.termination_object_id: str | None = None
         self.rocket_inserted = False
@@ -633,7 +636,8 @@ class _SingleRunEngine:
                 frame_context=self.frame_context,
             )
             self._advance_ground_segment(0)
-        self._emit_step_callback(0)
+        if not cfg.simulator.docking.get("commanded"):
+            self._emit_step_callback(0)
         self.object_step_executor = self._build_object_step_executor()
         self.system_force_stepper = (
             SystemForceStepper(
@@ -658,6 +662,17 @@ class _SingleRunEngine:
             )
             if cfg.simulator.collisions.get("enabled", False) else None
         )
+
+        self.docking_stepper = None
+        if cfg.simulator.docking:
+            from sim.execution.docking import DockingStepper
+
+            self.docking_stepper = DockingStepper(
+                cfg.simulator.docking, self.agents, self.base_environment, self.sim_substep_s,
+            )
+            if cfg.simulator.docking.get("commanded"):
+                self.docking_stepper.prepare_initial_inputs(self.agents)
+                self._emit_step_callback(0)
 
     def _build_object_step_executor(self) -> ObjectStepExecutor:
         return ObjectStepCoordinator(self, cpu_count=os.cpu_count).build_executor()
@@ -853,9 +868,19 @@ class _SingleRunEngine:
                 f"step_index {step_index} is outside retained steps "
                 f"{self.retained_start_step}..{self.retained_end_step}."
             )
-        truth = {oid: np.array(hist[idx], dtype=float) for oid, hist in self.truth_hist.items()}
-        if self.target_reference_orbit_hist is not None:
-            ref_state = np.array(self.target_reference_orbit_hist[idx], dtype=float).reshape(-1)
+        contact_parts = (
+            self._build_payload_parts()
+            if idx == self.current_index and self.rocket_touchdown is not None else None
+        )
+        time_s = float(self.t_s[idx] if contact_parts is None else contact_parts.t_s[idx])
+        truth_hist = self.truth_hist if contact_parts is None else contact_parts.truth_hist
+        belief_hist = self.belief_hist if contact_parts is None else contact_parts.belief_hist
+        truth = {oid: np.array(hist[idx], dtype=float) for oid, hist in truth_hist.items()}
+        target_reference_hist = (
+            self.target_reference_orbit_hist if contact_parts is None else contact_parts.target_reference_orbit_truth
+        )
+        if target_reference_hist is not None:
+            ref_state = np.array(target_reference_hist[idx], dtype=float).reshape(-1)
             if ref_state.size >= 6 and np.all(np.isfinite(ref_state[:6])):
                 target_mass_kg = 0.0
                 target_truth = truth.get("target")
@@ -877,17 +902,17 @@ class _SingleRunEngine:
                     flight_software[object_id] = checkpoint
         return {
             "step_index": int(self.sample_offset + idx),
-            "time_s": float(self.t_s[idx]),
+            "time_s": time_s,
             "truth": truth,
-            "belief": {oid: np.array(hist[idx], dtype=float) for oid, hist in self.belief_hist.items()},
+            "belief": {oid: np.array(hist[idx], dtype=float) for oid, hist in belief_hist.items()},
             "applied_thrust": {oid: np.array(hist[idx], dtype=float) for oid, hist in self.thrust_hist.items()},
             "applied_torque": {oid: np.array(hist[idx], dtype=float) for oid, hist in self.torque_hist.items()},
             "flight_software": flight_software,
             **({"state_metadata": {"central_body": self.planetary_environment.body.body_id,
                "origin_center_id": self.planetary_environment.body.center_id, "inertial_axes": "J2000",
                "environment_sha256": self.planetary_environment.digest}} if self.planetary_environment is not None else {}),
-            "spacecraft_resources": resource_snapshot(self.resource_hist, float(self.t_s[idx])),
-            "ground_segment": self.ground_segment.ground.snapshot(float(self.t_s[idx])) if self.ground_segment else {},
+            "spacecraft_resources": resource_snapshot(self.resource_hist, time_s),
+            "ground_segment": self.ground_segment.ground.snapshot(time_s) if self.ground_segment else {},
         }
 
     def publish_fsw_input(self, object_id: str, event: object) -> None:
@@ -1054,6 +1079,7 @@ class _SingleRunEngine:
                 q_dyn_pa=rocket_result.q_dyn_pa,
                 mach=rocket_result.mach,
                 metrics=dict(rocket_result.metrics or {}),
+                rocket_touchdown=rocket_result.touchdown,
             )
         else:
             provider = self.general_propagation.get(aid)
@@ -1336,6 +1362,8 @@ class _SingleRunEngine:
     ) -> dict[str, Any]:
         if self.terminated_early or self.done:
             raise ValueError("Cannot apply an impulse after the run has ended")
+        if self.docking_stepper is not None:
+            raise ValueError("Individual impulses are unavailable in a docking scenario.")
         agent = self.agents.get(object_id)
         if agent is None or not agent.active or agent.kind != "satellite" or agent.truth is None:
             raise ValueError("Impulse object must be an active satellite")
@@ -1496,7 +1524,9 @@ class _SingleRunEngine:
         )
         try:
             object_results = (
-                self.collision_stepper.step_objects(object_inputs)
+                self.docking_stepper.step_objects(object_inputs)
+                if self.docking_stepper is not None
+                else self.collision_stepper.step_objects(object_inputs)
                 if self.collision_stepper is not None
                 else self.system_force_stepper.step_objects(object_inputs)
                 if self.system_force_stepper is not None
@@ -1525,6 +1555,11 @@ class _SingleRunEngine:
             self.runtime_profiler.record_stage("step_wall", perf_counter() - step_wall_t0)
             return self.snapshot(include_flight_software=False) if return_snapshot else {}
         self._validate_object_step_results(object_inputs, object_results)
+        touchdown_result = min(
+            (result for result in object_results if result.rocket_touchdown is not None),
+            key=lambda result: (result.rocket_touchdown.state.t_s, result.object_id),
+            default=None,
+        )
         for result in object_results:
             self._apply_object_step_result(result, sample_index=k)
             agent = self.agents[result.object_id]
@@ -1602,7 +1637,7 @@ class _SingleRunEngine:
                 self.belief_hist[aid][k + 1, : agent.belief.state.size] = agent.belief.state
             else:
                 runtime = agent.flight_software_runtime
-                if runtime is not None:
+                if runtime is not None and not self.cfg.simulator.docking.get("commanded"):
                     runtime.prepare_interval(
                         truth,
                         start_time_ns=int(round(t_next * 1.0e9)),
@@ -1617,14 +1652,20 @@ class _SingleRunEngine:
 
         self.current_index = k + 1
         self._advance_ground_segment(self.current_index)
-        self._emit_step_callback(self.current_index)
+        if touchdown_result is None:
+            self._emit_step_callback(self.current_index)
 
         termination_check_t0 = perf_counter()
-        if self.termination_monitor.check_reentry(t_s=t_next):
+        if touchdown_result is not None:
+            self.termination_monitor.check_rocket_touchdown(
+                t_s=t_next, object_id=touchdown_result.object_id, contact=touchdown_result.rocket_touchdown,
+            )
+            self._emit_step_callback(self.current_index)
+        elif self.termination_monitor.check_reentry(t_s=t_next):
             self.runtime_profiler.record_stage("termination_check", perf_counter() - termination_check_t0)
             self.runtime_profiler.record_stage("step_wall", perf_counter() - step_wall_t0)
             return self.snapshot(include_flight_software=False) if return_snapshot else {}
-        if self.termination_monitor.check_earth_impact(t_s=t_next):
+        elif self.termination_monitor.check_earth_impact(t_s=t_next):
             self.runtime_profiler.record_stage("termination_check", perf_counter() - termination_check_t0)
             self.runtime_profiler.record_stage("step_wall", perf_counter() - step_wall_t0)
             return self.snapshot(include_flight_software=False) if return_snapshot else {}

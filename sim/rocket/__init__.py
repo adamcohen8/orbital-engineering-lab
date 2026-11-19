@@ -8,6 +8,7 @@ from sim.rocket.guidance import (
     OrbitInsertionCutoffGuidance,
     TVCSteeringGuidance,
 )
+from sim.rocket.landing_gear import LandingGear, LandingGearCommand, LandingLeg, LegState, ScheduledGearCommand
 from sim.rocket.models import (
     GuidanceCommand,
     RocketGuidanceLaw,
@@ -17,12 +18,19 @@ from sim.rocket.models import (
     RocketVehicleConfig,
 )
 from sim.rocket.navigation import RocketNavState, build_rocket_nav_state
+from sim.rocket.touchdown import RocketTouchdownLimits
 
 __all__ = [
     "RocketAscentSimulator",
     "RocketAeroConfig",
     "RocketSimConfig",
     "RocketVehicleConfig",
+    "LandingGear",
+    "LandingGearCommand",
+    "LandingLeg",
+    "LegState",
+    "ScheduledGearCommand",
+    "RocketTouchdownLimits",
     "RocketState",
     "RocketSimResult",
     "GuidanceCommand",
