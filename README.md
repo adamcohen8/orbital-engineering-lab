@@ -25,7 +25,7 @@ OEL supports Python 3.10 through 3.14. Python 3.14 is recommended. Official
 public releases provide signed managed installers that keep immutable OEL
 engines separate from user-owned projects and workspaces.
 
-The **v1.0.0 managed bundle targets macOS arm64 with CPython 3.11**.
+The **v1.1.0 managed bundle targets macOS arm64 with CPython 3.11**.
 Linux, Windows, and Intel Mac users should follow
 [Source Installation For Contributors](#source-installation-for-contributors).
 The broader engine Python range does not qualify this bundle for other hosts.
@@ -91,7 +91,7 @@ py -3.14 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install "maturin>=1.10,<2"
 .\.venv\Scripts\python.exe -m maturin build --release --locked --manifest-path rust/oel-orbit/Cargo.toml --interpreter .\.venv\Scripts\python.exe --out dist/native
 .\.venv\Scripts\python.exe -m maturin build --release --locked --manifest-path rust/oel-game/Cargo.toml --interpreter .\.venv\Scripts\python.exe --out dist/native
-.\.venv\Scripts\python.exe -m pip install --no-index --find-links dist/native "oel-rust-orbit>=0.18.3,<0.19" "oel-rust-game>=0.5,<0.6"
+.\.venv\Scripts\python.exe -m pip install --no-index --find-links dist/native -c constraints\py314.txt oel-rust-orbit oel-rust-game
 .\.venv\Scripts\python.exe -m pip install -c constraints\py314.txt --find-links dist/native ".[dev]"
 .\.venv\Scripts\python.exe run_simulation.py --doctor
 .\.venv\Scripts\python.exe run_simulation.py --quickstart
@@ -107,7 +107,7 @@ python3.14 -m venv .venv
 .venv/bin/python -m pip install "maturin>=1.10,<2"
 .venv/bin/python -m maturin build --release --locked --manifest-path rust/oel-orbit/Cargo.toml --interpreter .venv/bin/python --out dist/native
 .venv/bin/python -m maturin build --release --locked --manifest-path rust/oel-game/Cargo.toml --interpreter .venv/bin/python --out dist/native
-.venv/bin/python -m pip install --no-index --find-links dist/native "oel-rust-orbit>=0.18.3,<0.19" "oel-rust-game>=0.5,<0.6"
+.venv/bin/python -m pip install --no-index --find-links dist/native -c constraints/py314.txt oel-rust-orbit oel-rust-game
 .venv/bin/python -m pip install -c constraints/py314.txt --find-links dist/native ".[dev]"
 .venv/bin/python run_simulation.py --doctor
 .venv/bin/python run_simulation.py --quickstart

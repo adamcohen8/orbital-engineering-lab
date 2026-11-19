@@ -24,6 +24,7 @@ from sim.runtime_support import AgentRuntime
 from sim.utils.parallel import restore_env_vars, set_parallel_worker_thread_limits
 
 if TYPE_CHECKING:
+    from sim.rocket.touchdown import RocketTouchdown
     from sim.single_run import _SingleRunEngine
 
 
@@ -97,6 +98,7 @@ class ObjectStepResult:
     belief_last_update_t_s: float | None = None
     attitude_guardrail_count_deltas: dict[str, int] = field(default_factory=dict)
     flight_software_evidence_offsets: dict[str, int] | None = None
+    rocket_touchdown: RocketTouchdown | None = None
 
 
 class ObjectStepExecutor(Protocol):

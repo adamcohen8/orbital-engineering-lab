@@ -343,6 +343,10 @@ Termination contract:
 - `termination.by_object` may override `earth_impact_enabled` and
   `earth_radius_km` per object. Object overrides inherit the scenario-level
   Earth-impact defaults unless a field is supplied.
+- Enabled Earth-centered rocket objects may opt into
+  `termination.by_object.<id>.touchdown` with a required normal impact energy
+  limit and optional limits for lateral speed, tilt, and angular rate.
+  See [rocket touchdown classification](../scenario-yaml.md#rocket-touchdown-classification).
 
 
 ## Outputs Section

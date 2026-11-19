@@ -467,6 +467,37 @@ class ActuatorTelemetryPayload:
         _require_nonempty("actuator_id", self.actuator_id)
 
 
+@dataclass(frozen=True, slots=True)
+class DockingPortMeasurement:
+    """Probe minus receiver at the two port origins, with ideal indications.
+
+    Offset and relative point velocity are expressed along receiver port axes.
+    Axes are receiver basis vectors in ECI. Rotation error and the difference
+    between probe and receiver angular rates are expressed in ECI.
+    """
+
+    offset_m: Vector3
+    velocity_m_s: Vector3
+    rotation_error_eci_rad: Vector3
+    relative_rate_eci_rad_s: Vector3
+    receiver_axes_eci: Matrix
+    phase: Literal["approach", "contact", "captured", "separated", "mated"]
+    peer_capture_armed: bool
+    schema: Literal["docking_port.v1"] = "docking_port.v1"
+
+    def __post_init__(self) -> None:
+        for name in ("offset_m", "velocity_m_s", "rotation_error_eci_rad", "relative_rate_eci_rad_s"):
+            _require_vector(name, getattr(self, name), length=3)
+        if len(self.receiver_axes_eci) != 3:
+            raise ValueError("receiver_axes_eci must contain three axes")
+        for axis in self.receiver_axes_eci:
+            _require_unit_vector("receiver axis", axis)
+        if self.phase not in {"approach", "contact", "captured", "separated", "mated"}:
+            raise ValueError("Unknown docking indicator phase")
+        if not isinstance(self.peer_capture_armed, bool):
+            raise TypeError("peer_capture_armed must be boolean")
+
+
 MeasurementPayload = (
     GyroMeasurement
     | StarTrackerMeasurement
@@ -477,6 +508,7 @@ MeasurementPayload = (
     | IdealOwnStateMeasurement
     | IdealTrackedObjectStateMeasurement
     | VehicleResourceMeasurement
+    | DockingPortMeasurement
 )
 
 
@@ -659,6 +691,19 @@ class IdealWrenchCommand:
         _require_vector("torque_n_m", self.torque_n_m, length=3)
 
 
+@dataclass(frozen=True, slots=True)
+class DockingMechanismCommand:
+    arm_capture: bool = False
+    request_hard_mate: bool = False
+    schema: Literal["docking_mechanism.v1"] = "docking_mechanism.v1"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.arm_capture, bool) or not isinstance(self.request_hard_mate, bool):
+            raise TypeError("Docking requests must be boolean")
+        if self.arm_capture and self.request_hard_mate:
+            raise ValueError("Capture arm and hard-mate request must be distinct")
+
+
 ActuatorCommandPayload = (
     ReactionWheelTorqueCommand
     | MagnetorquerDipoleCommand
@@ -668,6 +713,7 @@ ActuatorCommandPayload = (
     | ContinuousEngineCommand
     | AerodynamicEffectorPositionCommand
     | IdealWrenchCommand
+    | DockingMechanismCommand
 )
 
 
@@ -984,6 +1030,7 @@ BOUNDARY_RECORD_TYPES = (
     IdealOwnStateMeasurement,
     IdealTrackedObjectStateMeasurement,
     VehicleResourceMeasurement,
+    DockingPortMeasurement,
     ActuatorTelemetryPayload,
     MeasurementEvent,
     ControlAxisSample,
@@ -998,6 +1045,7 @@ BOUNDARY_RECORD_TYPES = (
     ContinuousEngineCommand,
     AerodynamicEffectorPositionCommand,
     IdealWrenchCommand,
+    DockingMechanismCommand,
     ActuatorCommand,
     ActuatorCommandReceipt,
     InputEvent,

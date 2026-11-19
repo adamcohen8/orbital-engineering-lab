@@ -383,7 +383,28 @@ def _normalize_simulator_termination_block(
     fill_defaults: bool,
 ) -> dict[str, Any]:
     termination = _as_dict(value, path)
-    _reject_unknown_fields(termination, path, {"enabled", "earth_impact_enabled", "earth_radius_km"})
+    allowed = {"enabled", "earth_impact_enabled", "earth_radius_km"}
+    if not fill_defaults:
+        allowed.add("touchdown")
+    _reject_unknown_fields(termination, path, allowed)
+    if "touchdown" in termination:
+        contact_path = f"{path}.touchdown"
+        contact = _as_dict(termination["touchdown"], contact_path)
+        fields = {
+            "max_normal_energy_j", "surface_altitude_m", "contact_height_m",
+            "max_lateral_speed_m_s", "max_tilt_deg", "max_angular_rate_deg_s",
+        }
+        _reject_unknown_fields(contact, contact_path, fields)
+        if "max_normal_energy_j" not in contact:
+            raise ValueError(f"{contact_path}.max_normal_energy_j is required.")
+        for name, value in contact.items():
+            number = _parse_float(value, f"{contact_path}.{name}")
+            if name != "surface_altitude_m" and number < 0.0:
+                raise ValueError(f"{contact_path}.{name} must be non-negative.")
+            if name == "max_tilt_deg" and number > 180.0:
+                raise ValueError(f"{contact_path}.max_tilt_deg must be at most 180.")
+            contact[name] = number
+        termination["touchdown"] = contact
     if "enabled" in termination and "earth_impact_enabled" not in termination:
         termination["earth_impact_enabled"] = termination.pop("enabled")
     elif "enabled" in termination:
@@ -404,6 +425,8 @@ def _normalize_simulator_termination_block(
 
 
 def _parse_simulator_section(value: Any) -> SimulatorSection:
+    from .docking import normalize_docking
+
     d = _as_dict(value, "simulator")
     _reject_unsupported_aliases(d, "simulator", _SIMULATOR_UNSUPPORTED_ALIASES)
     _reject_unknown_fields(
@@ -423,6 +446,7 @@ def _parse_simulator_section(value: Any) -> SimulatorSection:
             "termination",
             "system_force_models",
             "collisions",
+            "docking",
             "central_body",
             "planetary",
             "additional_gravity",
@@ -503,6 +527,7 @@ def _parse_simulator_section(value: Any) -> SimulatorSection:
         central_body=body_id,
         planetary=planetary,
         additional_gravity=additional_gravity,
+        docking=normalize_docking(d.get("docking")),
         duration_s=_parse_float(d.get("duration_s", 3600.0), "simulator.duration_s"),
         dt_s=_parse_float(d.get("dt_s", 1.0), "simulator.dt_s"),
         initial_jd_utc=_parse_optional_float(d.get("initial_jd_utc"), "simulator.initial_jd_utc"),

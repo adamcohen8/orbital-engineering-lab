@@ -21,9 +21,9 @@ after the virtual environment has been activated.
   architecture, Python, dependency, and external-tool combination is
   supported.
 
-Python 3.10 is a functional compatibility target. When upstream security
-maintenance ends, it becomes a legacy functional tier and is no longer a
-security-supported procurement baseline. Python lifecycle status is governed by
+Python 3.10 remains a legacy functional compatibility target after the end
+of its recorded upstream security maintenance in October 2026. Python
+lifecycle status is governed by
 the [CPython version table](https://devguide.python.org/versions/), not by OEL
 package metadata alone.
 

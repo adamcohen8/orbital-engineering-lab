@@ -1,8 +1,10 @@
 schema_version: oel.scenario.v1
 scenario_name: quickstart_5min
-scenario_description: 'Five-minute public quickstart: deterministic two-satellite
-  relative-motion/RPO hold demonstration with headless-safe outputs. Full-duration
-  completion is not a terminal-rendezvous success criterion.'
+scenario_description: >-
+  Five-minute public quickstart for deterministic two-satellite relative-motion
+  hold. Both spacecraft maneuver. The target uses an ideal actuator that
+  contributes to the reported delta-v without consuming propellant.
+  Full-duration completion is not a terminal-rendezvous success criterion.
 metadata:
   owner: public
   public_surface: public-quickstart

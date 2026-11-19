@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 
@@ -373,10 +373,9 @@ class TVCSteeringGuidance(RocketGuidanceLaw):
         thrust_axis_eci_cmd = c_cmd_bn.T @ thrust_axis_body
         c_bn = quaternion_to_dcm_bn(state.attitude_quat_bn)
         thrust_vector_body_cmd = c_bn @ thrust_axis_eci_cmd
-        return GuidanceCommand(
-            throttle=cmd.throttle,
+        return replace(
+            cmd,
             attitude_quat_bn_cmd=cmd.attitude_quat_bn_cmd if self.pass_through_attitude else None,
-            torque_body_nm_cmd=cmd.torque_body_nm_cmd,
             thrust_vector_body_cmd=thrust_vector_body_cmd,
         )
 
@@ -426,12 +425,7 @@ class MaxQThrottleLimiterGuidance(RocketGuidanceLaw):
 
         scale = float(_clip_scalar(self.max_q_pa / max(q_now, 1e-9), 0.0, 1.0))
         thr_limited = float(_clip_scalar(thr_cmd * scale, self.min_throttle, thr_cmd))
-        return GuidanceCommand(
-            throttle=thr_limited,
-            attitude_quat_bn_cmd=cmd.attitude_quat_bn_cmd,
-            torque_body_nm_cmd=cmd.torque_body_nm_cmd,
-            thrust_vector_body_cmd=cmd.thrust_vector_body_cmd,
-        )
+        return replace(cmd, throttle=thr_limited)
 
 
 @dataclass(frozen=True)
@@ -503,9 +497,4 @@ class OrbitInsertionCutoffGuidance(RocketGuidanceLaw):
         cut, _ = self._should_cutoff(state=state, sim_cfg=sim_cfg)
         if not cut:
             return cmd
-        return GuidanceCommand(
-            throttle=0.0,
-            attitude_quat_bn_cmd=cmd.attitude_quat_bn_cmd,
-            torque_body_nm_cmd=cmd.torque_body_nm_cmd,
-            thrust_vector_body_cmd=cmd.thrust_vector_body_cmd,
-        )
+        return replace(cmd, throttle=0.0)

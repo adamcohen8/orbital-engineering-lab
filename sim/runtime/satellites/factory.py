@@ -67,6 +67,7 @@ from sim.runtime.satellites.flight_software_runtime import (
     aerodynamic_effector_device,
     cmg_device,
     continuous_engine_device,
+    docking_mechanism_device,
     ideal_wrench_device,
     magnetorquer_device,
     rcs_thruster_device,
@@ -426,6 +427,10 @@ def build_satellite_flight_software_runtime(
             )
             devices = (device,)
             hardware[actuator_id] = model
+        if getattr(scenario_cfg.simulator, "docking", {}).get("commanded"):
+            device, model = docking_mechanism_device(object_id)
+            devices = (*devices, device)
+            hardware[device.actuator_id] = model
         return SatelliteFlightSoftwareRuntime(
             satellite_id=object_id,
             stack=stack,

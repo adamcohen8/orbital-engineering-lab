@@ -123,6 +123,8 @@ depleted propellant may not produce a full-step thrust impulse.
 Rocket ascent may terminate early for:
 
 - `earth_impact`,
+- `rocket_landing` or `rocket_crash` for opt-in first-contact classification
+  ([scenario configuration](../scenario-yaml.md#rocket-touchdown-classification)),
 - `rocket_orbit_insertion`,
 - future explicit rocket failure reasons.
 
@@ -138,6 +140,16 @@ For early termination, returned result histories must include the post-step
 state at `termination_time_s`. Time histories must be strictly representative:
 the final sample time, truth state, mass, stage index, and orbital elements
 must describe the final returned state rather than uninitialized array storage.
+For a configured touchdown, the final rocket state is repropagated to the
+bracketed contact time with the already-issued command. The touchdown record
+reports the pre-contact state, Earth-fixed velocity, and configured limit
+results.
+
+With [deployable landing gear](../scenario-yaml.md#deployable-rocket-landing-gear),
+the rocket publishes the first footpad or body contact separately from
+settling or crash. The guidance and mission execution interfaces carry
+per-leg deploy or stow requests. The simulated actuators own the achieved
+extension and lock state, and the dynamics own contact forces and torques.
 
 Insertion is achieved when:
 

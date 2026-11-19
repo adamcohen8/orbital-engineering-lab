@@ -30,8 +30,9 @@ Customer or pilot agreements may define stricter response targets.
 
 ## Supported Versions
 
-Security fixes target the current public release. The published support target
-remains `v0.36.0` until `v1.0.0` is published. The project targets Python
+This policy accompanies OEL v1.1.0. Security fixes target the
+[latest stable public release](https://github.com/adamcohen8/orbital-engineering-lab/releases/latest).
+The project targets Python
 3.10 through 3.14. The authoritative local release gate exercises the blocking
 Python 3.11 lane and retains evidence for the wider compatibility matrix
 described in [`docs/compatibility.md`](docs/compatibility.md). Hosted Windows

@@ -132,6 +132,10 @@ def scenario_config_from_dict(
         if bool(dict(section.reference_orbit or {}).get("enabled", False)) and (not bool(section.enabled)):
             raise ValueError(f"{object_id}.reference_orbit.enabled requires {object_id}.enabled to be true.")
     validate_scenario(cfg)
+    if cfg.simulator.docking:
+        from .docking import validate_docking_scenario
+
+        validate_docking_scenario(cfg)
     _validate_physics_runtime_settings(cfg)
     _validate_object_references(cfg)
     _validate_orbital_analysis_references(cfg)

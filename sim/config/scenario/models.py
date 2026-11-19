@@ -86,6 +86,8 @@ def _plain_config_data(value: Any) -> Any:
             data.pop("system_force_models", None)
         if not value.collisions:
             data.pop("collisions", None)
+        if not value.docking:
+            data.pop("docking", None)
         return data
     if isinstance(value, OutputsSection):
         data = {item.name: _plain_config_data(getattr(value, item.name)) for item in fields(value)}
@@ -295,6 +297,7 @@ class SimulatorSection:
     central_body: str = "earth"
     planetary: dict[str, Any] | None = None
     additional_gravity: dict[str, Any] | None = None
+    docking: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "acceleration", SimulatorAccelerationSection(self.acceleration))

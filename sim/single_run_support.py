@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from time import perf_counter
 from typing import Any
 
@@ -15,6 +15,7 @@ from sim.dynamics.orbit.epoch import TIME_DEPENDENT_ENV_CACHE_KEY
 from sim.dynamics.reentry import evaluate_reentry_termination, locate_reentry_termination_crossing
 from sim.execution.passive_history import PassiveHistoryCache
 from sim.rocket.navigation import build_rocket_nav_state
+from sim.rocket.touchdown import RocketTouchdown
 from sim.runtime.satellites.flight_software_runtime import SatellitePhysicalCommand
 from sim.runtime_support import (
     AgentRuntime,
@@ -147,6 +148,7 @@ class _RocketStepResult:
     q_dyn_pa: float | None = None
     mach: float | None = None
     metrics: dict[str, float] | None = None
+    touchdown: RocketTouchdown | None = None
 
 
 @dataclass
@@ -214,19 +216,18 @@ class _RocketStepper:
             )
 
         cmd = agent.rocket_guidance.command(agent.rocket_state, agent.rocket_sim.sim_cfg, agent.rocket_sim.vehicle_cfg)
+        if "landing_gear_commands" in mission_out:
+            cmd = replace(cmd, landing_gear_commands=tuple(mission_out["landing_gear_commands"]))
         if "guidance_throttle" in mission_out:
-            cmd = type(cmd)(
-                throttle=float(mission_out.get("guidance_throttle", cmd.throttle)),
-                attitude_quat_bn_cmd=cmd.attitude_quat_bn_cmd,
-                torque_body_nm_cmd=cmd.torque_body_nm_cmd,
-                thrust_vector_body_cmd=cmd.thrust_vector_body_cmd,
-            )
+            cmd = replace(cmd, throttle=float(mission_out.get("guidance_throttle", cmd.throttle)))
         throttle = float(np.clip(cmd.throttle, 0.0, 1.0))
-        agent.rocket_state = agent.rocket_sim.step(agent.rocket_state, cmd, dt_s=step_dt_s)
+        start = agent.rocket_state
+        agent.rocket_state = agent.rocket_sim.step(start, cmd, dt_s=step_dt_s)
+        touchdown = agent.rocket_sim.resolve_touchdown(start, agent.rocket_state, cmd)
         agent.truth = _rocket_state_to_truth(agent.rocket_state)
         if agent.belief is not None:
             agent.belief.state[:6] = _truth_state6(agent.truth, agent.belief.state[:6])
-            agent.belief.last_update_t_s = t_next
+            agent.belief.last_update_t_s = agent.rocket_state.t_s
         thrust_n = float(getattr(agent.rocket_state, "_last_step_thrust_n", 0.0))
         missing_acceleration = object()
         step_acceleration = getattr(agent.rocket_state, "_last_step_thrust_accel_eci_km_s2", missing_acceleration)
@@ -269,13 +270,14 @@ class _RocketStepper:
             throttle=throttle,
             thrust_eci_km_s2=accel,
             torque_body_nm=np.array(getattr(agent.rocket_state, "_last_step_torque_body_nm", e.zero3), dtype=float).reshape(3),
-            delta_v_m_s=accel_mag * step_dt_s * 1e3,
+            delta_v_m_s=accel_mag * (agent.rocket_state.t_s - start.t_s) * 1e3,
             max_accel_km_s2=accel_mag,
             burned=bool(accel_mag > 1e-15),
             stage_index=float(agent.rocket_state.active_stage_index),
             q_dyn_pa=float(getattr(agent.rocket_state, "_last_step_q_dyn_pa", 0.0)),
             mach=float(getattr(agent.rocket_state, "_last_step_mach", 0.0)),
             metrics=metrics,
+            touchdown=touchdown,
         )
 
 
@@ -679,6 +681,27 @@ class _TerminationMonitor:
     def __init__(self, engine: Any) -> None:
         self.engine = engine
 
+    def check_rocket_touchdown(
+        self, *, t_s: float, object_id: str, contact: RocketTouchdown,
+    ) -> None:
+        e = self.engine
+        # Other termination monitors operate on the trial step. Retain the
+        # earliest event they or the rocket model localized on that interval.
+        candidates = [(contact.state.t_s, contact.termination_reason, object_id)]
+        if e.termination_time_s is not None:
+            candidates.append((e.termination_time_s, e.termination_reason, e.termination_object_id))
+        for monitor in (self.check_reentry, self.check_earth_impact):
+            if monitor(t_s=t_s):
+                candidates.append((e.termination_time_s, e.termination_reason, e.termination_object_id))
+        e.termination_time_s, e.termination_reason, e.termination_object_id = min(
+            candidates, key=lambda event: event[0],
+        )
+        e.terminated_early = True
+        if (e.termination_time_s, e.termination_reason, e.termination_object_id) == candidates[0]:
+            e.rocket_terminal_state = {"object_id": object_id, **contact.evidence}
+            event = contact.state.gear_touchdown if contact.state.gear_terminal is not None else contact.evidence
+            e.rocket_touchdown = {"object_id": object_id, **event}
+
     def check_earth_impact(self, *, t_s: float, include_rockets: bool = True) -> bool:
         e = self.engine
         orbit_config = dict(getattr(e.cfg.simulator.dynamics, "orbit", {}) or {})
@@ -692,6 +715,8 @@ class _TerminationMonitor:
                 continue
             policy = _earth_impact_policy_for_object(e.cfg.simulator.termination, aid)
             if not bool(policy.get("earth_impact_enabled", True)):
+                continue
+            if agent.kind == "rocket" and "touchdown" in policy:
                 continue
             re = float(policy.get("earth_radius_km", EARTH_RADIUS_KM))
             if not agent.active:

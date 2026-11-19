@@ -1,13 +1,13 @@
 # Supply Chain And Procurement Baseline
 
-This page is the OEL baseline for software supply-chain review. It is intended
-to give evaluators a clear starting packet, not to replace a customer's own
+This page is the OEL v1.1.0 baseline for software supply-chain review. It is
+intended to give evaluators a clear starting packet, not to replace a customer's own
 security, legal, export-control, or mission-assurance process.
 
 ## Supported Versions
 
-- Public releases: security fixes target the current public release.
-  `v1.0.0` is the current public support target.
+- Public releases: security fixes target the
+  [latest stable public release](https://github.com/adamcohen8/orbital-engineering-lab/releases/latest).
 - Private service/development builds: security fixes target the active
   customer-supported release line or development branch named in the agreement.
 - Declared Python compatibility range: Python 3.10 through 3.14. Functional and
@@ -224,7 +224,7 @@ authorized, export-control classified, or approved for classified/CUI handling.
 They are review artifacts that help an evaluator decide what additional
 controls are required for their environment.
 
-The v0.36.0 dependency baseline requires setuptools 84.1.0 and, on Python
-3.11+, filelock 4.2.1. Python 3.10 retains legacy functional compatibility
-without dependency security qualification. Each release still requires a fresh
+Use the [Python constraints files](../../constraints/README.md) for the approved
+setuptools and filelock pins. Python 3.10 retains legacy functional compatibility
+without dependency security qualification. Each release requires a fresh
 unsuppressed audit of its exact resolved wheel inventory.

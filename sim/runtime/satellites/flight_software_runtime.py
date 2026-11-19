@@ -43,6 +43,8 @@ from sim.flight_software.contracts import (
     CmgGimbalRateCommand,
     ContinuousEngineCommand,
     DataValidity,
+    DockingMechanismCommand,
+    DockingPortMeasurement,
     FlightSoftwareCheckpoint,
     FlightSoftwareInputBatch,
     FlightSoftwareOutput,
@@ -195,7 +197,8 @@ class SatelliteFlightSoftwareRuntime:
             | AerodynamicEffectorHardware
             | ReactionWheelHardware
             | MagnetorquerHardware
-            | CmgHardware,
+            | CmgHardware
+            | DockingMechanismHardware,
         ],
         inertial_frame: FrameId,
         body_frame: FrameId,
@@ -387,6 +390,7 @@ class SatelliteFlightSoftwareRuntime:
         *,
         start_time_ns: int,
         world_truth: Mapping[str, StateTruth] | None = None,
+        docking_measurement: DockingPortMeasurement | None = None,
     ) -> None:
         """Release any task or delivered input event due at an interval boundary."""
 
@@ -431,6 +435,7 @@ class SatelliteFlightSoftwareRuntime:
                 start_time_ns,
                 world_truth=world_truth,
                 sample_sensors=sensor_due,
+                docking_measurement=docking_measurement,
                 release_reasons=release_reasons,
             )
             self._requested_release_ns = {value for value in self._requested_release_ns if value > onboard_start_ns}
@@ -557,6 +562,12 @@ class SatelliteFlightSoftwareRuntime:
             tuple(sorted(positions)),
         )
 
+    def docking_request(self, time_ns: int) -> DockingMechanismCommand:
+        demand = self.command_bus.demand(
+            satellite_id=self.satellite_id, actuator_id="docking", at=self.clock_tag(time_ns),
+        )
+        return demand.payload if isinstance(demand.payload, DockingMechanismCommand) else DockingMechanismCommand()
+
     def physics_environment(
         self,
         truth: StateTruth,
@@ -605,9 +616,14 @@ class SatelliteFlightSoftwareRuntime:
         world_truth: Mapping[str, StateTruth] | None,
         sample_sensors: bool,
         release_reasons: tuple[str, ...],
+        docking_measurement: DockingPortMeasurement | None = None,
     ) -> None:
         now = self.clock_tag(time_ns)
         if sample_sensors:
+            if docking_measurement is not None:
+                self._enqueue_runtime_owned(self._measurement_input(
+                    "docking_port", docking_measurement, now, FrameId("OEL/DOCKING/RECEIVER", "frames-v1"),
+                ))
             self._enqueue_runtime_owned(
                 self._ideal_own_state_event(truth, now)
                 if self.ideal_navigation
@@ -1151,7 +1167,7 @@ class SatelliteFlightSoftwareRuntime:
     def _measurement_input(
         self,
         sensor_id: str,
-        payload: GnssOwnStateMeasurement | GyroMeasurement | StarTrackerMeasurement,
+        payload: GnssOwnStateMeasurement | GyroMeasurement | StarTrackerMeasurement | DockingPortMeasurement,
         now: ClockTag,
         frame: FrameId,
     ) -> InputEvent:
@@ -1261,6 +1277,31 @@ class SatelliteFlightSoftwareRuntime:
         )
         self._telemetry_sequence += 1
         self._enqueue_runtime_owned(InputEvent(packet_id, InputKind.ACTUATOR_TELEMETRY, at, at, Quality(), payload))
+
+
+class DockingMechanismHardware:
+    """A discrete authority device. The paired physics owner resolves contact."""
+
+    def advance(self, demand, *, start_time_ns: int, end_time_ns: int) -> ActuatorRealization:
+        request = demand.payload or DockingMechanismCommand()
+        zero = (0., 0., 0.)
+        return ActuatorRealization(
+            "docking", start_time_ns, end_time_ns,
+            None if demand.source_command is None else demand.source_command.command_id,
+            demand.mode, zero, zero, zero, zero,
+            device_state=(TelemetryField("arm_capture", request.arm_capture),
+                          TelemetryField("request_hard_mate", request.request_hard_mate)),
+        )
+
+
+def docking_mechanism_device(satellite_id: str) -> tuple[ActuatorDeviceDefinition, DockingMechanismHardware]:
+    return (
+        ActuatorDeviceDefinition(
+            satellite_id, "docking", FrameId(f"OEL/ACTUATOR/{satellite_id}/docking", "frames-v1"),
+            (DockingMechanismCommand,), ExpiryBehavior.ZERO,
+        ),
+        DockingMechanismHardware(),
+    )
 
 
 def ideal_wrench_device(

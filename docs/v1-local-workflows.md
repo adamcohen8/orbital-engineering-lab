@@ -1,4 +1,4 @@
-# OEL v1.0 local workflows
+# OEL public local workflows
 
 Use the installed OEL environment and the matching public source release.
 Local tools run without license activation. The legacy Python module names
@@ -16,6 +16,8 @@ remain part of the import and CLI contracts.
 | RF engineering | `sim.pro_communications` Python API |
 | Local OD and satellite laser ranging | [Tracking OD](tracking-od.md); `python -m sim.estimation --help` for evidence and state products |
 | Flight software authoring and FSWDK | `oel fswdk --help` |
+| Experimental cooperative docking | [Docking scenarios and review](models/docking.md) |
+| Experimental rocket touchdown and landing gear | [Synthetic drop and review](scenario-yaml.md#deployable-rocket-landing-gear) |
 | Generic spacecraft twin authoring | `oel-mcp` and `sim.spacecraft_twin` |
 | cFS/SIL | [Bridge and mock endpoint](../integrations/cfs_sil/README.md) |
 | Deterministic report preparation and audit | [Local MCP reporting](oel-mcp.md) |

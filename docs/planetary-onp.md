@@ -38,9 +38,9 @@ from the default point-mass GM.
 
 ## Build and run
 
-Build/install `rust/oel-orbit` wheel 0.18.3 in the active environment;
-the extension must export `PlanetaryPlan`, `planetary_rotation`,
-`planetary_atmosphere_sample` and `planetary_tdb_seconds`. See the crate README.
+Follow [Building public native source](native-source-build.md) to install the
+wheel that matches your checkout. The extension must export `PlanetaryPlan`,
+`planetary_rotation`, `planetary_atmosphere_sample` and `planetary_tdb_seconds`.
 Older Earth-compatible wheels fail planetary validation clearly. There is no
 Python implementation or lower-fidelity fallback for the new force core.
 

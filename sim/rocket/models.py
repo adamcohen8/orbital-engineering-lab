@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -8,6 +9,8 @@ import numpy as np
 from sim.numeric_backend import normalize_numeric_backend
 from sim.presets.rockets import RocketStackPreset
 from sim.rocket.aero import RocketAeroConfig
+from sim.rocket.landing_gear import LandingGear, LandingGearCommand, LegState
+from sim.rocket.touchdown import RocketTouchdownLimits
 
 
 @dataclass(frozen=True)
@@ -47,6 +50,7 @@ class RocketSimConfig:
     tvc_rate_limit_deg_s: float = 20.0
     tvc_pivot_offset_body_m: np.ndarray = field(default_factory=lambda: np.zeros(3))
     numeric_backend: str = "rust"
+    touchdown: RocketTouchdownLimits | None = None
 
     def __post_init__(self) -> None:
         if self.dt_s <= 0.0:
@@ -63,6 +67,8 @@ class RocketSimConfig:
             raise ValueError("attitude_substep_s must be positive.")
         if self.earth_impact_radius_km <= 0.0:
             raise ValueError("earth_impact_radius_km must be positive.")
+        if self.touchdown is not None and not self.terminate_on_earth_impact:
+            raise ValueError("Rocket touchdown requires terminate_on_earth_impact.")
         if np.array(self.wind_enu_m_s, dtype=float).reshape(-1).size != 3:
             raise ValueError("wind_enu_m_s must be length-3.")
         if self.tvc_time_constant_s <= 0.0:
@@ -85,6 +91,7 @@ class RocketVehicleConfig:
     stack: RocketStackPreset
     payload_mass_kg: float
     thrust_axis_body: np.ndarray = field(default_factory=lambda: np.array([1.0, 0.0, 0.0]))
+    landing_gear: LandingGear | None = None
 
     def __post_init__(self) -> None:
         if self.payload_mass_kg < 0.0:
@@ -108,6 +115,11 @@ class RocketState:
     stage_prop_remaining_kg: np.ndarray
     payload_attached: bool = True
     thrust_vector_body: np.ndarray = field(default_factory=lambda: np.array([1.0, 0.0, 0.0], dtype=float))
+    landing_legs: dict[str, LegState] = field(default_factory=dict)
+    gear_touchdown: dict | None = None
+    gear_terminal: dict | None = None
+    gear_settle_elapsed_s: float = 0.0
+    gear_rebound_time_s: float | None = None
 
     def copy(self) -> RocketState:
         return RocketState(
@@ -121,6 +133,11 @@ class RocketState:
             stage_prop_remaining_kg=self.stage_prop_remaining_kg.copy(),
             payload_attached=bool(self.payload_attached),
             thrust_vector_body=self.thrust_vector_body.copy(),
+            landing_legs=self.landing_legs.copy(),
+            gear_touchdown=deepcopy(self.gear_touchdown),
+            gear_terminal=deepcopy(self.gear_terminal),
+            gear_settle_elapsed_s=self.gear_settle_elapsed_s,
+            gear_rebound_time_s=self.gear_rebound_time_s,
         )
 
 
@@ -130,6 +147,7 @@ class GuidanceCommand:
     attitude_quat_bn_cmd: np.ndarray | None = None
     torque_body_nm_cmd: np.ndarray | None = None
     thrust_vector_body_cmd: np.ndarray | None = None
+    landing_gear_commands: tuple[LandingGearCommand, ...] = ()
 
 
 class RocketGuidanceLaw(Protocol):
@@ -168,3 +186,5 @@ class RocketSimResult:
     terminated_early: bool = False
     termination_reason: str | None = None
     termination_time_s: float | None = None
+    touchdown: dict | None = None
+    landing_gear: dict | None = None

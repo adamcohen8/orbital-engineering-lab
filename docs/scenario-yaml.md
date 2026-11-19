@@ -624,7 +624,7 @@ request the Numba backend explicitly. Unsupported dynamics combinations fall
 back to the standard Python path. Set `acceleration.warmup: true` to compile
 supported kernels before the run starts.
 
-`simulator.dynamics.orbit.numeric_backend` defaults to `rust` in v1.0.0.
+`simulator.dynamics.orbit.numeric_backend` defaults to `rust`.
 Select `python` explicitly for reference execution. The required `oel_rust_orbit` wheel for
 Earth-centered two-body ONP special propagation with RK4, RKF78 (`rkf78`/`adaptive`), or DOPRI5,
 or ideal rotating barycentric CR3BP (`model: cr3bp`, requiring wheel 0.6.0
@@ -994,6 +994,144 @@ simulator:
 
 This lets a launch vehicle, disposed stage, or atmospheric test article coexist
 with satellites whose mission should continue.
+
+### Rocket touchdown classification
+
+An enabled Earth-centered rocket can opt into touchdown classification under
+its existing per-object termination policy:
+
+```yaml
+simulator:
+  termination:
+    by_object:
+      booster:
+        touchdown:
+          max_normal_energy_j: 2500.0
+          surface_altitude_m: 20.0
+          contact_height_m: 2.0
+          max_lateral_speed_m_s: 1.0
+          max_tilt_deg: 5.0
+          max_angular_rate_deg_s: 3.0
+```
+
+`max_normal_energy_j` is required. Each optional maximum adds an independent
+check and equality passes. The energy is half the current mass times the
+squared normal closing speed relative to the Earth-fixed surface. Tilt is
+measured from the surface normal to the rocket's nominal body thrust axis.
+Angular rate is the magnitude of the body's inertial angular rate.
+
+The effective contact altitude is `surface_altitude_m + contact_height_m`,
+both defaulting to zero. These are heights above WGS84 by default. A spherical
+impact override uses the configured radius instead. Choose contact height to
+represent the reference point's height when the gear first touches. This is
+a constant altitude surface with a fixed clearance, so it does not model a
+pad footprint, individual gear geometry, or tilt-dependent clearance. Start
+at or above the configured contact altitude.
+
+The rocket integrator refines a descending crossing bracketed by step
+endpoints. Choose a timestep small enough to resolve the descent. The run
+ends at contact with `rocket_landing` if all limits pass or `rocket_crash` if
+any fail. `master_run_summary.json` includes a `rocket_touchdown` record with
+the pre-contact state, measured values, and individual limit results. The
+review store exposes a `rocket_touchdown` event. This classification ends at
+first contact, before any gear loads, rebound, or tip-over could occur.
+
+The same limits can be passed as `RocketTouchdownLimits` in
+`RocketSimConfig.touchdown` for `RocketAscentSimulator.run(state0=...)`.
+
+### Deployable rocket landing gear
+
+The [synthetic drop example](../examples/configs/public_rocket_landing_gear.yaml)
+starts with four deployed legs and records both touchdown and settling.
+
+```bash
+config=examples/configs/public_rocket_landing_gear.yaml
+python run_simulation.py --config "$config" --safe-validate
+python run_simulation.py --config "$config" --validate-only
+python run_simulation.py --config "$config"
+```
+
+Set `objects.<id>.specs.landing_gear` to use footpads and body points for
+contact. Give the rocket a per-object touchdown policy with
+`contact_height_m: 0` and use dynamic attitude. The policy still sets the
+surface altitude and the vehicle's first-contact energy and motion limits.
+
+Each entry in `legs` defines one actuator. This example shows one entry.
+A stable landing requires at least three loaded feet surrounding the
+projected center of mass.
+
+```yaml
+landing_gear:
+  body_contact_points_m: [[-0.5, -1.0, -1.0], [-0.5, 1.0, 1.0]]
+  max_step_s: 0.01
+  settle_time_s: 0.5
+  settle_speed_m_s: 0.05
+  settle_rate_deg_s: 0.5
+  legs:
+    - id: leg_1
+      mount_body_m: [0.0, -1.0, -1.0]
+      stowed_offset_m: [-0.1, 0.0, 0.0]
+      deployed_offset_m: [-2.5, -1.0, -1.0]
+      travel_time_s: 0.4
+      initially_deployed: false
+      retractable: false
+      stiffness_n_m: 8000000
+      damping_n_s_m: 1000000
+      max_stroke_m: 0.7
+      friction_coefficient: 0.35
+  commands:
+    - {time_s: 0.05, leg_id: leg_1, action: deploy}
+```
+
+Mounts and body contact points are relative to the rocket center of mass.
+Footpad offsets are relative to each mount in the same body axes. The foot
+travels in a straight line between the two offsets. Gear remains with the
+rocket object across staging. Include gear mass and inertia in the vehicle
+properties. Motion of the legs affects footpad velocity and leaves the
+vehicle's mass distribution and aerodynamics fixed.
+
+For commands from code, return a tuple of `LandingGearCommand(leg_id,
+"deploy")` or `LandingGearCommand(leg_id, "stow")` in
+`GuidanceCommand.landing_gear_commands`, or as `landing_gear_commands`
+from the rocket's `mission_execution` module. Live commands take precedence
+over scheduled commands for the same leg at the same time. Requests persist
+until changed. Read `RocketState.landing_legs` for achieved extension,
+`stowed`, `deploying`, `down_locked`, or `stowing`, and the last lock or
+rejection time. A stow request after touchdown is rejected. The rocket command
+path is independent of the satellite flight software actuator bus.
+
+The engine brackets a first contact and records the point ID, lock status,
+and Earth-fixed footpad velocity, including body rotation and leg motion.
+The first-contact energy and lateral limits still use the center-of-mass
+velocity projected onto the local surface. A body strike or contact by an
+unlocked leg is a crash. After accepted contact, locked feet exert a
+compression spring force and damping along the normal, and sliding friction
+opposes tangential motion. The force acts at the footpad and can rotate the
+rocket. The integrator uses contact substeps bounded by `max_step_s` and
+shortens them for stiff or heavily damped contact. Friction transitions
+linearly near zero speed over `friction_transition_speed_m_s`, default
+0.01 m/s.
+
+The run ends in `rocket_landing` after the support and surface-relative
+motion criteria hold for the specified dwell. Body strike or exceeded stroke
+ends the run in `rocket_crash`. If the simulation horizon expires before
+either, the gear record has no terminal event. The summary field
+`rocket_landing_gear_by_object` records first contact, the first observed
+rebound if one occurred, the terminal result, and final and peak per-leg loads
+and compression. Query `events` for `rocket_touchdown`, `rocket_rebound`,
+`rocket_landing`, or `rocket_crash`.
+
+This model uses rigid bodies, point contacts, smooth reference surfaces and
+an equivalent normal spring and damper. Choose body points to represent
+possible hull strikes, including tip-over. Use step refinement and hardware
+data before treating the calculated loads as representative of a vehicle.
+
+### Cooperative docking
+
+`simulator.docking` advances an explicitly configured probe and receiver
+together through rigid-body contact, compliant soft capture, and optional
+hard mate. Use the [docking model guide](models/docking.md) for the configuration
+contract, four runnable examples, and review queries.
 
 ### Elastic spherical collisions
 

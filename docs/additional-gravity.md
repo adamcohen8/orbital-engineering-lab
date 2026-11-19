@@ -7,9 +7,10 @@ A Moon-centered run can use lunar primary harmonics and add Earth's field.
 Mars and the other supported planetary origins, including the Sun, can use
 the same optional external-field path. Solar harmonics are unsupported.
 
-This feature requires `oel-rust-orbit` >=0.18.2,<0.19. The physics and integration
-are implemented in public Rust source. Coefficients, rotation definitions and
-geometric ephemerides are prepared once through declarative Python adapters.
+This feature requires the `oel-rust-orbit` wheel for your OEL checkout. The
+physics and integration are implemented in public Rust source. Coefficients,
+rotation definitions and geometric ephemerides are prepared once through
+declarative Python adapters.
 Other bodies remain bring your own coefficients; Mars GMM-2B is the built-in
 example. The feature does not bundle or qualify a lunar gravity dataset.
 See [native source builds](native-source-build.md) for the public crate build

@@ -266,8 +266,8 @@ For new requests:
 
 Do not force a new request into a task card just because a task card exists. If
 the public core cannot answer the request, say so and point to the nearest
-public alternative. See [the v1.0 local workflows](v1-local-workflows.md) for
-the expanded public capabilities. Hosted access depends on an authorized
+public alternative. See [public local workflows](v1-local-workflows.md) for
+additional entry points. Hosted access depends on an authorized
 service account and the service's published availability.
 
 Use [`agent-capability-routing.md`](agent-capability-routing.md) when the
