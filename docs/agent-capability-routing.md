@@ -213,3 +213,19 @@ requires frame-labeled review evidence. Local MCP callers use
 `oel.plan_cr3bp_render.v1` then `oel.render_cr3bp.v1` with the unchanged
 specification, matching plan ID, and approved write scope; Python/CLI callers
 use the documented research renderer.
+
+### Two-body transfers with extra revolutions
+
+For a fixed pair of noncollinear inertial positions, call
+`sim.dynamics.orbit.solve_multi_revolution_lambert(r1_km, r2_km, time_of_flight_s, revolutions=M, mu_km3_s2=mu, short_way=True)`
+with a positive integer `M`. Both positions use the same central body, frame
+and kilometre units. The short or long way selects the oriented transfer angle
+on top of the complete turns. The result reports `minimum_time_s` and a tuple
+of branches with departure and arrival velocities in km/s. Below the minimum
+the tuple is empty. Within `tolerance_s` of the minimum it contains one
+tangent solution. Above that band it contains two solutions ordered by their
+eccentric-anomaly increment modulo 2π. A numerical convergence error is
+reported separately from physical infeasibility. Independently propagate each
+departure state and check position, velocity and accumulated angle when using
+the result in a study. The scenario transfer planner uses the zero-revolution
+single-solution interface.

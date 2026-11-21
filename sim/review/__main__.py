@@ -20,6 +20,10 @@ from sim.review import (
 def main(argv: list[str] | None = None) -> int:
     if argv is None:
         argv = sys.argv[1:]
+    if argv and argv[0] == "compare-observations":
+        from sim.review.observation_comparison import main as compare_observations
+
+        return compare_observations(argv[1:])
     if argv and argv[0] == "cr3bp":
         from sim.review.cr3bp import main as cr3bp_main
 

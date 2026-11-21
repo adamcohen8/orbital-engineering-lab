@@ -115,6 +115,8 @@ _export(
     "transform_state",
 )
 _export("sim.dynamics.orbit.lambert", "LambertSolution", "solve_lambert_universal_variable")
+_export("sim.dynamics.orbit.lambert_multirevolution", "MultiRevolutionLambertBranch",
+        "MultiRevolutionLambertResult", "solve_multi_revolution_lambert")
 _export(
     "sim.dynamics.orbit.ogp",
     "OGP_DEEP_SPACE_PERIOD_THRESHOLD_MIN",
