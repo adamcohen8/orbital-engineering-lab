@@ -15,6 +15,7 @@ from scipy.integrate import solve_ivp
 from scipy.special import lpmv
 
 from sim.config.scenario_yaml import scenario_config_from_dict
+from sim.dynamics.planetary.definitions import BODIES
 from sim.dynamics.planetary.preparation import prepare_environment
 from sim.dynamics.planetary.propagation import PlanetaryForcePlan, PlanetaryPropagator
 from sim.dynamics.planetary.runtime import initial_truth
@@ -174,6 +175,58 @@ def test_circular_kepler(body, method):
     )
     np.testing.assert_allclose(x[:3], expected[:3], atol=2e-6, rtol=0.0)
     np.testing.assert_allclose(x[3:], expected[3:], atol=2e-9, rtol=0.0)
+
+
+@pytest.mark.parametrize("body,gravity", [(body, "point_mass") for body in BODIES] + [("mars", "gmm2b_static")])
+def test_schwarzschild_uses_selected_gravity_and_primary_relative_state(body, gravity):
+    raw = scenario(body, planetary={"gravity": {"model": gravity}})
+    orbit = raw["simulator"]["dynamics"]["orbit"]
+    orbit["schwarzschild"] = {"enabled": True}
+    _, env, plan = prepared(raw)
+    mu = env.gravity.mu_km3_s2
+    radius = 3 * env.body.reference_radius_km
+    pos = np.array([0.6, 0.8, 0.0]) * radius
+    vel = np.array([0.3, -0.6, 0.8]) * math.sqrt(mu / radius)
+    state = np.r_[pos, vel]
+    expected = mu / (299792.458**2 * radius**3) * (
+        (4 * mu / radius - vel @ vel) * pos + 4 * (pos @ vel) * vel
+    )
+    total, diag = plan.stage(37.0, state)
+    np.testing.assert_allclose(diag["forces_km_s2"]["schwarzschild"], expected, rtol=3e-15, atol=0)
+    assert env.metadata()["forces"]["schwarzschild"]["enabled"]
+    orbit["schwarzschild"]["enabled"] = False
+    _, off_env, off = prepared(raw)
+    off_total, off_diag = off.stage(37.0, state)
+    assert "schwarzschild" not in off_diag["forces_km_s2"]
+    np.testing.assert_array_equal(total, off_total + diag["forces_km_s2"]["schwarzschild"])
+    del orbit["schwarzschild"]
+    _, legacy_env, legacy = prepared(raw)
+    assert legacy_env.digest == off_env.digest != env.digest
+    np.testing.assert_array_equal(off_total, legacy.stage(37.0, state)[0])
+
+
+def test_solar_schwarzschild_advances_periapsis_during_propagation():
+    mu = BODIES["sun"].mu_km3_s2
+    a, e = 5.8e7, 0.2
+    period = 2 * math.pi * math.sqrt(a**3 / mu)
+    raw = scenario("sun", duration=math.ceil(period))
+    raw["simulator"]["dt_s"] = 1.0
+    settings = raw["simulator"]["dynamics"]["orbit"]
+    settings.update(adaptive_atol=1e-13, adaptive_rtol=1e-13)
+    angles = []
+    for enabled in (False, True):
+        settings["schwarzschild"] = {"enabled": enabled}
+        _, _, plan = prepared(raw)
+        prop = PlanetaryPropagator(plan, settings)
+        state = np.array([a * (1-e), 0, 0, 0, math.sqrt(mu * (1+e) / (a * (1-e))), 0])
+        for i in range(128):
+            state = prop.propagate(state, period / 128, i * period / 128)
+        r, v = state[:3], state[3:]
+        ecc = np.cross(v, np.cross(r, v)) / mu - r / np.linalg.norm(r)
+        angles.append(math.atan2(ecc[1], ecc[0]))
+    predicted = 6 * math.pi * mu / (a * (1 - e**2) * 299792.458**2)
+    assert abs(angles[0]) < 1e-4 * predicted
+    assert angles[1] - angles[0] == pytest.approx(predicted, rel=2e-4)
 
 
 def test_atmosphere_original_samples_and_boundaries():

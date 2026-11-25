@@ -498,6 +498,18 @@ SAVED_REVIEW_QUERIES: dict[str, SavedReviewQuery] = {
             "ORDER BY s.analysis_id"
         ),
     ),
+    "access_chain_summary": SavedReviewQuery(
+        name="access_chain_summary",
+        description="End-to-end access and redundancy durations.",
+        sql="SELECT * FROM access_chain_summary ORDER BY analysis_id",
+        allow_empty=True,
+    ),
+    "access_chain_windows": SavedReviewQuery(
+        name="access_chain_windows",
+        description="Feasible path windows with the link or sensor evidence at each boundary.",
+        sql="SELECT * FROM access_chain_windows ORDER BY analysis_id, path_id, start_s",
+        allow_empty=True,
+    ),
     "directed_link_windows": SavedReviewQuery(
         name="directed_link_windows",
         description="Directed-link availability windows with margin and refinement evidence.",

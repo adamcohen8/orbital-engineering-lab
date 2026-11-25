@@ -435,6 +435,7 @@ pub struct Stage {
 }
 pub struct Plan {
     s: [f64; 12],
+    pub(crate) schwarzschild: bool,
     gravity: Rotation,
     air: Rotation,
     atmosphere: Atmosphere,
@@ -489,6 +490,7 @@ impl Plan {
         }
         let result = Self {
             s,
+            schwarzschild: false,
             center,
             targets,
             gms,
@@ -586,6 +588,9 @@ impl Plan {
             components.push(std::array::from_fn(|i| {
                 mu * (delta[i] / d.powi(3) - pos[i] / origin.powi(3))
             }));
+        }
+        if self.schwarzschild {
+            components.push(crate::precision_forces::schwarzschild_acceleration(x, self.s[0])?);
         }
         let acceleration = std::array::from_fn(|i| components.iter().map(|v| v[i]).sum());
         if !finite(&acceleration) {

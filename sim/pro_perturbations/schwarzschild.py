@@ -1,4 +1,4 @@
-"""Earth-centered first post-Newtonian Schwarzschild acceleration (km/s²).
+"""Primary-centered first post-Newtonian Schwarzschild acceleration (km/s²).
 
 Additive correction in inertial Cartesian coordinates; Newtonian attraction is
 supplied by ONP. No spin, third-body relativity, or clock corrections.

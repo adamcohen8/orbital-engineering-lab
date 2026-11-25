@@ -1,0 +1,226 @@
+schema_version: oel.scenario.v1
+scenario_name: public_access_chains
+scenario_description: Evaluate alternate same-epoch live downlink routes from a conical
+  imager through two relays.
+metadata:
+  owner: public
+  public_surface: public-example
+  support_level: experimental
+
+objects:
+  satellite_a:
+    kind: satellite
+    enabled: true
+    role: coverage_source_and_transmitter
+    specs:
+      mass_kg: 250.0
+    initial_state:
+      position_eci_km: [0.0, 0.0, 6878.137]
+      velocity_eci_km_s: [7.612, 0.0, 0.0]
+      attitude_quat_bn: [1.0, 0.0, 0.0, 0.0]
+      angular_rate_body_rad_s: [0.0, 0.0, 0.0]
+    flight_software:
+      stack: fsw.passive
+      hardware_profile: hardware.passive.v1
+      params: {}
+  satellite_b:
+    kind: satellite
+    enabled: true
+    role: relay_a
+    specs:
+      mass_kg: 250.0
+    initial_state:
+      position_eci_km: [0.0, 0.0, 6888.137]
+      velocity_eci_km_s: [7.606, 0.0, 0.0]
+      attitude_quat_bn: [1.0, 0.0, 0.0, 0.0]
+      angular_rate_body_rad_s: [0.0, 0.0, 0.0]
+    flight_software:
+      stack: fsw.passive
+      hardware_profile: hardware.passive.v1
+      params: {}
+  satellite_c:
+    kind: satellite
+    enabled: true
+    role: relay_b
+    specs:
+      mass_kg: 250.0
+    initial_state:
+      position_eci_km: [0.0, 0.0, 6900.137]
+      velocity_eci_km_s: [7.606, 0.0, 0.0]
+      attitude_quat_bn: [1.0, 0.0, 0.0, 0.0]
+      angular_rate_body_rad_s: [0.0, 0.0, 0.0]
+    flight_software:
+      stack: fsw.passive
+      hardware_profile: hardware.passive.v1
+      params: {}
+simulator:
+  duration_s: 120.0
+  dt_s: 10.0
+  initial_jd_utc: 2461041.5
+  dynamics:
+    orbit:
+      model: two_body
+    attitude:
+      enabled: true
+    rocket:
+      enabled: false
+  plugin_validation:
+    strict: true
+  termination:
+    earth_impact_enabled: false
+outputs:
+  output_dir: outputs/examples/public_access_chains
+  mode: save
+  stats:
+    print_summary: false
+    save_json: true
+    save_csv: false
+    save_full_log: false
+  review:
+    enabled: true
+    detail: standard
+  plots:
+    enabled: false
+    figure_ids: []
+  animations:
+    enabled: false
+    types: []
+  orbital_analysis:
+    enabled: true
+    coverage:
+    - analysis_id: satellite_a_global
+      source_object_id: satellite_a
+      sensor_id: satellite_a.imager
+      order: 5
+      half_angle_deg: 20.0
+      quat_body_from_sensor: [0.0, 1.0, 0.0, 0.0]
+      transition_time_tolerance_s: 0.25
+      transition_max_iterations: 30
+      include_cell_csv: false
+      include_fraction_plot: false
+      numeric_backend: python
+    directed_links:
+    - analysis_id: imager_to_relay_a
+      link_id: imager_to_relay_a
+      tx_object_id: satellite_a
+      tx_terminal:
+        terminal_id: satellite_a.tx
+        pattern:
+          kind: constant
+          gain_dbi: 20.0
+      rx_terminal:
+        terminal_id: satellite_b.rx
+        pattern:
+          kind: constant
+          gain_dbi: 20.0
+      carrier_frequency_hz: 2200000000.0
+      tx_power_w: 10.0
+      data_rate_bps: 1000000.0
+      system_noise_temperature_k: 300.0
+      required_eb_n0_db: 5.0
+      transition_time_tolerance_s: 0.25
+      transition_max_iterations: 30
+      include_margin_plot: false
+      numeric_backend: python
+      rx_object_id: satellite_b
+    - analysis_id: imager_to_relay_b
+      link_id: imager_to_relay_b
+      tx_object_id: satellite_a
+      tx_terminal:
+        terminal_id: satellite_a.tx
+        pattern:
+          kind: constant
+          gain_dbi: 20.0
+      rx_terminal:
+        terminal_id: satellite_c.rx
+        pattern:
+          kind: constant
+          gain_dbi: 20.0
+      carrier_frequency_hz: 2200000000.0
+      tx_power_w: 10.0
+      data_rate_bps: 1000000.0
+      system_noise_temperature_k: 300.0
+      required_eb_n0_db: 5.0
+      transition_time_tolerance_s: 0.25
+      transition_max_iterations: 30
+      include_margin_plot: false
+      numeric_backend: python
+      rx_object_id: satellite_c
+    - analysis_id: relay_a_to_north
+      link_id: relay_a_to_north
+      tx_object_id: satellite_b
+      tx_terminal:
+        terminal_id: satellite_b.tx
+        pattern:
+          kind: constant
+          gain_dbi: 20.0
+      rx_terminal:
+        terminal_id: north_site.rx
+        pattern:
+          kind: constant
+          gain_dbi: 20.0
+      carrier_frequency_hz: 2200000000.0
+      tx_power_w: 10.0
+      data_rate_bps: 1000000.0
+      system_noise_temperature_k: 300.0
+      required_eb_n0_db: 5.0
+      transition_time_tolerance_s: 0.25
+      transition_max_iterations: 30
+      include_margin_plot: false
+      numeric_backend: python
+      rx_ground_station_id: north_site
+    - analysis_id: relay_b_to_alternate
+      link_id: relay_b_to_alternate
+      tx_object_id: satellite_c
+      tx_terminal:
+        terminal_id: satellite_c.tx
+        pattern:
+          kind: constant
+          gain_dbi: 20.0
+      rx_terminal:
+        terminal_id: alternate_site.rx
+        pattern:
+          kind: constant
+          gain_dbi: 20.0
+      carrier_frequency_hz: 2200000000.0
+      tx_power_w: 10.0
+      data_rate_bps: 1000000.0
+      system_noise_temperature_k: 300.0
+      required_eb_n0_db: 5.0
+      transition_time_tolerance_s: 0.25
+      transition_max_iterations: 30
+      include_margin_plot: false
+      numeric_backend: python
+      rx_ground_station_id: alternate_site
+    access_chains:
+    - analysis_id: live_downlink
+      service_rate_bps: 1000000
+      simultaneous_relays:
+      - satellite_b
+      - satellite_c
+      sensor_gate:
+        coverage_analysis_id: satellite_a_global
+        latitude_deg: 90.0
+        longitude_deg: 0.0
+      paths:
+      - path_id: via_relay_a
+        links:
+        - imager_to_relay_a
+        - relay_a_to_north
+      - path_id: via_relay_b
+        links:
+        - imager_to_relay_b
+        - relay_b_to_alternate
+ground_stations:
+- id: north_site
+  lat_deg: 88.0
+  lon_deg: 10.0
+  alt_km: 0.1
+  min_elevation_deg: 10.0
+  max_range_km: 2500.0
+- id: alternate_site
+  lat_deg: 86.0
+  lon_deg: -12.0
+  alt_km: 0.1
+  min_elevation_deg: 46.5
+  max_range_km: 2500.0

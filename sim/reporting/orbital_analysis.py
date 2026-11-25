@@ -474,6 +474,39 @@ def run_scenario_orbital_analysis(*, context: Any) -> dict[str, Any]:
             "artifacts": _artifact_paths(artifacts), "input_evidence_sha256": product.input_evidence_sha256,
             "semantic_sha256": product.semantic_sha256,
         })
+    if section.access_chains:
+        from sim.analysis.access_chain_artifacts import write_access_chain_artifacts
+        from sim.analysis.access_chain_sensor import evaluate_sensor_gate
+        from sim.analysis.access_chains import Link, evaluate_chain, parse_chain
+
+        catalog = {row["analysis_id"]: Link.from_scenario(row) for row in section.directed_links}
+        coverage_config = {row["analysis_id"]: row for row in section.coverage}
+        coverage_catalog = {key: (row["source_object_id"], row["order"]) for key, row in coverage_config.items()}
+        link_rows = {row["analysis_id"]: row for row in result["directed_links"]}
+        coverage_rows = {row["analysis_id"]: row for row in result["coverage"]}
+        result["access_chains"] = []
+        for raw in section.access_chains:
+            chain = parse_chain(raw, catalog, coverage_catalog)
+            gate = chain.sensor_gate
+            sensor = None
+            if gate is not None:
+                config = coverage_config[gate.coverage_analysis_id]
+                source = coverage_rows[gate.coverage_analysis_id]
+                cell_windows = None if gate.cell_index is None else [
+                    row for row in source["intervals"] if row["cell_index"] == gate.cell_index
+                ]
+                sensor = evaluate_sensor_gate(
+                    gate, config, histories[config["source_object_id"]], frame_context,
+                    cell_windows=cell_windows, source_digest=source["semantic_sha256"],
+                )
+            evidence = evaluate_chain(chain, catalog, link_rows, sensor=sensor)
+            destination = root / "access_chains" / chain.analysis_id
+            _replace_derived_directory(destination, root=Path(context.outdir))
+            artifacts = write_access_chain_artifacts(
+                evidence, destination, include_timeline=chain.include_timeline,
+                scenario_name=str(context.cfg.scenario_name or ""),
+            )
+            result["access_chains"].append({**evidence, "artifacts": artifacts})
     return result
 
 

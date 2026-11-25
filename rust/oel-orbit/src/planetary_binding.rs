@@ -38,7 +38,12 @@ pub struct NativePlanetaryPlan {
 
 #[pymethods]
 impl NativePlanetaryPlan {
+    #[classattr]
+    #[pyo3(name = "supports_schwarzschild")]
+    const SUPPORTS_SCHWARZSCHILD: bool = true;
+
     #[new]
+    #[pyo3(signature = (center, scalars, harmonic_dims, coefficients, gravity_rotation, air_rotation, atmosphere, ephemeris, third_bodies, *, schwarzschild=false))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         center: i64,
@@ -50,21 +55,22 @@ impl NativePlanetaryPlan {
         atmosphere: AtmosphereInput,
         ephemeris: EphemerisInput,
         third_bodies: (Vec<i64>, Vec<f64>),
+        schwarzschild: bool,
     ) -> PyResult<Self> {
-        Ok(Self {
-            plan: Plan::new(
-                center,
-                scalars,
-                harmonic_dims,
-                coefficients,
-                gravity_rotation,
-                air_rotation,
-                atmosphere,
-                ephemeris,
-                third_bodies,
-            )
-            .map_err(PyValueError::new_err)?,
-        })
+        let mut plan = Plan::new(
+            center,
+            scalars,
+            harmonic_dims,
+            coefficients,
+            gravity_rotation,
+            air_rotation,
+            atmosphere,
+            ephemeris,
+            third_bodies,
+        )
+        .map_err(PyValueError::new_err)?;
+        plan.schwarzschild = schwarzschild;
+        Ok(Self { plan })
     }
     fn stage(
         &self,

@@ -33,12 +33,11 @@ def solve_lambert_universal_variable(
     tolerance_s: float = 1.0e-7,
     backend: str = "rust",
 ) -> LambertSolution:
-    """Solve the single-revolution two-body Lambert boundary-value problem.
+    """Solve the zero-revolution two-body Lambert boundary-value problem.
 
     The implementation uses the classical universal-variable formulation with
-    a bracketed bisection search on the Stumpff parameter.  Multi-revolution
-    Lambert transfers are intentionally rejected for this first deterministic
-    planner surface.
+    a bracketed bisection search on the Stumpff parameter.  Use sim.dynamics.orbit.solve_multi_revolution_lambert
+    to enumerate elliptic branches for a positive revolution count.
     """
 
     if int(revolutions) != 0:

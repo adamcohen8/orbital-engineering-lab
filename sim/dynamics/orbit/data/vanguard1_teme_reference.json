@@ -1,0 +1,186 @@
+{
+  "name": "Vanguard 1",
+  "description": "Archived civil SGP4 verification case from Vallado et al., Revisiting Spacetrack Report #3 (2006).",
+  "regime": "near_earth",
+  "reference_frame": "teme",
+  "source": {
+    "tle_url": "https://raw.githubusercontent.com/CelesTrak/fundamentals-of-astrodynamics/faa0d45f504e51f9d0b946594c39f18b311ab992/datalib/SGP4-VER.TLE",
+    "reference_url": "https://raw.githubusercontent.com/CelesTrak/fundamentals-of-astrodynamics/faa0d45f504e51f9d0b946594c39f18b311ab992/software/cpp/TestSGP4/TestSGP4/00005.e",
+    "reference_sha256": "5fd9b6dedbd755f0f336b143a076bbe6308e22c2f79f21910367963868b64869"
+  },
+  "tle": {
+    "line1": "1 00005U 58002B   00179.78495062  .00000023  00000-0  28098-4 0  4753",
+    "line2": "2 00005  34.2682 348.7242 1859667 331.7664  19.3264 10.82419157413667"
+  },
+  "samples": [
+    {
+      "tsince_min": 0.0,
+      "position_teme_km": [
+        7022.46529266,
+        -1400.08296755,
+        0.03995155
+      ],
+      "velocity_teme_km_s": [
+        1.893841015,
+        6.405893759,
+        4.53480725
+      ]
+    },
+    {
+      "tsince_min": 360.0,
+      "position_teme_km": [
+        -7154.03120202,
+        -3783.17682504,
+        -3536.19412294
+      ],
+      "velocity_teme_km_s": [
+        4.741887409,
+        -4.151817765,
+        -2.093935425
+      ]
+    },
+    {
+      "tsince_min": 720.0,
+      "position_teme_km": [
+        -7134.59340119,
+        6531.68641334,
+        3260.27186483
+      ],
+      "velocity_teme_km_s": [
+        -4.113793027,
+        -2.911922039,
+        -2.557327851
+      ]
+    },
+    {
+      "tsince_min": 1080.0,
+      "position_teme_km": [
+        5568.53901181,
+        4492.06992591,
+        3863.87641983
+      ],
+      "velocity_teme_km_s": [
+        -4.209106476,
+        5.159719888,
+        2.74485298
+      ]
+    },
+    {
+      "tsince_min": 1440.0,
+      "position_teme_km": [
+        -938.55923943,
+        -6268.18748831,
+        -4294.02924751
+      ],
+      "velocity_teme_km_s": [
+        7.536105209,
+        -0.427127707,
+        0.98987808
+      ]
+    },
+    {
+      "tsince_min": 1800.0,
+      "position_teme_km": [
+        -9680.56121728,
+        2802.47771354,
+        124.10688038
+      ],
+      "velocity_teme_km_s": [
+        -0.905874102,
+        -4.65946797,
+        -3.227347517
+      ]
+    },
+    {
+      "tsince_min": 2160.0,
+      "position_teme_km": [
+        190.19796988,
+        7746.96653614,
+        5110.00675412
+      ],
+      "velocity_teme_km_s": [
+        -6.112325142,
+        1.527008184,
+        -0.139152358
+      ]
+    },
+    {
+      "tsince_min": 2520.0,
+      "position_teme_km": [
+        5579.55640116,
+        -3995.61396789,
+        -1518.82108966
+      ],
+      "velocity_teme_km_s": [
+        4.767927483,
+        5.123185301,
+        4.276837355
+      ]
+    },
+    {
+      "tsince_min": 2880.0,
+      "position_teme_km": [
+        -8650.73082219,
+        -1914.93811525,
+        -3007.03603443
+      ],
+      "velocity_teme_km_s": [
+        3.067165127,
+        -4.828384068,
+        -2.515322836
+      ]
+    },
+    {
+      "tsince_min": 3240.0,
+      "position_teme_km": [
+        -5429.79204164,
+        7574.36493792,
+        3747.39305236
+      ],
+      "velocity_teme_km_s": [
+        -4.99944211,
+        -1.800561422,
+        -2.22939283
+      ]
+    },
+    {
+      "tsince_min": 3600.0,
+      "position_teme_km": [
+        6759.04583722,
+        2001.5819822,
+        2783.55192533
+      ],
+      "velocity_teme_km_s": [
+        -2.180993947,
+        6.402085603,
+        3.644723952
+      ]
+    },
+    {
+      "tsince_min": 3960.0,
+      "position_teme_km": [
+        -3791.44531559,
+        -5712.95617894,
+        -4533.48630714
+      ],
+      "velocity_teme_km_s": [
+        6.668817493,
+        -2.516382327,
+        -0.082384354
+      ]
+    },
+    {
+      "tsince_min": 4320.0,
+      "position_teme_km": [
+        -9060.47373569,
+        4658.70952502,
+        813.68673153
+      ],
+      "velocity_teme_km_s": [
+        -2.232832783,
+        -4.11045349,
+        -3.157345433
+      ]
+    }
+  ]
+}

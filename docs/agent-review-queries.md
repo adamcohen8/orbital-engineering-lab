@@ -464,3 +464,45 @@ separate from independent accuracy validation.
 Use `sim.review.validate_review_sql(statement)` for the read-only statement
 envelope before selecting a review store. The workspace still checks SQLite
 syntax, table availability, and operation authorization during retrieval.
+
+## Compare two observation selections
+
+Run `oel review compare-observations left.json right.json` to produce a portable
+JSON comparison. The same command is available as
+`python -m sim.review compare-observations left.json right.json`. Each input
+identifies its source and uses schema `oel.observation_treatment.v1`.
+
+```json
+{
+  "schema": "oel.observation_treatment.v1",
+  "source": "Fit A, optical selection file, revision 1",
+  "id_namespace": "survey observation IDs, release 1",
+  "counts": {"available": 2},
+  "observations": [
+    {"observation_id":"obs-a","partition":"fit","uncertainty":{"ra_sigma_arcsec":0.5},
+     "weight":{"ra_inverse_variance_arcsec^-2":4},"catalog_correction":{"ra_bias_arcsec":0.1}},
+    {"observation_id":"obs-b","partition":"holdout"}
+  ]
+}
+```
+
+Use `fit`, `holdout` or `excluded` once per unique observation ID. An inline
+list enumerates all three partitions by default. If only some partitions have
+known memberships, list those in `complete_partitions` and supply any other
+known counts separately. For native Cartesian residuals, use
+`"residual_csv":["fit_residuals.csv","holdout_residuals.csv"]` in place of
+`observations`. Only the partitions present in those files are enumerated
+unless explicitly declared. Confirm that identifiers are stable across fits
+before assigning the same namespace. Fit-local row numbers can change on
+reordering. For component-level data, group components under their stable
+observation ID and give each treatment field a component, convention and unit.
+Convert units to a common basis before comparing and identify the conversion
+in the source description.
+
+A count-only reference can contain just `schema`, `source` and
+`"counts":{"fit":478}`. The report preserves each known count and ID, reports
+right-minus-left deltas, and returns null for unknown overlap. For comparable
+IDs it reports partition moves, IDs listed on only one side and changed
+treatment values. Missing weights or corrections remain unknown. A documented
+zero correction is a value. Differences describe data treatment and do not
+by themselves establish their effect on a fitted parameter.

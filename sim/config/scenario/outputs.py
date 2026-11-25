@@ -332,13 +332,24 @@ def _parse_outputs_section(value: Any, path_policy: ConfigPathPolicy | None = No
     _reject_unknown_fields(
         orbital_analysis,
         "outputs.orbital_analysis",
-        {"enabled", "coverage", "directed_links"},
+        {"enabled", "coverage", "directed_links", "access_chains"},
     )
-    for field_name in ("coverage", "directed_links"):
+    for field_name in ("coverage", "directed_links", "access_chains"):
         value = orbital_analysis.get(field_name, [])
         if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
             raise ValueError(f"outputs.orbital_analysis.{field_name} must be a list of mappings.")
     _validate_orbital_analysis_section(orbital_analysis)
+    if orbital_analysis.get("access_chains"):
+        from sim.analysis.access_chains import Link, parse_chain
+
+        catalog = {row["analysis_id"]: Link.from_scenario(row) for row in orbital_analysis.get("directed_links", [])}
+        coverage = {row["analysis_id"]: (row["source_object_id"], row["order"])
+                    for row in orbital_analysis.get("coverage", [])}
+        chain_ids = [parse_chain(row, catalog, coverage).analysis_id for row in orbital_analysis["access_chains"]]
+        if len(set(chain_ids)) != len(chain_ids):
+            raise ValueError("Access chain analysis IDs must be unique.")
+        if orbital_analysis.get("enabled") is not True:
+            raise ValueError("Access chains require outputs.orbital_analysis.enabled: true.")
     if stats.get("enabled") is False:
         for field_name in (
             "print_summary", "save_json", "save_csv", "save_full_log", "save_history_npz", "controller_debug"

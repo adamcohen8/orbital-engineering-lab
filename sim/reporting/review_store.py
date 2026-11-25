@@ -20,7 +20,7 @@ from sim.plotting.style import get_oel_version
 from sim.review.generated_artifacts import clear_generated_review_artifacts
 from sim.utils.frames import eci_relative_to_ric_rect
 
-REVIEW_SCHEMA_VERSION = "0.13"
+REVIEW_SCHEMA_VERSION = "0.14"
 REVIEW_SCHEMA_COMPATIBILITY_POLICY = "stable_1_x_additive"
 REVIEW_SCHEMA_STABLE_TABLES = (
     "run_metadata",
@@ -909,6 +909,43 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             reason_after TEXT
         );
         CREATE INDEX idx_coverage_transitions_analysis_cell ON coverage_transitions(analysis_id, cell_index, time_s);
+
+        CREATE TABLE access_chain_summary (
+            analysis_id TEXT PRIMARY KEY,
+            available_duration_s REAL,
+            redundant_duration_s REAL,
+            available_fraction REAL,
+            path_count INTEGER,
+            horizon_start_s REAL,
+            horizon_end_s REAL
+        );
+
+        CREATE TABLE access_chain_windows (
+            analysis_id TEXT,
+            path_id TEXT,
+            start_s REAL,
+            end_s REAL,
+            start_evidence_json TEXT,
+            end_evidence_json TEXT,
+            PRIMARY KEY (analysis_id, path_id, start_s)
+        );
+
+        CREATE TABLE access_chain_segments (
+            analysis_id TEXT,
+            start_s REAL,
+            end_s REAL,
+            path_count INTEGER,
+            path_ids_json TEXT,
+            PRIMARY KEY (analysis_id, start_s)
+        );
+
+        CREATE TABLE access_chain_ranked_samples (
+            analysis_id TEXT,
+            time_s REAL,
+            path_id TEXT,
+            weakest_leg_margin_db REAL,
+            PRIMARY KEY (analysis_id, time_s)
+        );
 
         CREATE TABLE link_summary (
             analysis_id TEXT PRIMARY KEY,
@@ -2599,6 +2636,28 @@ def _insert_orbital_analysis(conn: sqlite3.Connection, *, payload: dict[str, Any
     conn.executemany("INSERT INTO link_samples VALUES (?, ?, ?, ?, ?, ?, ?)", link_sample_rows)
     conn.executemany("INSERT INTO link_windows VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", link_window_rows)
     conn.executemany("INSERT INTO link_transitions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", link_transition_rows)
+    for result in root.get("access_chains", []):
+        analysis_id = result["analysis_id"]
+        summary = result["summary"]
+        conn.execute("INSERT INTO access_chain_summary VALUES (?, ?, ?, ?, ?, ?, ?)", (
+            analysis_id, summary["available_duration_s"], summary["redundant_duration_s"],
+            summary["available_fraction"], summary["path_count"],
+            summary["horizon_start_s"], summary["horizon_end_s"],
+        ))
+        conn.executemany("INSERT INTO access_chain_windows VALUES (?, ?, ?, ?, ?, ?)", (
+            (analysis_id, path["path_id"], row["start_s"], row["end_s"],
+             json.dumps(row["start_evidence"], sort_keys=True), json.dumps(row["end_evidence"], sort_keys=True))
+            for path in result["paths"] for row in path["windows"]
+        ))
+        conn.executemany("INSERT INTO access_chain_segments VALUES (?, ?, ?, ?, ?)", (
+            (analysis_id, row["start_s"], row["end_s"], len(row["path_ids"]), json.dumps(row["path_ids"]))
+            for row in result["segments"]
+        ))
+        conn.executemany("INSERT INTO access_chain_ranked_samples VALUES (?, ?, ?, ?)", (
+            (analysis_id, row["time_s"], row["path_id"], row["weakest_leg_margin_db"])
+            for row in result["ranked_samples"]
+        ))
+
 
 
 def _insert_impulsive_maneuvers(conn: sqlite3.Connection, *, payload: dict[str, Any]) -> None:
@@ -3088,6 +3147,10 @@ def _write_schema_json(path: Path, *, generated_utc: str, db_path: Path | None =
             "coverage_samples": {"description": "Time-indexed whole-Earth covered-cell counts and fractions."},
             "coverage_intervals": {"description": "Sample-bounded, provider-refined, or censored cell coverage intervals."},
             "coverage_transitions": {"description": "Coverage acquisition/loss brackets and provider-refinement evidence."},
+            "access_chain_summary": {"description": "End-to-end access and redundancy duration by chain."},
+            "access_chain_windows": {"description": "Feasible per-path windows with limiting boundary evidence."},
+            "access_chain_segments": {"description": "Intervals with the same active path set, including outages."},
+            "access_chain_ranked_samples": {"description": "Best available path by weakest-leg margin at each ranked epoch."},
             "link_summary": {"description": "One provenance-bound summary row per directed link analysis."},
             "link_samples": {"description": "Time-indexed directed-link range, margin, availability, and reason."},
             "link_windows": {"description": "Directed-link availability windows with margin and volume evidence."},

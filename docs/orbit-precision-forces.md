@@ -8,7 +8,7 @@ for compatibility; these four models and their numeric helpers are public.
 | Model key under `simulator.dynamics.orbit` | Physical scope | Options |
 | --- | --- | --- |
 | `earth_radiation` | Spherical-Earth Lambertian albedo and infrared pressure with Knocke seasonal climatology | `enabled`, `albedo`, `infrared`, `quadrature_order` (8–128; default 32) |
-| `schwarzschild` | Earth-centered first post-Newtonian orbital acceleration | `enabled` |
+| `schwarzschild` | First post-Newtonian acceleration of the selected central body | `enabled` |
 | `solid_earth_tides` | Degree-2/3 anelastic response, induced degree 4, IERS 2010 frequency terms, permanent-tide convention and solid pole tide | `enabled`, required `tide_system` (`tide_free` or `zero_tide`), `pole_tide` |
 | `ocean_tides` | Harmonic ocean tidal gravity and degree-2/order-1 ocean pole correction | `enabled`, `coeff_path`, `degree` (2–20), `order` (0–degree), `pole_tide` |
 
@@ -61,7 +61,8 @@ The original IERS 2010 piecewise mean-pole convention is retained. Updated
 secular-pole conventions, atmospheric tides and station/loading displacement
 are outside this implementation.
 
-Schwarzschild supplies an additive weak-field, slow-motion correction in ECI.
+Schwarzschild uses the weak-field, slow-motion approximation in the primary-centered
+inertial frame. The same setting applies to Earth and all [planetary ONP primaries](planetary-onp.md).
 Spin/frame dragging, third-body relativity and relativistic clock modeling are
 outside its scope. These models support inspectable numerical studies, not
 empirical orbit accuracy or flight qualification claims.

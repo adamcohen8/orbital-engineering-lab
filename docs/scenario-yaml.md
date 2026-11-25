@@ -1543,6 +1543,11 @@ figures in the run's ordinary plot inventory. See
 the public example, complete fields, artifacts, review tables, and claim
 boundary.
 
+Use `outputs.orbital_analysis.access_chains` for simultaneous access along
+ordered directed links, optionally gated by conical sensor visibility. For
+analysis from completed review evidence, use `oel review access-chains`.
+See [Access chains](coverage-link-scenario-analysis.md#access-chains).
+
 For routine retained evidence, prefer `save_full_log: false` with the standard
 review store enabled. Use `save_full_log: true` only when a documented custom
 analysis needs histories that are not represented in the review schema. To

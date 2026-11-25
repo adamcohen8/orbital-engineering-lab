@@ -29,7 +29,7 @@ pub(crate) fn norm(vector: [f64; 3]) -> f64 {
     dot(vector, vector).sqrt()
 }
 
-/// Earth-centered first post-Newtonian Schwarzschild correction in km/s².
+/// Central-body first post-Newtonian Schwarzschild correction in km/s².
 pub fn schwarzschild_acceleration(state: [f64; 6], mu_km3_s2: f64) -> Result<[f64; 3], String> {
     if state.iter().any(|value| !value.is_finite()) || !mu_km3_s2.is_finite() || mu_km3_s2 <= 0.0 {
         return Err("Schwarzschild requires a finite state and positive finite mu".to_owned());

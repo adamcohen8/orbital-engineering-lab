@@ -265,7 +265,15 @@ Cannonball SRP uses 1361 W/m² at 1 au and inverse-square spacecraft–Sun dista
 with positive fixed `cr` and `srp_area_m2`. Shadow choices are `none` or a primary
 reference-sphere cylindrical model. Sun-centered SRP uses a source at zero;
 the Sun cannot eclipse itself. Solar harmonics, neutral drag, corona/plasma,
-relativity and other occulting bodies are explicitly unsupported.
+and other occulting bodies are unsupported.
+
+Set `simulator.dynamics.orbit.schwarzschild.enabled: true` to add the leading
+weak-field relativistic acceleration of the selected primary. Every supported
+primary uses the same setting, which defaults off. Each integrator stage uses
+the primary-relative inertial position and velocity and the GM of the selected
+gravity model, including its dataset GM when using harmonics. The planetary
+review force breakdown records the contribution as `schwarzschild`. Spin,
+relativistic third-body interactions and clock effects are outside this model.
 
 ## Evidence and compatibility
 

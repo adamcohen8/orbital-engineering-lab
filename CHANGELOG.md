@@ -6,6 +6,13 @@ This project follows semantic versioning. The notes below retain historical
 pre-1.0 behavior where relevant; v1.0.0 is the first stable public local
 release, and migration-sensitive behavior is called out explicitly.
 
+## Unreleased
+
+- Add experimental access-chain analysis for same-epoch communications paths,
+  optional sensor visibility, and ground-station outage comparisons. Run it
+  from a scenario or replay it against completed-run review evidence without
+  propagating again.
+
 ## 1.1.0 - 2026-11-18
 
 - Add experimental cooperative spacecraft docking with rigid-body contact,

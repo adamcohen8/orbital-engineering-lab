@@ -28,6 +28,7 @@ from .contracts import (
     sha256_file,
     validate_version,
     version_satisfies,
+    version_tuple,
 )
 from .state import StateLock, atomic_write_json, atomic_write_text, read_state
 
@@ -39,7 +40,7 @@ def utc_now() -> str:
 
 
 def _default_engine_requirement(version: str) -> str:
-    parts = [int(item) for item in version.split("-", 1)[0].split(".")]
+    parts = version_tuple(version)
     if len(parts) < 2:
         return f"=={version}"
     return f">={parts[0]}.{parts[1]},<{parts[0]}.{parts[1] + 3}"

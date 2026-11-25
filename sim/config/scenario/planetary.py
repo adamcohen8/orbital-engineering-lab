@@ -260,6 +260,7 @@ def validate_planetary_scenario(cfg):
         "adaptive_atol",
         "adaptive_rtol",
         "orbit_substep_s",
+        "schwarzschild",
     }
     extras = set(orbit) - shared
     if extras:

@@ -415,6 +415,10 @@ class SimulationResult:
                     dict(item.get("artifacts", {}) or {}) for item in orbital_analysis.get("directed_links", [])
                 ],
             }
+            if orbital_analysis.get("access_chains"):
+                artifacts["orbital_analysis"]["access_chains"] = [
+                    dict(item["artifacts"]) for item in orbital_analysis["access_chains"]
+                ]
         if summary.get("history_binary_outputs"):
             artifacts["history_npz"] = dict(summary.get("history_binary_outputs", {}) or {})
         return artifacts

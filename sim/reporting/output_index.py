@@ -463,6 +463,13 @@ def _single_run_metrics(summary: dict[str, Any]) -> list[str]:
             f"- Coverage `{item.get('analysis_id')}` ever covered: "
             f"`{100.0 * float(item.get('ever_covered_fraction') or 0.0):.4g}%`"
         )
+    for chain in orbital.get("access_chains", []):
+        chain_summary = chain["summary"]
+        lines.append(
+            f"- Access chain {chain['analysis_id']}: "
+            f"{chain_summary['available_duration_s']:.6g} s available, "
+            f"{chain_summary['redundant_duration_s']:.6g} s with alternate paths."
+        )
     for row in list(orbital.get("directed_links", []) or []):
         item = dict(row or {})
         lines.append(

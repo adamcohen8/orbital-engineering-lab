@@ -558,6 +558,10 @@ class OutputOrbitalAnalysisSection(_TypedConfigDict):
         return [dict(value or {}) for value in list(self.get("coverage", []) or [])]
 
     @property
+    def access_chains(self) -> list[dict[str, Any]]:
+        return [dict(value) for value in self.get("access_chains", [])]
+
+    @property
     def directed_links(self) -> list[dict[str, Any]]:
         return [dict(value or {}) for value in list(self.get("directed_links", []) or [])]
 

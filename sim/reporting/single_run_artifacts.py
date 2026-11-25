@@ -307,6 +307,13 @@ def write_single_run_artifacts(
                 for item in orbital_analysis.get("directed_links", [])
             ],
         }
+        if orbital_analysis.get("access_chains"):
+            chains = [
+                {key: item[key] for key in ("analysis_id", "summary", "artifacts")}
+                for item in orbital_analysis["access_chains"]
+            ]
+            payload["orbital_analysis"]["access_chains"] = chains
+            summary["orbital_analysis"]["access_chains"] = chains
     previous_owned_artifacts = _previous_owned_artifacts(output_dir)
     source_path = getattr(context.cfg, "source_path", None)
     if source_path is not None:
@@ -385,6 +392,10 @@ def write_single_run_artifacts(
             plot_path = str(dict(item.get("artifacts", {}) or {}).get("margin_plot_png") or "")
             if plot_path:
                 plot_outputs[f"directed_link:{item.get('analysis_id')}"] = plot_path
+        for item in orbital_analysis.get("access_chains", []):
+            plot_path = item["artifacts"].get("timeline_plot_png")
+            if plot_path:
+                plot_outputs[f"access_chain:{item['analysis_id']}"] = plot_path
     mission_recovery_plot = _invoke_path_writer(
         lambda *, output_dir, **_: _write_mission_recovery_trade_space_plot(
             cfg=context.cfg,
@@ -447,6 +458,10 @@ def write_single_run_artifacts(
             "coverage": [item.get("artifacts", {}) for item in payload["orbital_analysis"].get("coverage", [])],
             "directed_links": [item.get("artifacts", {}) for item in payload["orbital_analysis"].get("directed_links", [])],
         }
+        if payload["orbital_analysis"].get("access_chains"):
+            artifacts["orbital_analysis"]["access_chains"] = [
+                item["artifacts"] for item in payload["orbital_analysis"]["access_chains"]
+            ]
     if payload.get("docking"):
         docking_path = output_dir / "docking.json"
         write_json(str(docking_path), {"schema_version": 1, **payload["docking"]})

@@ -42,6 +42,8 @@ class PlanetaryForcePlan:
             f"third_body_{b['target_center_id']}"
             for b in self.environment.selections["third_bodies"]
         ]
+        if "schwarzschild" in self.environment.selections:
+            names.append("schwarzschild")
         if self.environment.additional_gravity is not None:
             names += [f"additional_gravity_{b['target_center_id']}" for b in self.environment.additional_gravity.sources]
         return np.asarray(total), {

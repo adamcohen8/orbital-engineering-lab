@@ -92,6 +92,8 @@ class PreparedPlanetaryEnvironment:
 def prepare_environment(cfg):
     s = cfg.simulator
     p = deepcopy(s.planetary)
+    if s.dynamics.get("orbit", {}).get("schwarzschild", {}).get("enabled"):
+        p["schwarzschild"] = {"enabled": True}
     body = body_definition(s.central_body)
     manifest, constants = read_json(DATA_ROOT / "body_constants_manifest.json")
     constants_receipts = (manifest,) + tuple(

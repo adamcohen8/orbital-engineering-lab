@@ -92,7 +92,13 @@ def prepare_native_plan(plan):
         )
     )
     bodies = e.selections["third_bodies"]
-    base = module().PlanetaryPlan(
+    plan_type = module().PlanetaryPlan
+    options = {}
+    if "schwarzschild" in e.selections:
+        if not getattr(plan_type, "supports_schwarzschild", False):
+            raise ValueError("Planetary Schwarzschild requires rebuilding rust/oel-orbit from this checkout")
+        options["schwarzschild"] = True
+    base = plan_type(
         e.body.center_id,
         scalars,
         dims,
@@ -105,6 +111,7 @@ def prepare_native_plan(plan):
             [body["target_center_id"] for body in bodies],
             [body["mu_km3_s2"] for body in bodies],
         ),
+        **options,
     )
     if e.additional_gravity is not None:
         return _ExtendedPlanetaryPlan(base, e.additional_gravity)

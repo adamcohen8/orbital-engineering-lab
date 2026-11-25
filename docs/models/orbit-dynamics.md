@@ -1,5 +1,8 @@
 # Orbit Dynamics
 
+For native TEME accuracy by OGP backend, see the [archived reference comparisons](../ogp-reference-accuracy.md).
+
+
 This page documents the current public orbit-propagation model in Orbital
 Engineering Lab. It is intentionally conservative: it describes the equations,
 configuration surface, implementation locations, evidence hooks, and limits

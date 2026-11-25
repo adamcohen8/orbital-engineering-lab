@@ -169,3 +169,122 @@ This workflow is deterministic engineering analysis, not calibrated sensor
 performance or operational communications assurance. See the individual
 contracts and [programmatic acceptance record](validation-coverage-link-programmatic.md)
 for exact supported inputs, evidence, and non-claims.
+
+## Access chains
+
+An access chain finds intervals when all directed links on at least one path
+meet their configured geometry, pointing, and RF constraints at the same epoch.
+An optional sensor gate requires simultaneous visibility of a surface target
+from the spacecraft at the start of the path. Each path uses the configured
+link service rates and an explicit simultaneous receive/transmit assumption for
+each spacecraft relay. Set `service_rate_bps` to the requested service rate.
+Each leg must have been evaluated at that rate or higher. Declare every
+intermediate spacecraft in `simultaneous_relays` only if its configured terminal
+pair can operate together at that rate.
+
+In scenario YAML, put this entry under `outputs.orbital_analysis.access_chains`
+and enable `outputs.orbital_analysis`:
+
+```yaml
+- analysis_id: live_downlink
+  service_rate_bps: 1000000
+  simultaneous_relays: [satellite_b, satellite_c]
+  sensor_gate:
+    coverage_analysis_id: satellite_a_global
+    latitude_deg: 90.0
+    longitude_deg: 0.0
+  paths:
+    - path_id: via_relay_a
+      links: [imager_to_relay_a, relay_a_to_north]
+    - path_id: via_relay_b
+      links: [imager_to_relay_b, relay_b_to_alternate]
+```
+
+The ordered `links` entries are **directed-link analysis IDs**. Use
+`discover` in place of `paths` to enumerate cycle-free paths from
+`source_object_id` to any `destination_ground_station_ids` through declared
+relays. Set `max_hops` from 1 through 16. With `link_analysis_ids`, discovery
+uses only the named links. Otherwise it searches all recorded links. Discovery
+is bounded to 256 candidate paths and assigns IDs deterministically for the
+same request. Explicit paths may also end at a spacecraft.
+
+For a sensor gate, reference an existing conical `coverage_analysis_id`. Supply
+either `cell_index` in its NESTED HEALPix grid or `latitude_deg` and
+`longitude_deg` for a literal zero-height WGS84 surface point. A cell uses
+the recorded cell-center intervals. A literal position uses the same cone
+geometry and refinement settings with the source spacecraft's achieved state
+and attitude evaluated at the requested point. Omit the gate for an RF-only
+path analysis.
+
+### Completed-run analysis
+
+Run the same analysis after propagation with a JSON request. The completed run
+needs a review store containing the directed-link evidence, plus the conical
+coverage analysis and achieved attitude if the request uses a sensor gate. It
+can have been created without any access-chain entry. The command reads the
+store and writes derived artifacts to a new directory.
+
+```bash
+oel review access-chains outputs/examples/public_access_chains \
+  --request-json '{
+    "analysis_id":"live_downlink",
+    "service_rate_bps":1000000,
+    "simultaneous_relays":["satellite_b","satellite_c"],
+    "sensor_gate":{"coverage_analysis_id":"satellite_a_global","latitude_deg":90,"longitude_deg":0},
+    "discover":{
+      "source_object_id":"satellite_a",
+      "destination_ground_station_ids":["north_site","alternate_site"],
+      "max_hops":2
+    }
+  }' \
+  --exclude-ground-station north_site \
+  --output-dir outputs/examples/public_access_chains_north_outage
+```
+
+Use `--request <file.json>` for saved requests. Repeat
+`--exclude-ground-station` to remove multiple sites. The derived evidence
+includes the service intervals lost relative to the same request with all
+sites available.
+
+### Review evidence
+
+Open `access_chain_review.html` for the timeline and expand an acquisition
+or loss time to inspect the controlling link or sensor condition.
+`access_chain.json` records per-path windows, the union of service windows,
+segments with the available path IDs, and the best path at each qualifying
+retained epoch. Overlap contributes once to total availability. The ranking
+maximizes the minimum RF margin along the path and breaks ties by path ID.
+A change in sampled ranking establishes the preferred route at those samples.
+Windows are half-open. Boundary reasons, refinement dispositions, and study
+censoring come from the parent evidence. In particular, coarse sampling can
+miss transitions. Set `include_timeline: false` to write JSON alone.
+
+Scenario-configured chains also populate `access_chain_summary`,
+`access_chain_windows`, `access_chain_segments`, and
+`access_chain_ranked_samples` in the run's review store. Use
+`oel review <run> --saved-query access_chain_windows` for boundary evidence.
+These products describe modeled live-path feasibility with the declared
+simultaneous-relay assumptions. They carry the limits of the input link
+budgets and sensor geometry and make no packet delivery or schedule claim.
+
+### Matched STK comparison
+
+[The example](../examples/configs/public_access_chains.yaml) has one source,
+two relays, two destinations, and an exact polar target. Use identical epoch
+seconds, state and attitude histories, fixed sites, sensor cone, and per-leg
+constraints for an end-to-end STK comparison. Match Earth and frame
+conventions, RF assumptions, and event time tolerance. Export STK's
+[Strand Access](https://help.agi.com/stk/Subsystems/dataProviders/Content/html/Chain.htm)
+report and compare interval count and each start and end time by ordered
+route against `paths[].windows`. Compare combined availability and the
+station-outage result only after the per-route comparison.
+
+To isolate interval composition from geometry differences, use STK's
+[Intervals constraint](https://help.agi.com/stk/Content/stk/constraints-03.htm)
+with the same pairwise windows on separate proxy objects for each leg of each
+strand. In the known-answer case in `sim/tests/test_access_chains.py`, the
+expected chain windows are 25–32 and 38–40 seconds via the first relay and
+30–32 and 38–45 seconds via the second. A third proposed path has zero
+duration at the single touching boundary. The service union is 25–32 and
+38–45 seconds. Removing Denver loses 25–30 seconds. This fixture tests time
+composition independently of orbit and RF calculations.
