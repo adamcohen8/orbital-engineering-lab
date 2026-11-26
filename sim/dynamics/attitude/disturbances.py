@@ -55,6 +55,27 @@ def _norm3(vector: np.ndarray) -> float:
     return float(np.sqrt(np.dot(vector, vector)))
 
 
+def gravity_gradient_torque_body_nm(mu_km3_s2, inertia_kg_m2, position_km, c_bn):
+    r_m = position_km * 1e3
+    distance_m = _norm3(r_m)
+    if distance_m == 0.0:
+        return np.zeros(3)
+    direction_body = c_bn @ (r_m / distance_m)
+    return 3.0 * (mu_km3_s2 * 1e9) / distance_m**3 * _cross3(
+        direction_body, inertia_kg_m2 @ direction_body
+    )
+
+
+def centered_dipole_field_t(position_km, dipole_t_m3):
+    """Field for a centered dipole, with both vectors in the same axes."""
+    r_m = position_km * 1e3
+    distance_m = _norm3(r_m)
+    if distance_m == 0.0:
+        return np.zeros(3)
+    direction = r_m / distance_m
+    return (3.0 * direction * np.dot(dipole_t_m3, direction) - dipole_t_m3) / distance_m**3
+
+
 @dataclass(frozen=True)
 class DisturbanceTorqueConfig:
     use_gravity_gradient: bool = True
@@ -446,28 +467,13 @@ class DisturbanceTorqueModel:
         return tau
 
     def _gravity_gradient_torque(self, state: StateTruth, c_bn: np.ndarray) -> np.ndarray:
-        r_i_m = state.position_eci_km * 1e3
-        r_norm_m = _norm3(r_i_m)
-        if r_norm_m == 0.0:
-            return np.zeros(3)
-        r_hat_b = c_bn @ (r_i_m / r_norm_m)
-        mu_m3_s2 = self.mu_km3_s2 * 1e9
-        return 3.0 * mu_m3_s2 / (r_norm_m**3) * _cross3(r_hat_b, self.inertia_kg_m2 @ r_hat_b)
+        return gravity_gradient_torque_body_nm(self.mu_km3_s2, self.inertia_kg_m2, state.position_eci_km, c_bn)
 
     def _magnetic_torque(self, state: StateTruth, c_bn: np.ndarray, env: dict) -> np.ndarray:
         if "magnetic_field_eci_t" in env:
             b_eci = np.asarray(env["magnetic_field_eci_t"], dtype=float).reshape(3)
         else:
-            r_i_m = state.position_eci_km * 1e3
-            r_norm_m = _norm3(r_i_m)
-            if r_norm_m == 0.0:
-                return np.zeros(3)
-
-            r_hat = r_i_m / r_norm_m
-            b_eci = (
-                3.0 * r_hat * np.dot(_EARTH_MAGNETIC_DIPOLE_ECI_T_M3, r_hat)
-                - _EARTH_MAGNETIC_DIPOLE_ECI_T_M3
-            ) / (r_norm_m**3)
+            b_eci = centered_dipole_field_t(state.position_eci_km, _EARTH_MAGNETIC_DIPOLE_ECI_T_M3)
         b_body = c_bn @ b_eci
         return _cross3(self.config.magnetic_dipole_body_a_m2, b_body)
 

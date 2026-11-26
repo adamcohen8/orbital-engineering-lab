@@ -37,6 +37,13 @@ def write_review(*, payload, context, artifacts, config_json, config_sha256):
               relative_speed_m_s REAL NOT NULL,within_atmosphere_domain INTEGER NOT NULL,
               forces_json TEXT NOT NULL, PRIMARY KEY(object_id,sample_index));
         """)
+        if summary["passive_attitude_propagated"]:
+            conn.execute("""CREATE TABLE planetary_attitude (
+                object_id TEXT NOT NULL, sample_index INTEGER NOT NULL,
+                time_s REAL NOT NULL, q0 REAL NOT NULL, q1 REAL NOT NULL, q2 REAL NOT NULL, q3 REAL NOT NULL,
+                wx_body_rad_s REAL NOT NULL, wy_body_rad_s REAL NOT NULL, wz_body_rad_s REAL NOT NULL,
+                disturbance_torques_body_nm_json TEXT NOT NULL, PRIMARY KEY(object_id,sample_index),
+                FOREIGN KEY(object_id,sample_index) REFERENCES planetary_state(object_id,sample_index))""")
         shared._insert_run_metadata(
             conn,
             cfg=context.cfg,
@@ -94,6 +101,14 @@ def write_review(*, payload, context, artifacts, config_json, config_sha256):
                     "INSERT INTO planetary_state VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     rows,
                 )
+                if summary["passive_attitude_propagated"]:
+                    conn.executemany("INSERT INTO planetary_attitude VALUES (?,?,?,?,?,?,?,?,?,?,?)", (
+                        (oid, i, float(t), *map(float, row[6:13]),
+                         json.dumps(diag["disturbance_torques_body_nm"], sort_keys=True, allow_nan=False))
+                        for i, (t, row, diag) in enumerate(zip(
+                            context.t_s, history, payload["planetary_diagnostics_by_object"][oid]
+                        ))
+                    ))
         shared._insert_events(conn, t_s=context.t_s, summary=summary, thrust_hist={})
         shared._insert_artifacts(
             conn, artifacts=artifacts, outdir=context.outdir, generated_utc=stamp

@@ -203,7 +203,7 @@ def prepare_additional_gravity(cfg):
             }
             receipts.append(eop)
         else:
-            frame = prepare_rotation(body.body_id, frame_config, s.initial_jd_utc)
+            frame = prepare_rotation(body.body_id, frame_config, s.initial_jd_utc, duration_s=s.duration_s)
             frame.evaluate(s.duration_s)
             callback = None
             frame_metadata = frame.metadata()

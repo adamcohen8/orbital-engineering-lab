@@ -55,10 +55,9 @@ def initial_truth(obj, environment):
 
 
 class PlanetaryDynamics:
-    propagate_attitude = False
     resource_model = None
 
-    def __init__(self, environment, obj, settings):
+    def __init__(self, environment, obj, settings, attitude_settings=None):
         self.environment = environment
         self.mu_km3_s2 = environment.gravity.mu_km3_s2
         specs = obj.specs
@@ -72,6 +71,10 @@ class PlanetaryDynamics:
             numeric_backend=settings.get("numeric_backend", "rust"),
         )
         self.orbit_propagator = PlanetaryPropagator(plan, settings)
+        from .attitude import PlanetaryAttitude
+        attitude_settings = attitude_settings or {}
+        self.propagate_attitude = attitude_settings.get("enabled", False)
+        self.attitude = PlanetaryAttitude(plan, specs, attitude_settings) if self.propagate_attitude else None
         from .native import module
 
         self._gravity_domain_error = module().PlanetaryGravityDomainError
@@ -94,9 +97,14 @@ class PlanetaryDynamics:
         self._adaptive_info_before_step = self.orbit_propagator.last_adaptive_info
         result = state.copy()
         try:
-            x = self.orbit_propagator.propagate(
-                np.r_[state.position_eci_km, state.velocity_eci_km_s], dt_s, state.t_s
-            )
+            if self.attitude is None:
+                x = self.orbit_propagator.propagate(
+                    np.r_[state.position_eci_km, state.velocity_eci_km_s], dt_s, state.t_s
+                )
+            else:
+                x, rotation = self.attitude.propagate(self.orbit_propagator, state, dt_s)
+                result.attitude_quat_bn = rotation[:4]
+                result.angular_rate_body_rad_s = rotation[4:]
             # RK4's weighted endpoint is not itself an integration stage.
             # Validate it before accepting or recording the resulting state.
             plan = self.orbit_propagator.plan
@@ -124,19 +132,24 @@ def create_runtime(object_id, obj, cfg, environment=None):
 
     environment = environment or prepare_environment(cfg)
     environment.verify_resources()
+    truth = initial_truth(obj, environment)
+    attitude_settings = cfg.simulator.dynamics.get("attitude", {})
+    if attitude_settings.get("enabled", False):
+        from sim.utils.quaternion import normalize_quaternion
+        truth.attitude_quat_bn = normalize_quaternion(truth.attitude_quat_bn)
     return AgentRuntime(
         object_id=object_id,
         kind="satellite",
         enabled=True,
         active=True,
-        truth=initial_truth(obj, environment),
+        truth=truth,
         belief=None,
         sensor=None,
         estimator=None,
         orbit_controller=None,
         attitude_controller=None,
         dynamics=PlanetaryDynamics(
-            environment, obj, dict(cfg.simulator.dynamics.get("orbit", {}))
+            environment, obj, dict(cfg.simulator.dynamics.get("orbit", {})), attitude_settings
         ),
         knowledge_base=None,
         bridge=None,

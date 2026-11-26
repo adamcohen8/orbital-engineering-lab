@@ -5,10 +5,11 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import numpy as np
 
-from .resources import read_json
+from .resources import read_json, require_time_coverage
 
 
 @dataclass(frozen=True)
@@ -111,7 +112,7 @@ class PreparedRotation:
         }
 
 
-def prepare_rotation(body_id, selection, epoch_jd_utc):
+def rotation_resource(body_id, selection):
     from .resources import DATA_ROOT
 
     model = selection.get("model", "iau2000")
@@ -129,7 +130,20 @@ def prepare_rotation(body_id, selection, epoch_jd_utc):
         or not data.get("source")
     ):
         raise ValueError("Planetary rotation requires frame identity and source")
+    bounds = np.asarray(data.get("valid_tdb_seconds"), dtype=float)
+    if bounds.shape != (2,) or not np.all(np.isfinite(bounds)) or bounds[0] >= bounds[1]:
+        raise ValueError(f"Invalid planetary rotation bounds in {receipt.path}")
+    return receipt, data
+
+
+def prepare_rotation(body_id, selection, epoch_jd_utc, *, duration_s=0.0):
+    receipt, data = rotation_resource(body_id, selection)
     result = PreparedRotation(data["frame_id"], body_id, data, epoch_jd_utc, receipt)
+    require_time_coverage(
+        f"Planetary rotation {result.frame_id} ({Path(receipt.path).name})",
+        data["valid_tdb_seconds"],
+        (result.elapsed_tdb_s(0), result.elapsed_tdb_s(duration_s)),
+    )
     r, d = result.evaluate(0.0)
     if (
         not np.all(np.isfinite(d))

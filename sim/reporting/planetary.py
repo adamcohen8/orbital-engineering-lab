@@ -31,11 +31,20 @@ def build_payload(c):
     environment.verify_resources()
     model = environment.metadata()
     diagnostics = {}
+    attitude = c.cfg.simulator.dynamics.get("attitude", {})
+    attitude_enabled = attitude.get("enabled", False)
     for oid, history in c.truth_hist.items():
         plan = c.planetary_force_plans[oid]
         diagnostics[oid] = [
             plan.stage(float(t), row[:6])[1] for t, row in zip(c.t_s, history)
         ]
+        if attitude_enabled:
+            from sim.dynamics.planetary.attitude import PlanetaryAttitude
+
+            rotation = PlanetaryAttitude(plan, c.cfg.objects[oid].specs, attitude)
+            for t, row, diagnostic in zip(c.t_s, history, diagnostics[oid]):
+                torques = rotation.torques(float(t), row[:6], row[6:10], diagnostic["forces_km_s2"])
+                diagnostic["disturbance_torques_body_nm"] = {k: v.tolist() for k, v in torques.items()}
     summary = {
         "scenario_name": c.cfg.scenario_name,
         "scenario_description": c.cfg.scenario_description,
@@ -72,7 +81,8 @@ def build_payload(c):
         "thrust_stats": c.thrust_stats,
         "plot_outputs": {},
         "animation_outputs": {},
-        "attitude_guardrail_stats": {},
+        "attitude_guardrail_stats": c.attitude_guardrail_stats if attitude_enabled else {},
+        "passive_attitude_propagated": attitude_enabled,
     }
     return {
         "summary": summary,
@@ -169,13 +179,14 @@ def write_artifacts(payload, c):
                         "inertial_axes",
                     ]
                     + STATE_COLUMNS
+                    + (payload["state_columns"][6:13] if summary["passive_attitude_propagated"] else [])
                     + ["mass_kg"]
                 )
                 for oid, history in c.truth_hist.items():
                     for i, (t, row) in enumerate(zip(c.t_s, history)):
                         csv_writer.writerow(
                             [oid, i, float(t), summary["origin_center_id"], "J2000"]
-                            + row[:6].tolist()
+                            + row[:13 if summary["passive_attitude_propagated"] else 6].tolist()
                             + [float(row[13])]
                         )
         artifacts["history_csv"] = str(path)

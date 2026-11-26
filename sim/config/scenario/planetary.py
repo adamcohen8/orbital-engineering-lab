@@ -31,6 +31,12 @@ def apply_planetary_defaults(root):
     return root
 
 
+def _finite_vector3(value, path):
+    if not isinstance(value, (tuple, list)) or len(value) != 3:
+        raise ValueError(f"{path} requires a three-vector")
+    return [_parse_float(component, path) for component in value]
+
+
 def normalize_planetary(raw, body_id):
     from sim.dynamics.planetary.definitions import body_definition
 
@@ -44,6 +50,7 @@ def normalize_planetary(raw, body_id):
             "inertial_frame",
             "gravity",
             "gravity_frame",
+            "magnetic_field",
             "atmosphere",
             "atmosphere_frame",
             "drag",
@@ -53,6 +60,15 @@ def normalize_planetary(raw, body_id):
             "impact",
         },
     )
+    if "magnetic_field" in p:
+        field = _as_dict(p["magnetic_field"], f"{path}.magnetic_field")
+        _reject_unknown_fields(field, f"{path}.magnetic_field", {"model", "body_id", "frame_id", "dipole_t_m3"})
+        if field.get("model") != "centered_dipole" or field.get("body_id") != body_id:
+            raise ValueError("Planetary magnetic_field requires model=centered_dipole and the selected body_id")
+        if not isinstance(field.get("frame_id"), str) or not field["frame_id"]:
+            raise ValueError("Planetary magnetic_field requires the selected gravity frame_id")
+        field["dipole_t_m3"] = _finite_vector3(field.get("dipole_t_m3"), "planetary.magnetic_field.dipole_t_m3")
+        p["magnetic_field"] = field
     p.setdefault("inertial_frame", "J2000")
     if p["inertial_frame"] != "J2000":
         raise ValueError(f"{path}.inertial_frame must be J2000")
@@ -281,10 +297,21 @@ def validate_planetary_scenario(cfg):
             value = _parse_float(orbit[key], f"simulator.dynamics.orbit.{key}")
             if value <= 0:
                 raise ValueError(f"Planetary {key} must be positive")
-    if bool(d.get("attitude", {}).get("enabled", False)):
-        raise ValueError(
-            "Planetary attitude coupling is not qualified; use attitude.enabled=false"
-        )
+    attitude = d.get("attitude", {})
+    enabled = _parse_bool(attitude.get("enabled", False), "simulator.dynamics.attitude.enabled")
+    torques = _as_dict(attitude.get("disturbance_torques"), "attitude.disturbance_torques")
+    _reject_unknown_fields(torques, "attitude.disturbance_torques", {"gravity_gradient", "drag", "srp", "magnetic"})
+    for name, selected in torques.items():
+        if _parse_bool(selected, f"attitude.disturbance_torques.{name}"):
+            if not enabled:
+                raise ValueError("Planetary disturbance torques require attitude.enabled=true")
+            if name in ("drag", "srp") and not s.planetary[name]["enabled"]:
+                raise ValueError(f"Planetary {name} torque requires simulator.planetary.{name}.enabled=true")
+            if name == "magnetic" and "magnetic_field" not in s.planetary:
+                raise ValueError("Planetary magnetic torque requires a body-specific simulator.planetary.magnetic_field")
+    if enabled and attitude.get("numeric_backend", "rust") == "rust":
+        from .validation import _require_rust_symbols
+        _require_rust_symbols("Planetary attitude", ("attitude_rigid_body_derivatives",))
     if any(key in d and d[key] for key in ("rocket", "reentry")):
         raise ValueError("Planetary rockets and reentry diagnostics are unsupported")
     if s.initial_jd_utc is None:
@@ -366,7 +393,6 @@ def validate_planetary_scenario(cfg):
             "resources",
             "geometry",
             "geometry_profile_path",
-            "mass_properties",
             "actuators",
             "thrusters",
             "thermal",
@@ -376,6 +402,17 @@ def validate_planetary_scenario(cfg):
         ):
             if specs.get(key):
                 raise ValueError(f"Planetary objects.{oid}.specs.{key} is unsupported")
+        if specs.get("mass_properties") and not enabled:
+            raise ValueError(f"Planetary objects.{oid}.specs.mass_properties requires attitude.enabled=true")
+        if enabled:
+            from sim.digital_twin.mass_properties import resolve_inertia_kg_m2
+            if "inertia_kg_m2" not in _as_dict(specs.get("mass_properties"), f"objects.{oid}.specs.mass_properties"):
+                raise ValueError(f"Planetary attitude requires objects.{oid}.specs.mass_properties.inertia_kg_m2")
+            resolve_inertia_kg_m2(specs)
+            for name, key in (("drag", "drag_cp_offset_body_m"), ("srp", "srp_cp_offset_body_m"),
+                              ("magnetic", "magnetic_dipole_body_a_m2")):
+                if torques.get(name):
+                    _finite_vector3(specs.get(key), f"objects.{oid}.specs.{key}")
         mass = _parse_float(specs.get("mass_kg"), f"objects.{oid}.specs.mass_kg")
         if mass <= 0:
             raise ValueError("Planetary mass_kg must be positive")

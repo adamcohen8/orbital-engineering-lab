@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 
-from .resources import read_json
+from .resources import read_json, require_time_coverage
 
 
 @dataclass(frozen=True)
@@ -61,13 +62,11 @@ def prepare_ephemeris(body, config, frame, start_s, end_s, targets):
             or not np.all(np.isfinite(states[target]))
         ):
             raise ValueError(f"Invalid ephemeris states for center {target}")
-    if (
-        not times[0]
-        <= frame.elapsed_tdb_s(start_s)
-        <= frame.elapsed_tdb_s(end_s)
-        <= times[-1]
-    ):
-        raise ValueError("Planetary ephemeris does not cover the entire study interval")
+    require_time_coverage(
+        f"Planetary ephemeris {Path(receipt.path).name} (observer {body.center_id})",
+        (times[0], times[-1]),
+        (frame.elapsed_tdb_s(start_s), frame.elapsed_tdb_s(end_s)),
+    )
     times.setflags(write=False)
     for s in states.values():
         s.setflags(write=False)

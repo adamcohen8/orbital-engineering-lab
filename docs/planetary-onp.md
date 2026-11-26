@@ -36,6 +36,18 @@ IAU rotation to those coefficients. The GMM-2B radius 3397 km and GM
 are separate from the atmosphere's 3396.19/3376.20 km navigation ellipsoid and
 from the default point-mass GM.
 
+## Inspect a model before authoring
+
+`sim.dynamics.planetary.preparation.planetary_model_catalog()` reports the
+Schwarzschild setting path and whether the installed native extension supports
+it. Select a profile by primary and gravity model to read the effective GM
+(km³/s²), bundled rotation datasets, and their common inclusive date range.
+For example, Mars point mass and Mars GMM-2B have different GMs.
+Dates in the catalog and coverage errors are on the TDB calendar. The scenario
+start epoch is still supplied in UTC. With custom frames or ephemerides,
+validate the selected files to check their actual bounds. A rejected interval
+identifies the limiting dataset and the requested and supported dates.
+
 ## Build and run
 
 Follow [Building public native source](native-source-build.md) to install the
@@ -183,14 +195,63 @@ The archived IAU 1991/2000 definitions are admitted only inside the declared
 claim. Frames use `r_B=R r_I`, `v_B=R v_I+dR/dt r_I`; native regular solid
 harmonics avoid longitude/latitude singularities at the poles.
 
+## Passive attitude around a planetary primary
+
+Every supported primary can advance a rigid body's orientation and spin alongside its
+orbit. Enable `simulator.dynamics.attitude.enabled` and supply the object's body-frame
+inertia about its mass center. For example, these sections enable gravity-gradient
+torque on a Saturn-centered object (moments in kg m²; initial spin in rad/s).
+
+```yaml
+simulator:
+  central_body: saturn
+  dynamics:
+    attitude:
+      enabled: true
+      attitude_substep_s: 5
+      disturbance_torques: {gravity_gradient: true}
+objects:
+  probe:
+    specs:
+      mass_properties:
+        inertia_reference_point: center_of_mass
+        inertia_kg_m2: [[2, 0, 0], [0, 3, 0], [0, 0, 4]]
+    initial_state:
+      attitude_quat_bn: [1, 0, 0, 0]
+      angular_rate_body_rad_s: [0, 0, 0.001]
+```
+
+The scalar-first quaternion maps J2000 inertial vectors into spacecraft body axes.
+Spin components are in spacecraft body axes. OEL evaluates Euler's rigid-body
+equations at RK4 stages synchronized with the native orbit. Use an attitude
+substep short enough to resolve both spin and orbital forcing and verify
+convergence by reducing it. All disturbance torques default to off.
+
+| Disturbance switch | Inputs and physical model |
+| --- | --- |
+| `gravity_gradient` | Monopole tide using the selected gravity dataset's effective GM, the instantaneous primary-relative position, and the full inertia tensor. Higher-degree gravity-gradient torques are outside this model. |
+| `drag` | Enable planetary drag and supply `specs.drag_cp_offset_body_m`. Uses the selected atmosphere, wind and rotating frame through the orbit model's drag force. |
+| `srp` | Enable planetary SRP and supply `specs.srp_cp_offset_body_m`. Uses the orbit model's Sun direction, distance and selected eclipse model. In a heliocentric case the Sun is the origin. |
+| `magnetic` | Supply `specs.magnetic_dipole_body_a_m2` and `simulator.planetary.magnetic_field` with `model: centered_dipole`, the matching `body_id`, gravity rotation `frame_id`, and a three-component `dipole_t_m3` in that primary-fixed frame. The field rotates with the primary and falls as inverse radius cubed. Supply coefficients appropriate to the body and epoch. |
+
+Pressure offsets are vectors **from the spacecraft mass center to the center
+of pressure** in body-axis meters. The pressure forces keep the planetary
+model's constant effective areas. The magnetic field is an explicitly supplied
+idealized centered dipole. A measured field map or space-weather model would
+require a different field provider.
+
+A standard review store records `planetary_attitude` for enabled runs. Join
+it to `planetary_state` on `(object_id, sample_index)` for simultaneous orbit,
+quaternion, spin, and individual instantaneous torque vectors in N m. Compact
+review omits sample rows. With attitude disabled, the initial orientation and
+spin in the full state history stay fixed, and there are no propagated attitude rows.
+
 ## Atmosphere and drag
 
 The default atmosphere is `none`. Drag requires an explicit atmosphere and
 positive constant `cd` and `drag_area_m2`; mass is fixed.
 The planetary path requires one fixed total `specs.mass_kg`; it rejects
 `dry_mass_kg` and `fuel_mass_kg` instead of silently ignoring them.
-Initial quaternion and angular-rate values are preserved as fixed state when
-attitude propagation is disabled; no planetary attitude dynamics are implied.
 Wind is Cartesian m/s in the selected rotating body frame. Rotation is included once through `dR/dt`;
 relative flow is `R.T @ (R @ v + dR/dt @ r - wind/1000)`. Native drag converts
 m/s² to km/s² explicitly. Attitude/projected-area coupling, lift, gas-surface

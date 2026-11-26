@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 
 DATA_ROOT = Path(__file__).with_name("data")
@@ -63,3 +64,26 @@ def semantic_digest(value) -> str:
             value, sort_keys=True, separators=(",", ":"), allow_nan=False
         ).encode()
     ).hexdigest()
+
+
+def tdb_interval(start, end):
+    """Format TDB coordinates on their own calendar, without a UTC conversion."""
+    def endpoint(seconds):
+        try:
+            return (datetime(2000, 1, 1, 12) + timedelta(seconds=float(seconds))).isoformat()
+        except OverflowError:
+            return f"{seconds:g} seconds past J2000"
+    return [endpoint(start), endpoint(end)]
+
+
+def require_time_coverage(dataset, bounds, requested):
+    start, end = requested
+    low, high = bounds
+    if low <= start <= end <= high:
+        return
+    raise ValueError(
+        f"{dataset} does not cover the requested interval "
+        f"{' to '.join(tdb_interval(start, end))} TDB; supported interval "
+        f"{' to '.join(tdb_interval(low, high))} TDB "
+        f"([{low!s}, {high!s}] seconds past J2000, inclusive)"
+    )

@@ -511,6 +511,10 @@ def test_generic_lunar_gravity_and_ephemeris(tmp_path):
         atol=3e-11,
         rtol=0.0,
     )
+    raw["simulator"]["duration_s"] = 150.0
+    with pytest.raises(ValueError, match=r"ephem.json.*requested interval.*supported interval"):
+        prepared(raw)
+    raw["simulator"]["duration_s"] = 120.0
     document = json.loads(table.read_text())
     document["states_by_target_center"]["010"] = document["states_by_target_center"][
         "10"
@@ -801,3 +805,54 @@ def test_sun_external_planet_uses_differential_geometry(tmp_path):
         forces["third_body_299"], expected, atol=1e-23, rtol=1e-13
     )
     assert forces["srp"][0] > 0.0
+
+
+def test_planetary_catalog_matches_selected_force_and_gm():
+    from sim.dynamics.planetary.preparation import planetary_model_catalog
+
+    catalog = planetary_model_catalog()
+    profiles = {(p["central_body"], p["gravity_model"]): p for p in catalog["profiles"]}
+    assert set(primary for primary, _ in profiles) == set(BODIES)
+    settings = catalog["schwarzschild"]
+    assert settings["native_supported"] and settings["default"] is False
+    raw = scenario("mars", planetary={"gravity": {"model": "gmm2b_static"}})
+    section = raw
+    *fields, switch = settings["setting_path"].split(".")
+    for field in fields:
+        section = section.setdefault(field, {})
+    section[switch] = True
+    _, env, _ = prepared(raw)
+    assert env.selections["schwarzschild"]["enabled"]
+    profile = profiles["mars", "gmm2b_static"]
+    assert profile["mu_km3_s2"] == env.gravity.mu_km3_s2
+    assert profile["mu_km3_s2"] != profiles["mars", "point_mass"]["mu_km3_s2"]
+    assert set(profile["rotation_datasets"]) == {"mars_iau1991_rotation.json", "mars_iau2000_rotation.json"}
+
+
+def test_century_solar_error_names_dataset_and_both_tdb_intervals():
+    raw = scenario("sun", duration=36525 * 86400.0)
+    raw["simulator"].update(initial_jd_utc=2451545.0, dt_s=86400.0)
+    with pytest.raises(ValueError) as error:
+        scenario_config_from_dict(raw)
+    message = str(error.value)
+    assert "sun_iau2000_rotation.json" in message and "IAU2000_SUN" in message
+    for date in ("2000-01-01", "2100-01-01"):
+        assert date in message
+    assert "1972-01-01T00:00:00 to 2031-01-01T12:00:00 TDB" in message
+
+
+def test_lunar_custom_coverage_includes_endpoints_and_identifies_limiter(tmp_path):
+    from sim.dynamics.planetary.frames import prepare_rotation
+    from sim.dynamics.planetary.resources import DATA_ROOT
+
+    epoch = 2457065.5
+    frame = prepare_rotation("moon", {}, epoch)
+    document = json.loads((DATA_ROOT / "moon_iau2000_rotation.json").read_text())
+    document["valid_tdb_seconds"] = [frame.elapsed_tdb_s(0), frame.elapsed_tdb_s(120)]
+    path = tmp_path / "lunar_short_window.json"
+    path.write_text(json.dumps(document))
+    raw = scenario("moon", planetary={"atmosphere_frame": {"model": "resource", "data_path": str(path)}})
+    scenario_config_from_dict(raw)
+    raw["simulator"]["duration_s"] += 5
+    with pytest.raises(ValueError, match=r"lunar_short_window.json.*requested interval.*supported interval"):
+        scenario_config_from_dict(raw)

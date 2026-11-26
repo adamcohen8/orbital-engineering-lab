@@ -101,12 +101,14 @@ def prepare_environment(cfg):
         for resource in constants["resources"]
     )
     gravity = prepare_gravity(body, p["gravity"])
-    gf = prepare_rotation(body.body_id, p["gravity_frame"], s.initial_jd_utc)
-    af = prepare_rotation(body.body_id, p["atmosphere_frame"], s.initial_jd_utc)
+    gf = prepare_rotation(body.body_id, p["gravity_frame"], s.initial_jd_utc, duration_s=s.duration_s)
+    af = prepare_rotation(body.body_id, p["atmosphere_frame"], s.initial_jd_utc, duration_s=s.duration_s)
     if gravity.compiled is not None and gf.frame_id != gravity.frame_id:
         raise ValueError(
             f"Gravity frame mismatch: coefficients require {gravity.frame_id}, selected {gf.frame_id}"
         )
+    if "magnetic_field" in p and p["magnetic_field"]["frame_id"] != gf.frame_id:
+        raise ValueError(f"Planetary magnetic_field.frame_id must match the selected gravity frame {gf.frame_id}")
     atmosphere = prepare_atmosphere(body, p["atmosphere"], af.frame_id)
     targets = {x["target_center_id"] for x in p["third_bodies"]}
     if p["srp"]["enabled"] and body.body_id != "sun":
@@ -149,3 +151,53 @@ def prepare_environment(cfg):
         constants_receipts,
         additional,
     )
+
+
+def planetary_model_catalog():
+    """Pre-authoring settings for bundled, static-gravity planetary ONP profiles."""
+    from pathlib import Path
+
+    from sim.config.scenario.planetary import normalize_planetary
+
+    from .definitions import BODIES
+    from .frames import rotation_resource
+    from .native import module
+    from .resources import tdb_interval
+
+    profiles = []
+    for body in BODIES.values():
+        models = ("point_mass", "gmm2b_static") if body.body_id == "mars" else ("point_mass",)
+        for model in models:
+            selection = normalize_planetary({"gravity": {"model": model}}, body.body_id)
+            gravity = prepare_gravity(body, selection["gravity"])
+            frames = {}
+            for role in ("gravity_frame", "atmosphere_frame"):
+                receipt, definition = rotation_resource(body.body_id, selection[role])
+                name = Path(receipt.path).name
+                frames[name] = definition["valid_tdb_seconds"]
+            low = max(bounds[0] for bounds in frames.values())
+            high = min(bounds[1] for bounds in frames.values())
+            profiles.append({
+                "central_body": body.body_id, "gravity_model": model,
+                "mu_km3_s2": gravity.mu_km3_s2, "rotation_datasets": list(frames),
+                "valid_tdb_seconds_past_j2000": [low, high],
+                "valid_calendar_tdb": tdb_interval(low, high),
+            })
+    return {
+        "schema": "oel.planetary_model_catalog.v1",
+        "scope": "Bundled gravity and default rotation datasets. Custom frames, gravity and ephemerides require their own validation.",
+        "gravity_model_path": "simulator.planetary.gravity.model",
+        "schwarzschild": {
+            "setting_path": "simulator.dynamics.orbit.schwarzschild.enabled",
+            "native_supported": bool(getattr(module().PlanetaryPlan, "supports_schwarzschild", False)),
+            "default": False,
+        },
+        "passive_attitude": {
+            "setting_path": "simulator.dynamics.attitude.enabled",
+            "disturbance_torques": ["gravity_gradient", "drag", "srp", "magnetic"],
+            "inertia_path": "objects.<id>.specs.mass_properties.inertia_kg_m2",
+            "magnetic_field": "explicit centered dipole in the selected primary gravity frame",
+            "pressure_torques": "selected planetary force and body-frame center-of-pressure offset from mass center",
+        },
+        "profiles": profiles,
+    }
